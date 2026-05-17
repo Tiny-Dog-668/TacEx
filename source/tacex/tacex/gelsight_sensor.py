@@ -490,7 +490,7 @@ class GelSightSensor(SensorBase):
                     # frame = np.moveaxis(frame, 0, -1)
                     # convert to 3 channel image, to later turn it into 4 channel RGBA for Isaac Widget
                     frame = np.dstack((frame, frame, frame)).astype(np.uint8)
-                    frame = cv2.normalize(frame, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+                    # frame = cv2.normalize(frame, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
 
                     # update image of the window
                     frame = frame.astype(np.uint8)
@@ -558,23 +558,23 @@ class GelSightSensor(SensorBase):
         if self.camera is not None:
             depth_output = self.camera.data.output["depth"][
                 :, :, :, 0
-            ]  # tiled camera gives us data with shape (num_cameras, height, width, num_channels),
+            ]  # shape: (num_cameras, H, W)
             # clip camera values that are = inf
             depth_output[torch.isinf(depth_output)] = self.cfg.sensor_camera_cfg.clipping_range[1]
 
-            self._data.output["camera_depth"] = depth_output.reshape(
-                (self._num_envs, 1, self.camera_resolution[1], self.camera_resolution[0])
-            )  # add a channel to the depth image for debug_vis
-            self._data.output["camera_depth"] *= 1000.0
-
-            # normalize the depth image
-            normalized = self._data.output["camera_depth"].view(self._data.output["camera_depth"].size(0), -1)
-            normalized -= self.cfg.sensor_camera_cfg.clipping_range[0] * 1000
-            normalized /= self.cfg.sensor_camera_cfg.clipping_range[1] * 1000
-            normalized = (normalized * 255).type(dtype=torch.uint8)
-            self._data.output["camera_depth"] = normalized.reshape(
+            # convert to mm and reshape to (num_envs, H, W, 1)
+            depth_mm = depth_output * 1000.0
+            near_mm = self.cfg.sensor_camera_cfg.clipping_range[0] * 1000.0
+            far_mm = self.cfg.sensor_camera_cfg.clipping_range[1] * 1000.0
+            denom = max(far_mm - near_mm, 1e-6)
+            # normalize to [0,1] then clamp to avoid overflow/underflow
+            norm = (depth_mm - near_mm) / denom
+            norm = torch.clamp(norm, 0.0, 1.0)
+            # map to [0,255] uint8 for debug/observation pipeline
+            camera_depth_u8 = (norm * 255.0).to(torch.uint8)
+            self._data.output["camera_depth"] = camera_depth_u8.reshape(
                 (self._num_envs, self.camera_resolution[1], self.camera_resolution[0], 1)
-            )  # add a channel to the depth image for debug_vis
+            )
 
         return self._data.output["camera_depth"]
 

@@ -561,6 +561,13 @@ class BallRollingEnv(DirectRLEnv):
 
 def run_simulator(env: BallRollingEnv):
     """Runs the simulation loop."""
+    # if env.cfg.gsmini_left.debug_vis:
+    #     for data_type in env.cfg.gsmini_left.data_types:
+    #         env.gsmini_left._prim_view.prims[0].GetAttribute(f"debug_{data_type}").Set(True)
+
+    # if env.cfg.gsmini_right.debug_vis:
+    #     for data_type in env.cfg.gsmini_right.data_types:
+    #         env.gsmini_right._prim_view.prims[0].GetAttribute(f"debug_{data_type}").Set(True)
 
     print(f"Starting simulation with {env.num_envs} envs")
     env.reset()
@@ -585,7 +592,7 @@ def run_simulator(env: BallRollingEnv):
 
         # perform physics step
         env._pre_physics_step(None)
-        env._apply_action()
+        # env._apply_action()
         env.scene.write_data_to_sim()
         env.sim.step(render=False)
 

@@ -1,0 +1,86 @@
+solid occluded_cube_4cm
+  facet normal 0 0 -1
+    outer loop
+      vertex -0.02 -0.02 -0.02
+      vertex -0.02 0.02 -0.02
+      vertex 0.02 0.02 -0.02
+    endloop
+  endfacet
+  facet normal 0 0 -1
+    outer loop
+      vertex -0.02 -0.02 -0.02
+      vertex 0.02 0.02 -0.02
+      vertex 0.02 -0.02 -0.02
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex -0.02 -0.02 0.02
+      vertex 0.02 -0.02 0.02
+      vertex 0.02 0.02 0.02
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex -0.02 -0.02 0.02
+      vertex 0.02 0.02 0.02
+      vertex -0.02 0.02 0.02
+    endloop
+  endfacet
+  facet normal 0 -1 0
+    outer loop
+      vertex -0.02 -0.02 -0.02
+      vertex 0.02 -0.02 -0.02
+      vertex 0.02 -0.02 0.02
+    endloop
+  endfacet
+  facet normal 0 -1 0
+    outer loop
+      vertex -0.02 -0.02 -0.02
+      vertex 0.02 -0.02 0.02
+      vertex -0.02 -0.02 0.02
+    endloop
+  endfacet
+  facet normal 1 0 0
+    outer loop
+      vertex 0.02 -0.02 -0.02
+      vertex 0.02 0.02 -0.02
+      vertex 0.02 0.02 0.02
+    endloop
+  endfacet
+  facet normal 1 0 0
+    outer loop
+      vertex 0.02 -0.02 -0.02
+      vertex 0.02 0.02 0.02
+      vertex 0.02 -0.02 0.02
+    endloop
+  endfacet
+  facet normal 0 1 0
+    outer loop
+      vertex 0.02 0.02 -0.02
+      vertex -0.02 0.02 -0.02
+      vertex -0.02 0.02 0.02
+    endloop
+  endfacet
+  facet normal 0 1 -0
+    outer loop
+      vertex 0.02 0.02 -0.02
+      vertex -0.02 0.02 0.02
+      vertex 0.02 0.02 0.02
+    endloop
+  endfacet
+  facet normal -1 0 0
+    outer loop
+      vertex -0.02 0.02 -0.02
+      vertex -0.02 -0.02 -0.02
+      vertex -0.02 -0.02 0.02
+    endloop
+  endfacet
+  facet normal -1 0 0
+    outer loop
+      vertex -0.02 0.02 -0.02
+      vertex -0.02 -0.02 0.02
+      vertex -0.02 0.02 0.02
+    endloop
+  endfacet
+endsolid occluded_cube_4cm

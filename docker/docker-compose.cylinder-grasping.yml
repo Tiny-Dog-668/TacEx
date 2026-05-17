@@ -1,0 +1,27 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+version: '3.8'
+
+services:
+  cylinder-grasping:
+    build:
+      context: ..
+      dockerfile: docker/cylinder_grasping.Dockerfile
+    container_name: cylinder_grasping_env
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ../:/workspace
+      - ~/.Xauthority:/root/.Xauthority:rw
+    network_mode: host
+    stdin_open: true
+    tty: true
+    command: /bin/bash

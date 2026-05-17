@@ -1,0 +1,159 @@
+version: 1
+
+goal:
+  primary: collect synchronized third-person vision and four-sensor tactile episodes for contrastive pretraining
+  secondary:
+    - contact localization
+    - grasp stability prediction
+    - material discrimination
+
+episode_sampling:
+  object_sampling:
+    strategy: weighted_uniform_over_families
+    weights:
+      primitive_shape: 0.35
+      local_geometry: 0.30
+      graspable_daily: 0.20
+      material_control: 0.15
+  primitive_sampling:
+    strategy: object_compatible_uniform
+  reset_randomization:
+    object_pose_noise_xy_m: 0.02
+    object_pose_noise_yaw_rad: 0.35
+    robot_joint_noise_rad: 0.03
+    lighting_randomization: true
+    background_randomization: false
+
+logging_rates:
+  simulation_hz: 120
+  control_hz: 20
+  camera_hz: 20
+  tactile_hz: 20
+  proprio_hz: 20
+
+primitives:
+  touch:
+    intent: create clean first-contact pairs
+    stages:
+      - name: approach
+        duration_s: 0.8
+      - name: initial_contact
+        duration_s: 0.4
+      - name: hold
+        duration_s: 0.4
+      - name: release
+        duration_s: 0.4
+    success_rule:
+      any_sensor_contact_frames_min: 4
+    notes:
+      - sample approach direction from front-left, front-right, top-down
+      - stop early if contact exceeds safety threshold
+
+  press:
+    intent: encode local surface geometry and compliance
+    stages:
+      - name: approach
+        duration_s: 0.8
+      - name: press_ramp
+        duration_s: 0.7
+      - name: peak_hold
+        duration_s: 0.5
+      - name: release
+        duration_s: 0.5
+    success_rule:
+      contact_area_peak_min_ratio: 0.08
+    notes:
+      - use vertical or surface-normal pressing
+      - sample three press depths per object
+
+  slide:
+    intent: encode friction, edges, ridges, and grooves
+    stages:
+      - name: approach
+        duration_s: 0.6
+      - name: contact_establish
+        duration_s: 0.4
+      - name: tangential_slide
+        duration_s: 1.2
+      - name: release
+        duration_s: 0.6
+    success_rule:
+      contact_continuity_ratio_min: 0.70
+    notes:
+      - sample slide length from 20 mm to 60 mm
+      - sample slide direction from 0, 45, 90, 135 degrees on the local surface
+      - keep normal force approximately constant during slide
+
+  pinch_grasp:
+    intent: encode bilateral tactile coordination and visible object pose
+    stages:
+      - name: pre_grasp
+        duration_s: 0.8
+      - name: close_until_contact
+        duration_s: 0.5
+      - name: squeeze_hold
+        duration_s: 0.6
+      - name: micro_reposition
+        duration_s: 0.6
+      - name: release
+        duration_s: 0.5
+    success_rule:
+      bilateral_inner_contact_required: true
+    notes:
+      - use inner sensors as the main contact criterion
+      - downward sensors provide auxiliary cues for bottom-edge and slip onset
+
+  lift_and_disturb:
+    intent: encode grasp stability and incipient slip
+    stages:
+      - name: pre_grasp
+        duration_s: 0.8
+      - name: grasp_close
+        duration_s: 0.5
+      - name: lift
+        duration_s: 0.7
+      - name: disturb
+        duration_s: 0.8
+      - name: place_back
+        duration_s: 0.7
+      - name: release
+        duration_s: 0.5
+    success_rule:
+      lift_height_min_m: 0.04
+    notes:
+      - disturbance should be small lateral translations or yaw oscillations
+      - keep this primitive only for objects with stable grasp affordances
+
+pairing_rules:
+  positive_pairs:
+    - same_episode_same_timestamp
+    - same_episode_within_plus_minus_2_frames
+    - same_object_same_local_region_different_view_or_seed
+  hard_negative_pairs:
+    - same_object_different_contact_region
+    - same_geometry_different_material
+    - contact_vs_non_contact_for_same_object
+    - visually_similar_but_tactually_different
+
+quality_filters:
+  reject_if:
+    - object_out_of_fov_ratio_gt: 0.30
+    - total_contact_frames_lt: 6
+    - dropped_object_in_non_lift_primitive: true
+    - tactile_stream_missing: true
+  tag_if:
+    - likely_slip_event
+    - partial_occlusion
+    - unstable_contact
+
+dataset_targets:
+  target_episodes:
+    bootstrap: 10000
+    baseline: 50000
+    full_v1: 150000
+  approximate_mix:
+    touch: 0.25
+    press: 0.20
+    slide: 0.25
+    pinch_grasp: 0.20
+    lift_and_disturb: 0.10

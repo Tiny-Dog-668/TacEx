@@ -50,6 +50,7 @@ parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint pat
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
+original_argv = list(sys.argv)
 
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -78,6 +79,7 @@ from datetime import datetime
 
 import skrl
 from packaging import version
+from summary_utils import write_training_summary
 
 # import the skrl components to build the RL system
 from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
@@ -366,6 +368,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    write_training_summary(log_dir, env_cfg, agent_cfg, args_cli, hydra_args, algorithm, original_argv)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

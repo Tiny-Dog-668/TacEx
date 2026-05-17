@@ -1,0 +1,315 @@
+version: 1
+
+selection_principles:
+  - cover flat, convex, concave, edge, groove, and handle contacts
+  - include visually similar but tactually different pairs
+  - include tactually similar but visually different pairs
+  - keep the first release rigid and simulation-stable
+
+families:
+  primitive_shape:
+    description: controlled geometry coverage for representation learning
+    objects:
+      - id: sphere_xs_25
+        shape: sphere
+        size_mm: [25]
+        target_primitives: [touch, press]
+        split: train
+      - id: sphere_s_35
+        shape: sphere
+        size_mm: [35]
+        target_primitives: [touch, press]
+        split: train
+      - id: sphere_m_50
+        shape: sphere
+        size_mm: [50]
+        target_primitives: [touch, press]
+        split: val
+      - id: sphere_l_65
+        shape: sphere
+        size_mm: [65]
+        target_primitives: [touch, press]
+        split: val
+      - id: box_cube_25
+        shape: box
+        size_mm: [25, 25, 25]
+        target_primitives: [touch, press, pinch_grasp]
+        split: train
+      - id: box_cube_40
+        shape: box
+        size_mm: [40, 40, 40]
+        target_primitives: [touch, press, pinch_grasp]
+        split: train
+      - id: box_cube_55
+        shape: box
+        size_mm: [55, 55, 55]
+        target_primitives: [touch, press, pinch_grasp]
+        split: val
+      - id: box_rect_60_40_30
+        shape: box
+        size_mm: [60, 40, 30]
+        target_primitives: [touch, press, pinch_grasp]
+        split: train
+      - id: box_rect_80_30_25
+        shape: box
+        size_mm: [80, 30, 25]
+        target_primitives: [touch, press, pinch_grasp]
+        split: train
+      - id: box_flat_50_50_20
+        shape: box
+        size_mm: [50, 50, 20]
+        target_primitives: [touch, press]
+        split: train
+      - id: box_tall_20_20_60
+        shape: box
+        size_mm: [20, 20, 60]
+        target_primitives: [touch, press]
+        split: train
+      - id: box_ridge_80_12_30
+        shape: box
+        size_mm: [80, 12, 30]
+        target_primitives: [touch, press]
+        split: train
+      - id: box_slim_16_16_35
+        shape: box
+        size_mm: [16, 16, 35]
+        target_primitives: [touch, press]
+        split: train
+      - id: cylinder_slim_18_60
+        shape: cylinder
+        size_mm: [18, 60]
+        target_primitives: [touch, slide, pinch_grasp]
+        split: train
+      - id: cylinder_short_30_60
+        shape: cylinder
+        size_mm: [30, 60]
+        target_primitives: [touch, slide, pinch_grasp]
+        split: train
+      - id: cylinder_mid_25_70
+        shape: cylinder
+        size_mm: [25, 70]
+        target_primitives: [touch, slide, pinch_grasp]
+        split: val
+      - id: cylinder_tall_25_100
+        shape: cylinder
+        size_mm: [25, 100]
+        target_primitives: [touch, slide, pinch_grasp]
+        split: val
+      - id: cylinder_thick_40_50
+        shape: cylinder
+        size_mm: [40, 50]
+        target_primitives: [touch, slide]
+        split: train
+      - id: capsule_25_90
+        shape: capsule
+        size_mm: [25, 90]
+        target_primitives: [touch, slide, pinch_grasp]
+        split: train
+      - id: cone_30_80
+        shape: cone
+        size_mm: [30, 80]
+        target_primitives: [touch, press]
+        split: train
+      - id: wedge_60_40_30
+        shape: wedge
+        size_mm: [60, 40, 30]
+        target_primitives: [touch, slide]
+        split: train
+      - id: torus_70_20
+        shape: torus
+        size_mm: [70, 20]
+        target_primitives: [touch, press]
+        split: test_ood_geometry
+      - id: plate_80_80_10
+        shape: plate
+        size_mm: [80, 80, 10]
+        target_primitives: [press, slide]
+        split: train
+      - id: plate_small_60_60_8
+        shape: plate
+        size_mm: [60, 60, 8]
+        target_primitives: [press, slide]
+        split: train
+      - id: plate_rect_100_60_8
+        shape: plate
+        size_mm: [100, 60, 8]
+        target_primitives: [press, slide]
+        split: val
+      - id: ring_70_12
+        shape: ring
+        size_mm: [70, 12]
+        target_primitives: [touch, pinch_grasp]
+        split: test_ood_geometry
+
+  local_geometry:
+    description: local surface structures that give tactile its main advantage
+    objects:
+      - id: groove_block_single
+        shape: grooved_block
+        size_mm: [60, 40, 30]
+        local_feature: single_center_groove
+        target_primitives: [press, slide]
+        split: train
+      - id: groove_block_double
+        shape: grooved_block
+        size_mm: [60, 40, 30]
+        local_feature: double_parallel_groove
+        target_primitives: [press, slide]
+        split: val
+      - id: ridge_block_single
+        shape: ridged_block
+        size_mm: [60, 40, 30]
+        local_feature: single_ridge
+        target_primitives: [press, slide]
+        split: train
+      - id: ridge_block_cross
+        shape: ridged_block
+        size_mm: [60, 40, 30]
+        local_feature: cross_ridge
+        target_primitives: [press, slide]
+        split: test_ood_geometry
+      - id: concave_block_arc
+        shape: concave_block
+        size_mm: [60, 50, 30]
+        local_feature: cylindrical_cavity
+        target_primitives: [touch, press]
+        split: train
+      - id: convex_block_arc
+        shape: convex_block
+        size_mm: [60, 50, 30]
+        local_feature: cylindrical_bulge
+        target_primitives: [touch, press]
+        split: train
+      - id: step_block_2level
+        shape: step_block
+        size_mm: [60, 40, 30]
+        local_feature: two_level_step
+        target_primitives: [press, slide]
+        split: train
+      - id: perforated_plate_3hole
+        shape: perforated_plate
+        size_mm: [80, 80, 8]
+        local_feature: three_holes
+        target_primitives: [touch, slide]
+        split: test_ood_geometry
+      - id: edge_prism_sharp
+        shape: triangular_prism
+        size_mm: [70, 35, 35]
+        local_feature: sharp_edge
+        target_primitives: [touch, slide]
+        split: train
+      - id: wave_surface_block
+        shape: wavy_block
+        size_mm: [70, 40, 25]
+        local_feature: sinusoidal_surface
+        target_primitives: [slide]
+        split: val
+
+  graspable_daily:
+    description: simple realistic objects with clear grasp affordances
+    objects:
+      - id: mug_straight_handle
+        shape: mug
+        size_mm: [80, 75, 90]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: train
+      - id: bottle_short
+        shape: bottle
+        size_mm: [55, 55, 140]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: train
+      - id: bottle_tall
+        shape: bottle
+        size_mm: [45, 45, 190]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: val
+      - id: bowl_small
+        shape: bowl
+        size_mm: [100, 100, 45]
+        target_primitives: [touch, press]
+        split: train
+      - id: handle_bar
+        shape: handle_bar
+        size_mm: [110, 28, 28]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: train
+      - id: spray_can
+        shape: can
+        size_mm: [52, 52, 150]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: test_id
+      - id: remote_block
+        shape: remote_like_block
+        size_mm: [150, 50, 18]
+        target_primitives: [touch, press, pinch_grasp]
+        split: train
+      - id: dumbbell_small
+        shape: dumbbell
+        size_mm: [120, 35, 35]
+        target_primitives: [touch, pinch_grasp, lift_and_disturb]
+        split: test_id
+
+  material_control:
+    description: same or near-same geometry with changed tactile properties
+    objects:
+      - id: cylinder_smooth_low_friction
+        reference_shape: cylinder_short_30_60
+        material: smooth_plastic
+        friction_level: low
+        compliance: rigid
+        target_primitives: [slide, pinch_grasp, lift_and_disturb]
+        split: train
+      - id: cylinder_rough_high_friction
+        reference_shape: cylinder_short_30_60
+        material: rough_rubber
+        friction_level: high
+        compliance: rigid
+        target_primitives: [slide, pinch_grasp, lift_and_disturb]
+        split: train
+      - id: cylinder_mid_friction_eval
+        reference_shape: cylinder_short_30_60
+        material: coated_polymer
+        friction_level: medium
+        compliance: rigid
+        target_primitives: [slide, pinch_grasp, lift_and_disturb]
+        split: test_ood_material
+      - id: box_hard_surface
+        reference_shape: box_cube_40
+        material: hard_plastic
+        friction_level: medium
+        compliance: rigid
+        target_primitives: [press, pinch_grasp]
+        split: train
+      - id: box_soft_surface
+        reference_shape: box_cube_40
+        material: soft_coated
+        friction_level: medium
+        compliance: soft
+        target_primitives: [press, pinch_grasp]
+        split: test_ood_material
+      - id: sphere_rubber
+        reference_shape: sphere_s_35
+        material: rubber
+        friction_level: high
+        compliance: medium
+        target_primitives: [touch, press]
+        split: train
+      - id: sphere_acrylic
+        reference_shape: sphere_s_35
+        material: acrylic
+        friction_level: low
+        compliance: rigid
+        target_primitives: [touch, press]
+        split: train
+      - id: sphere_silicone_eval
+        reference_shape: sphere_s_35
+        material: silicone
+        friction_level: high
+        compliance: soft
+        target_primitives: [touch, press]
+        split: test_ood_material
+
+recommended_release_sizes:
+  bootstrap: 16
+  baseline: 28
+  full_v1: 38

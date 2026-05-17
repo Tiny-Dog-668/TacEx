@@ -1,0 +1,95 @@
+seed: 42
+
+models:
+  separate: True
+  policy:
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    initial_log_std: 0.0
+    network:
+      - name: third_resnet
+        input: STATES["third_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_left_depth_resnet
+        input: STATES["tactile_left_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_right_depth_resnet
+        input: STATES["tactile_right_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_left_down_depth_resnet
+        input: STATES["tactile_left_down_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_right_down_depth_resnet
+        input: STATES["tactile_right_down_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_resnet
+        input: "concatenate([tactile_left_depth_resnet, tactile_right_depth_resnet, tactile_left_down_depth_resnet, tactile_right_down_depth_resnet])"
+        layers: [256]
+        activations: elu
+      - name: net
+        input: "concatenate([third_resnet, tactile_resnet, STATES['proprio_obs']])"
+        layers: [512, 256, 128, 64]
+        activations: elu
+    output: ACTIONS
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: "concatenate([STATES['critic_can_pos'], STATES['critic_can_quat'], STATES['critic_can_lin_vel'], \
+STATES['critic_can_ang_vel'], STATES['critic_gripper_pos'], STATES['critic_gripper_quat'], \
+STATES['critic_gripper_lin_vel'], STATES['critic_gripper_ang_vel'], STATES['critic_target_pos'], \
+STATES['critic_target_distance']])"
+        layers: [512, 256, 128, 64]
+        activations: elu
+    output: ONE
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+agent:
+  class: PPO
+  rollouts: 128
+  learning_epochs: 4
+  mini_batches: 16
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 5.0e-04
+  learning_rate_scheduler: null
+  learning_rate_scheduler_kwargs: null
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.05
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: False
+  experiment:
+    directory: "occluded_grasping"
+    experiment_name: "vt_box"
+    write_interval: 1000
+    checkpoint_interval: 10000
+    wandb: False
+    wandb_kwargs: { "sync_tensorboard": True, "project": "occluded_grasping_vision_tactile" }
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 500000
+  environment_info: log

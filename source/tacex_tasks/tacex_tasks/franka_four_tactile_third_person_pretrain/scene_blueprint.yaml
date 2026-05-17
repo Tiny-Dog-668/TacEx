@@ -1,0 +1,91 @@
+task_name: franka_four_tactile_third_person_pretrain
+
+robot:
+  name: franka_panda
+  base_pose:
+    position_m: [0.0, 0.0, 0.0]
+    quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+  end_effector: panda_hand
+  gripper:
+    type: parallel_jaw
+    nominal_open_width_m: 0.08
+    collection_open_width_m: 0.045
+    collection_close_width_m: 0.0
+
+workspace:
+  table_center_m: [0.50, 0.0, 0.0]
+  table_size_m: [0.60, 0.60, 0.04]
+  object_spawn_xy_range_m:
+    x: [0.42, 0.58]
+    y: [-0.12, 0.12]
+  object_spawn_yaw_range_rad: [-3.14, 3.14]
+
+vision:
+  primary_camera:
+    name: third_person_camera
+    modality: rgb
+    resolution_hw: [512, 512]
+    update_hz: 20
+    relative_pose_to_env_origin:
+      position_m: [0.88, -0.06, 0.20]
+      quaternion_wxyz: [0.609721, 0.454117, 0.388040, 0.521003]
+    optical:
+      focal_length_mm: 30.0
+      horizontal_aperture_mm: 24.0
+      clipping_range_m: [0.05, 30.0]
+
+tactile:
+  sensors:
+    - name: inner_left
+      role: pinch_contact
+      recommended_modalities: [raw_frame, contact_mask, contact_area, depth_proxy]
+    - name: inner_right
+      role: pinch_contact
+      recommended_modalities: [raw_frame, contact_mask, contact_area, depth_proxy]
+    - name: down_left
+      role: under_pad_contact
+      recommended_modalities: [raw_frame, contact_mask, contact_area, depth_proxy]
+    - name: down_right
+      role: under_pad_contact
+      recommended_modalities: [raw_frame, contact_mask, contact_area, depth_proxy]
+  synchronization:
+    target_hz: 20
+    align_to: simulation_timestamp
+
+physics:
+  sim_dt_s: 0.0083333333
+  control_hz: 20
+  contact_solver_notes:
+    - prefer high rigid contact budget
+    - keep contact offsets consistent across train and eval
+    - randomize friction and damping at reset, not mid-episode
+
+episode_template:
+  duration_s:
+    touch: 2.0
+    press: 2.5
+    slide: 3.0
+    pinch_grasp: 3.5
+    lift_and_disturb: 4.0
+  stages:
+    - pre_contact
+    - contact_establishment
+    - primitive_motion
+    - hold_or_perturb
+    - release
+
+logging:
+  store_modalities:
+    - third_person_rgb
+    - tactile_inner_left
+    - tactile_inner_right
+    - tactile_down_left
+    - tactile_down_right
+    - joint_pos
+    - joint_vel
+    - gripper_width
+    - ee_pose
+    - object_pose
+    - contact_flags
+  shard_format: zarr
+  shard_duration_episodes: 256
