@@ -3,7 +3,7 @@ seed: 42
 models:
   separate: True
   policy:
-    class: "tacex_tasks.occluded_grasping.vt_alpha_gru_task_residual_policy:OccludedGraspingVTAlphaGRUTaskResidualPolicy"
+    class: "tacex_tasks.occluded_grasping.vt_cnn_recon_policy:OccludedGraspingVTCNNReconPolicy"
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0
@@ -12,44 +12,20 @@ models:
     fixed_log_std: False
     reduction: sum
     vision_key: "third_resnet"
-    tactile_inner_keys: [
-      "tactile_left_depth_resnet",
-      "tactile_right_depth_resnet"
-    ]
-    tactile_bottom_keys: [
-      "tactile_left_down_depth_resnet",
-      "tactile_right_down_depth_resnet"
+    tactile_raw_keys: [
+      "tactile_left_rgb_raw",
+      "tactile_right_rgb_raw",
+      "tactile_left_down_rgb_raw",
+      "tactile_right_down_rgb_raw"
     ]
     proprio_key: "proprio_obs"
-    aux_visibility_gt_key: "aux_visibility_gt"
-    aux_occlusion_gt_key: "aux_occlusion_gt"
-    aux_bottom_contact_gt_key: "aux_bottom_contact_gt"
-    aux_bottom_rel_pos_gt_key: "aux_bottom_rel_pos_gt"
-    aux_inner_contact_gt_key: "aux_inner_contact_gt"
-    aux_inner_contact_diff_gt_key: "aux_inner_contact_diff_gt"
-    bottom_tactile_mask_key: "bottom_tactile_current_mask"
-    inner_tactile_mask_key: "inner_tactile_current_mask"
-    tactile_time_window: 10
-    tactile_gru_hidden_dim: 64
-    tactile_gru_layers: 2
-    tactile_latent_dim: 128
+    vector_keys: ["proprio_obs"]
+    tactile_img_hw: [32, 32]
+    tactile_feature_dim: 256
     fused_dim: 256
-    task_hidden_dim: 256
-    pair_hidden_layers: [128]
-    alpha_hidden_dim: 64
-    gate_hidden_dim: 64
-    base_mlp_layers: [256, 128, 64]
-    residual_hidden_layers: [128, 64]
+    recon_loss_weight: 1.0
+    mlp_layers: [512, 256, 128, 64]
     mlp_activation: elu
-    bottom_dx_scale: 0.25
-    bottom_dy_scale: 0.12
-    inner_gripper_scale: 0.25
-    aux_visibility_weight: 1.0
-    aux_occlusion_weight: 1.0
-    aux_bottom_contact_weight: 1.0
-    aux_bottom_rel_pos_weight: 1.0
-    aux_inner_contact_weight: 1.0
-    aux_inner_contact_diff_weight: 1.0
   value:
     class: DeterministicMixin
     clip_actions: False
@@ -96,8 +72,8 @@ agent:
   aux_loss_scale: 1.0
   experiment:
     directory: "occluded_grasping"
-    experiment_name: "vt_alpha_gru_task_residual_box"
-    write_interval: 500
+    experiment_name: "vt_cnn_recon_box"
+    write_interval: 1000
     checkpoint_interval: 10000
     wandb: False
     wandb_kwargs: { "sync_tensorboard": True, "project": "occluded_grasping_vision_tactile" }

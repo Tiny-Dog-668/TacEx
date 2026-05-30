@@ -9,6 +9,13 @@ class OccludedGraspingVTGRUBoxCfg(OccludedGraspingVTAlphaGRUBoxCfg):
     """Configuration alias for the no-alpha GRU VT task."""
 
 
+class OccludedGraspingVTGRUDownsampleBoxCfg(OccludedGraspingVTGRUBoxCfg):
+    """No-alpha GRU VT task with downsampled third-person RGB."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
+
+
 class OccludedGraspingVTGRUBoxEnv(OccludedGraspingVTAlphaGRUBoxEnv):
     """Environment alias for the no-alpha GRU VT task."""
 

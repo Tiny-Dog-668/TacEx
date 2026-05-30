@@ -3,29 +3,42 @@ seed: 42
 models:
   separate: True
   policy:
-    class: "tacex_tasks.occluded_grasping.vt_residual_policy:OccludedGraspingVTResidualPolicy"
+    class: GaussianMixin
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0
     max_log_std: 2.0
     initial_log_std: 0.0
-    fixed_log_std: False
-    reduction: sum
-    vision_key: "third_resnet"
-    tactile_keys: [
-      "tactile_left_rgb",
-      "tactile_right_rgb",
-      "tactile_left_down_depth",
-      "tactile_right_down_depth"
-    ]
-    proprio_key: "proprio_obs"
-    tactile_contact_bits_key: "tactile_contact_bits"
-    visual_hidden_layers: [512, 256, 128, 64]
-    tactile_token_dim: 128
-    residual_hidden_dim: 256
-    gate_hidden_dim: 128
-    gate_per_dim: False
-    residual_action_scales: [0.04, 0.04, 0.04, 0.20, 0.10]
+    network:
+      - name: third_resnet
+        input: STATES["third_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_left_depth_resnet
+        input: STATES["tactile_left_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_right_depth_resnet
+        input: STATES["tactile_right_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_left_down_depth_resnet
+        input: STATES["tactile_left_down_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_right_down_depth_resnet
+        input: STATES["tactile_right_down_depth_resnet"]
+        layers: []
+        activations: []
+      - name: tactile_resnet
+        input: "concatenate([tactile_left_depth_resnet, tactile_right_depth_resnet, tactile_left_down_depth_resnet, tactile_right_down_depth_resnet])"
+        layers: [256]
+        activations: elu
+      - name: net
+        input: "concatenate([third_resnet, tactile_resnet, STATES['proprio_obs']])"
+        layers: [512, 256, 128, 64]
+        activations: elu
+    output: ACTIONS
   value:
     class: DeterministicMixin
     clip_actions: False
@@ -70,7 +83,7 @@ agent:
   time_limit_bootstrap: False
   experiment:
     directory: "occluded_grasping"
-    experiment_name: "vt_mixed_box"
+    experiment_name: "vt_downsample_box"
     write_interval: 1000
     checkpoint_interval: 10000
     wandb: False

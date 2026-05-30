@@ -27,33 +27,55 @@ Cuboid
 
 ```text
 V
+V-Downsample
+V-Blur
 V-Wrist
 VT
+VT-Downsample
 VT-Wrist
 VT-Pair
 VT-Pair-GRU
-Mixed
-Mixed-Sensor-Gate
+CNN-Recon
+VT-Down-Residual
 Reliability-Stage
 Reliability-Stage-Strong-Gate
 Alpha
+Visual-Cross-Alpha
+Visual-Cross-Alpha-Downsample
+Visual-Cross-Alpha-Tactile-Downsample
+Tactile-Cross-Alpha
+Tactile-Cross-Alpha-VisibleContact
+Tactile-Cross-Alpha-VisibleContact-Downsample
+Tactile-Cross-SensorAlpha-VisibleContact
+Tactile-Cross-SensorAlpha-VisibleContact-Downsample
+Tactile-Cross-Alpha-Downsample
+Tactile-Cross-Alpha-Visual-Downsample
+Tactile-Cross-Alpha-VisualTokens-Downsample
+Dual-Cross-Alpha
+Dual-Cross-Alpha-Downsample
+Dual-Cross-Alpha-Aux-Downsample
+Dual-Cross-Downsample
+Token-Self-Attn-Downsample
+Alpha-Downsample
+Alpha-Learnable-Tactile
 Alpha-Beta
 Alpha-GRU
 Alpha-GRU-Beta
 Alpha-Dual-GRU
-Alpha-GRU-Task-Residual
 Alpha-GRU-VisualReliability
 Alpha-Recon
 Dual-Alpha-Recon
 Gate-Alpha
 Hard-Gate
 GRU
+GRU-Downsample
+GRU-Extra-Tactile
+GRU-Sparsh-DownDepth
 Convex
 Convex-GRU
 Convex-GRU-Beta
 Sparsh
-Sparsh-Cross
-Cross
+Policy-Token-Transformer
 ```
 
 示例：
@@ -65,17 +87,146 @@ python scripts/reinforcement_learning/skrl/train.py \
   --enable_cameras
 ```
 
-另一个示例：
+旧 task id 仍然保留，例如 `TacEx-VT-Alpha-GRU-Self-Occlusion-Box-v0` 和
+`TacEx-VT-Alpha-GRU-Self-Occlusion-Cylinder-v0`，用于兼容已有脚本和 checkpoint。
+
+## 纯视觉退化 Baseline
+
+用于先评估视觉质量下降本身对任务的影响，再决定是否引入触觉融合。三组纯视觉 baseline 使用相同 policy 配置 `ppo_v.yaml`，policy 输入维度保持一致：
+
+```text
+proprio_obs 18 + third_resnet 256 = 274
+```
+
+推荐先在同一 `Scene/Object` 上对比：
 
 ```bash
 python scripts/reinforcement_learning/skrl/train.py \
-  --task TacEx-Cross-Self-Occlusion-Cylinder \
+  --task TacEx-V-Self-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Downsample-Self-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Blur-Self-Occlusion-Cube \
   --num_envs 4 \
   --enable_cameras
 ```
 
-旧 task id 仍然保留，例如 `TacEx-VT-Alpha-GRU-Self-Occlusion-Box-v0` 和
-`TacEx-VT-Alpha-GRU-Self-Occlusion-Cylinder-v0`，用于兼容已有脚本和 checkpoint。
+`V-Downsample` 会在 ResNet 编码前把 third-person RGB 先降到低分辨率再上采样回相机分辨率，默认：
+
+```text
+visual_degradation_mode = downsample
+visual_downsample_size = 32
+```
+
+可以通过命令行调整强度：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Downsample-Self-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras \
+  env.visual_downsample_size=48
+```
+
+`V-Blur` 会在 ResNet 编码前对 third-person RGB 做 Gaussian blur，默认：
+
+```text
+visual_degradation_mode = gaussian_blur
+visual_blur_kernel_size = 15
+visual_blur_sigma = 3.0
+```
+
+可以通过命令行调整强度：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Blur-Self-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras \
+  env.visual_blur_kernel_size=21 \
+  env.visual_blur_sigma=5.0
+```
+
+Drawer 遮挡场景使用相同命名规则：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Downsample-Drawer-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-V-Blur-Drawer-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+```
+
+## 降采样视觉 + 触觉 Baseline
+
+如果纯视觉退化后性能下降，可以用下面两组 task 测试触觉是否能补偿低质量视觉：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-VT-Downsample-Drawer-Occlusion-Cuboid \
+  --num_envs 64 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Alpha-Downsample-Drawer-Occlusion-Cuboid \
+  --num_envs 64 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-GRU-Downsample-Drawer-Occlusion-Cuboid \
+  --num_envs 64 \
+  --enable_cameras
+```
+
+`VT-Downsample` 使用普通四触觉 late fusion：
+
+```text
+third_resnet 256 + tactile fused 256 + proprio 18 = 530
+```
+
+`Alpha-Downsample` 使用 alpha-gated fusion：
+
+```text
+vision: downsampled RGB -> ResNet -> 256
+tactile: 4 * 256 -> 256
+alpha: proprio 18 -> 1
+final MLP input: 256 + 256 + 18 = 530
+```
+
+`GRU-Downsample` 使用触觉 GRU，然后直接与视觉和 proprio 拼接，不使用 alpha gate：
+
+```text
+vision branch: downsampled RGB -> ResNet -> 256
+tactile branch: 4 sensors * 10-step history * 256 -> GRU -> 256
+final MLP input: 256 + 256 + 18 = 530
+```
+
+这两个 task 默认都使用：
+
+```text
+visual_degradation_mode = downsample
+visual_downsample_size = 32
+```
+
+可以通过命令行改变视觉粗糙程度：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-GRU-Downsample-Drawer-Occlusion-Cuboid \
+  --num_envs 64 \
+  --enable_cameras \
+  env.visual_downsample_size=48
+```
 
 ## Scene 变体
 
@@ -142,33 +293,57 @@ action: 5
 | Fusion | policy 侧主要维度 |
 |---|---|
 | `V` | `third_resnet 256 + proprio 18 = 274` |
+| `V-Downsample` | 与 `V` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `V-Blur` | 与 `V` 相同，但 third-person RGB 会先经过 Gaussian blur 后进入 ResNet |
 | `V-Wrist` | 与 `V` 相同，但视觉 feature 来自 wrist camera：`274` |
 | `VT` | 四个 tactile features 先从 `1024 -> 256`；再与 `third_resnet 256`、`proprio 18` 拼接，最终 input 为 `530` |
+| `VT-Downsample` | 与 `VT` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
 | `VT-Wrist` | 与 `VT` 相同，但视觉 feature 来自 wrist camera；最终 input 为 `530` |
 | `VT-Pair` | down 两个 tactile features `2 * 256 = 512 -> 128`；inner 两个 tactile features `2 * 256 = 512 -> 128`；再与 `third_resnet 256`、`proprio 18` 拼接，最终 input 为 `256 + 128 + 128 + 18 = 530` |
 | `VT-Pair-GRU` | 每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；down 两个 GRU latent `256 -> 128`；inner 两个 GRU latent `256 -> 128`；再与 `third_resnet 256`、`proprio 18` 拼接，最终 input 为 `530` |
-| `Mixed` | `third_resnet 256`；tactile tokens 通常先投影到 `128`，再用于 residual policy |
-| `Mixed-Sensor-Gate` | 与 `Mixed` 类似，额外加入 per-sensor/global gate 输入 |
+| `CNN-Recon` | env 输出四路 raw tactile RGB，每路 `3 * 32 * 32`；policy 侧可训练 CNN 编码为每路 `256`，四路拼接 `1024 -> 256`；decoder 从每路 `256` 重建 `3 * 32 * 32`，重建 loss 会反传到 tactile CNN；最终 input 为 `256 + 256 + 18 = 530` |
+| `VT-Down-Residual` | 主动作路径与 `VT` 相同：四路 tactile `1024 -> 256`，再与 `third_resnet 256`、`proprio 18` 拼接；额外 residual 分支只使用下侧两个 tactile `512 -> 128` 和下侧接触程度 `2` 维，硬门控为 `max(left_down_contact, right_down_contact) > 0.01`；启用时只修正 `dx/dy`，单维最大 residual 幅值为 normalized action 的 `0.2` |
 | `Reliability-Stage` | `third_resnet 256`，四个 tactile features 共 `1024`，并带有辅助 reliability/stage heads |
 | `Reliability-Stage-Strong-Gate` | 类似 `Reliability-Stage`，额外使用 temporal/pair fusion；temporal output 默认是 `256` |
 | `Alpha` | vision `256 -> 256`；tactile `1024 -> 256`；最终 MLP input 为 `256 + 256 + 18 = 530` |
+| `Visual-Cross-Alpha` | 基于 VT observation：`third_resnet` 投影为单个视觉 token `V`，四路 tactile features 分别投影为 4 个 tactile tokens；视觉 token query 四个 tactile tokens 做 cross attention 得到 `V'`；proprio 输出 `alpha`，使用 `V_mix = (1-alpha) * V + alpha * V'`；最终 MLP input 为 `V_mix 256 + proprio 18 = 274` |
+| `Visual-Cross-Alpha-Downsample` | 与 `Visual-Cross-Alpha` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `Visual-Cross-Alpha-Tactile-Downsample` | 与 `Visual-Cross-Alpha-Downsample` 相同，但最终动作 MLP 额外拼接四路 tactile 聚合特征；最终 MLP input 为 `V_mix 256 + tactile 256 + proprio 18 = 530` |
+| `Tactile-Cross-Alpha` | 基于 VT observation：四路 tactile features 先聚合得到 tactile feature `T`，同时分别投影为 4 个 tactile query tokens；`third_resnet` 投影为视觉 key/value token；四个 tactile queries attend 视觉 token 得到 tactile-cross tokens，再聚合为 `T'`；proprio 输出 `alpha`，使用 `T_mix = alpha * T + (1-alpha) * T'`；最终 MLP input 为 `T_mix 256 + proprio 18 = 274` |
+| `Tactile-Cross-Alpha-VisibleContact` | 与 `Tactile-Cross-Alpha` 的 cross attention 和最终 input 相同，但 alpha 改为由 `visual_visible_ratio 1 + tactile_contact_ratio 4` 共 5 维直接输出；物体可见比例来自 bbox `1 - occlusionRatio`，四路接触比例来自 tactile 图像相对 reset baseline 的变化面积 |
+| `Tactile-Cross-Alpha-VisibleContact-Downsample` | 与 `Tactile-Cross-Alpha-VisibleContact` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `Tactile-Cross-SensorAlpha-VisibleContact` | 与 `Tactile-Cross-Alpha-VisibleContact` 使用相同的可见/接触输入，但为四路 tactile 分别计算 `alpha_i = f(visual_visible_ratio, contact_ratio_i)`；每个原始 tactile token 与对应视觉增强 token 先按自身 alpha 融合，四个 mixed tokens 再聚合为 `256`；最终 MLP input 为 `visual 256 + tactile_mixed 256 + proprio 18 = 530` |
+| `Tactile-Cross-SensorAlpha-VisibleContact-Downsample` | 与 `Tactile-Cross-SensorAlpha-VisibleContact` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet；最终 MLP input 为 `530` |
+| `Tactile-Cross-Alpha-Downsample` | 与 `Tactile-Cross-Alpha` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `Tactile-Cross-Alpha-Visual-Downsample` | 与 `Tactile-Cross-Alpha-Downsample` 相同，但最终动作 MLP 额外拼接 direct visual feature；最终 MLP input 为 `visual 256 + T_mix 256 + proprio 18 = 530` |
+| `Tactile-Cross-Alpha-VisualTokens-Downsample` | 与 `Tactile-Cross-Alpha-Visual-Downsample` 类似，但视觉由 ResNet layer4 输出 `7x7=49` 个 token；四路 tactile query attend 这 49 个 visual tokens，最终 direct visual feature 由 49 个 token 投影并平均为 `256`，最终 MLP input 仍为 `visual 256 + T_mix 256 + proprio 18 = 530` |
+| `Dual-Cross-Alpha` | 同时计算 `Visual-Cross-Alpha` 的 `V_mix = (1-alpha) * V + alpha * V'` 和 `Tactile-Cross-Alpha` 的 `T_mix = alpha * T + (1-alpha) * T'`；最终 MLP input 为 `V_mix 256 + T_mix 256 + proprio 18 = 530` |
+| `Dual-Cross-Alpha-Downsample` | 与 `Dual-Cross-Alpha` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `Dual-Cross-Alpha-Aux-Downsample` | 与 `Dual-Cross-Alpha-Downsample` 相同，但 alpha 不使用 proprio；policy 从 `third_resnet` 预测 bbox 遮挡程度 `occlusion_pred`，从四路 tactile feature 预测接触程度并取均值 `contact_mean_pred`，再由这两个数输出 alpha；env 输出 `aux_occlusion_gt` 和 `aux_tactile_contact_gt`，通过辅助 loss 训练两个任务头；最终 MLP input 仍为 `530` |
+| `Dual-Cross-Downsample` | 与 `Dual-Cross-Alpha-Downsample` 使用相同的双向 cross attention 和视觉降采样，但不使用 alpha gate；固定残差融合为 `V + V'` 和 `T + T'`，最终 MLP input 为 `256 + 256 + proprio 18 = 530` |
+| `Token-Self-Attn-Downsample` | 将 `third_resnet` 和四路 tactile feature 投影成 5 个 `256` 维 token，一起做 self-attention；输出后保留视觉 token `256`，四个 tactile tokens 拼接为 `1024` 后压缩到 `256`，再拼接 proprio，最终 MLP input 为 `256 + 256 + 18 = 530` |
+| `Alpha-Downsample` | 与 `Alpha` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `Alpha-Learnable-Tactile` | vision `256 -> 256` 且不乘 alpha；tactile `1024 -> 256` 后使用 `alpha * tactile + (1-alpha) * learned_tactile_param`；最终 input 为 `530` |
 | `Alpha-Beta` | vision `256 -> 256`；down tactile `2 * 256 = 512 -> 128`；inner tactile `2 * 256 = 512 -> 128`；proprio 输出 alpha/beta，按 `1-alpha-beta`、`alpha`、`beta` 加权后拼接；最终 MLP input 为 `256 + 128 + 128 + 18 = 530` |
 | `Alpha-GRU` | vision `256 -> 256`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；四个 tactile latents 为 `512 -> 256`；最终 input 为 `530` |
 | `Alpha-GRU-Beta` | vision `256 -> 256`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；down 两个 GRU latent `256 -> 128`；inner 两个 GRU latent `256 -> 128`；最终 input 为 `530` |
 | `Alpha-Dual-GRU` | vision sequence `5 * 256 -> 256`；tactile 侧与 `Alpha-GRU` 相同；最终 input 为 `530` |
-| `Alpha-GRU-Task-Residual` | base path 与 `Alpha-GRU` 相同，最终 input 为 `530`；inner/bottom residual branches 使用 `128` 维 tactile latents |
 | `Alpha-GRU-VisualReliability` | base path 与 `Alpha-GRU` 相同；额外 visual reliability head：`third_resnet 256 -> hidden 128 -> 1`；alpha gate input 为 `proprio 18 + reliability 1` |
 | `Alpha-Recon` | vision `256 -> 256`；inner tactile `2 * 256 = 512`；down tactile `2 * 256 = 512`；总 tactile `1024 -> 256`；最终 input 为 `530` |
 | `Dual-Alpha-Recon` | vision latent `256`；down tactile latent `128`；inner tactile latent `128`；最终 MLP input 为 `256 + 128 + 128 = 512`；proprio 只用于两个 alpha gates |
 | `Gate-Alpha` | vision `256 -> 256`；tactile `1024 -> 256`；最终 input 为 `256 + 256 + 18 = 530`，并带有 tactile-valid gating |
 | `Hard-Gate` | 复用 `VT` policy：四个 tactile features 先从 `1024 -> 256`；再与 `third_resnet 256`、`proprio 18` 拼接，最终 input 为 `530`；没有接触的 tactile features 会在进入 policy 前被置零 |
 | `GRU` | vision `256 -> 256`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；四个 tactile GRU latent `512 -> 256`；不使用 alpha gate，直接拼接得到最终 input `256 + 256 + 18 = 530` |
+| `GRU-Downsample` | 与 `GRU` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
+| `GRU-Extra-Tactile` | 在 `GRU` 的基础上，额外取每个 tactile window 的最后一帧当前 tactile feature，四个传感器 `4 * 256 = 1024 -> 256` 后再拼接；最终 input 为 `256 + 256 + 256 + 18 = 786` |
+| `GRU-Sparsh-DownDepth` | 基于 `GRU` 风格的直接拼接融合；内侧两个 tactile 使用 RGB + Sparsh `dino_vitsmall`，每个 `256`，不经过 GRU，拼接后 `512 -> 128`；下侧两个 tactile 使用 depth-CNN，每帧 `256`，每路 `10 * 256` 经过 GRU 后拼接，再 `256 -> 128`；最终 input 为 `256 + 128 + 128 + 18 = 530` |
 | `Convex` | vision `256 -> 512`；tactile `1024 -> 512`；convex fusion 相加得到 `512`；最终 input 为 `512 + 18 = 530` |
 | `Convex-GRU` | vision `256 -> 512`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；四个 tactile GRU latent `512 -> 512`；convex fusion 相加得到 `512`；最终 input 为 `530` |
 | `Convex-GRU-Beta` | vision `256 -> 512`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；down 两个 latent `256 -> 512`；inner 两个 latent `256 -> 512`；按 `1-alpha-beta`、`alpha`、`beta` 三路相加融合；最终 input 为 `530` |
 | `Sparsh` | 类似 `VT`；tactile features 来自 Sparsh encoder，每个 tactile feature 为 `256`；四个 tactile features 先从 `1024 -> 256`，最终 input 为 `530` |
-| `Sparsh-Cross` | token-based cross attention：camera tokens 为 `4 * 5 = 20`，token dim 为 `256`；tactile tokens 为 `4 * (3 * 4) = 48`；policy embed dim 默认是 `512` |
-| `Cross` | token-based cross attention，camera token dim 为 `256`；policy embed dim 默认是 `512` |
+| `Policy-Token-Transformer` | env 侧用冻结 ResNet18 layer4 + `AdaptiveAvgPool2d(7,7)` 预提 `vision_tokens [49,512]`，用冻结共享 tactile CNN + `AdaptiveAvgPool2d(2,2)` 预提 `tactile_tokens [16,128]`；policy 侧只做 token projection、embedding、learnable policy token、TransformerEncoder 和动作 MLP；总 token 数为 `66` |
+
+`Policy-Token-Transformer` 的 raw image 不进入 skrl rollout memory；memory 只存 `vision_tokens`、`tactile_tokens`、proprio 和 critic 状态。视觉 ResNet18 和 tactile CNN 在 env 侧 `no_grad/eval` 下运行，不通过 PPO loss 更新。
 
 ## 常用变体
 
@@ -180,16 +355,29 @@ TacEx-Alpha-GRU-Self-Occlusion-Cube
 TacEx-Alpha-GRU-Self-Occlusion-Cuboid
 TacEx-Alpha-GRU-Drawer-Occlusion-Cylinder
 TacEx-Alpha-GRU-Drawer-Occlusion-Cube
+TacEx-V-Downsample-Self-Occlusion-Cube
+TacEx-V-Blur-Self-Occlusion-Cube
+TacEx-V-Downsample-Drawer-Occlusion-Cube
+TacEx-V-Blur-Drawer-Occlusion-Cube
+TacEx-VT-Downsample-Drawer-Occlusion-Cuboid
+TacEx-Alpha-Downsample-Drawer-Occlusion-Cuboid
+TacEx-GRU-Downsample-Drawer-Occlusion-Cuboid
 TacEx-Alpha-GRU-VisualReliability-Self-Occlusion-Cube
 TacEx-Alpha-GRU-VisualReliability-Drawer-Occlusion-Cube
 TacEx-VT-Pair-Self-Occlusion-Cube
 TacEx-VT-Pair-GRU-Self-Occlusion-Cube
+TacEx-CNN-Recon-Self-Occlusion-Cube
+TacEx-VT-Down-Residual-Self-Occlusion-Cube
 TacEx-Alpha-Beta-Self-Occlusion-Cube
+TacEx-Alpha-Learnable-Tactile-Self-Occlusion-Cube
 TacEx-Alpha-GRU-Beta-Self-Occlusion-Cube
 TacEx-GRU-Self-Occlusion-Cube
+TacEx-GRU-Extra-Tactile-Self-Occlusion-Cube
+TacEx-GRU-Sparsh-DownDepth-Self-Occlusion-Cube
 TacEx-Convex-Self-Occlusion-Cube
 TacEx-Convex-GRU-Self-Occlusion-Cube
 TacEx-Convex-GRU-Beta-Self-Occlusion-Cube
+TacEx-Policy-Token-Transformer-Self-Occlusion-Cube
 ```
 
 对 `GRU` 来说，没有 alpha gate：
@@ -203,6 +391,16 @@ proprio: 18
 final MLP input: concat(vision, tactile, proprio) = 530
 ```
 
+对 `GRU-Extra-Tactile` 来说，会同时使用 temporal tactile 和当前 tactile：
+
+```text
+vision branch: 256 -> 256
+tactile GRU branch: 4 sensors * 10-step history * 256 -> 4 * 128 -> 256
+current tactile branch: last frame from each tactile window, 4 * 256 = 1024 -> 256
+proprio: 18
+final MLP input: concat(vision, tactile_gru, tactile_current, proprio) = 786
+```
+
 对 `Alpha-GRU` 来说，关键维度是：
 
 ```text
@@ -212,6 +410,17 @@ tactile GRU output: 4 * 128 = 512
 tactile projection: 512 -> 256
 proprio: 18
 final MLP input: 256 + 256 + 18 = 530
+```
+
+对 `Alpha-Learnable-Tactile` 来说，alpha 只作用在 tactile 分支，不改变 vision 权重：
+
+```text
+vision: 256 -> 256
+tactile: 4 * 256 = 1024 -> 256
+alpha: proprio 18 -> 1
+learned_tactile_param: learnable 256-d vector
+tactile_mixed = alpha * tactile + (1 - alpha) * learned_tactile_param
+final MLP input: concat(vision, tactile_mixed, proprio) = 530
 ```
 
 对 `Convex` 来说，最终 MLP input 更小：

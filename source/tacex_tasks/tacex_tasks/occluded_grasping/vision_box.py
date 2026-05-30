@@ -431,6 +431,7 @@ class OccludedGraspingVisionOnlyBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):
             )
         else:
             third_rgb = third_rgb.to(device=self.device, dtype=torch.float32) / 255.0
+        third_rgb = self._degrade_third_person_rgb(third_rgb)
 
         dev = self.device
         dev_type = getattr(dev, "type", None)
@@ -462,6 +463,24 @@ class OccludedGraspingVisionOnlyBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):
             "critic_target_distance": target_distance,
         }
         return {"policy": obs}
+
+
+@configclass
+class OccludedGraspingVisionDownsampleBoxCfg(OccludedGraspingVisionOnlyBoxCfg):
+    """Vision-only baseline with low-resolution third-person RGB before ResNet encoding."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
+
+
+@configclass
+class OccludedGraspingVisionBlurBoxCfg(OccludedGraspingVisionOnlyBoxCfg):
+    """Vision-only baseline with Gaussian-blurred third-person RGB before ResNet encoding."""
+
+    visual_degradation_mode = "gaussian_blur"
+    visual_blur_kernel_size = 15
+    visual_blur_sigma = 3.0
+
 
 @configclass
 class OccludedGraspingVisionOnlyWristBoxCfg(OccludedGraspingVisionOnlyBoxCfg):

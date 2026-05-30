@@ -3,7 +3,7 @@ seed: 42
 models:
   separate: True
   policy:
-    class: "tacex_tasks.occluded_grasping.vt_sensor_gate_policy:OccludedGraspingVTSensorGateResidualPolicy"
+    class: "tacex_tasks.occluded_grasping.vt_alpha_policy:OccludedGraspingVTAlphaPolicy"
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0
@@ -13,19 +13,17 @@ models:
     reduction: sum
     vision_key: "third_resnet"
     tactile_keys: [
-      "tactile_left_rgb",
-      "tactile_right_rgb",
-      "tactile_left_down_depth",
-      "tactile_right_down_depth"
+      "tactile_left_depth_resnet",
+      "tactile_right_depth_resnet",
+      "tactile_left_down_depth_resnet",
+      "tactile_right_down_depth_resnet"
     ]
+    vector_keys: ["proprio_obs"]
     proprio_key: "proprio_obs"
-    tactile_sensor_gates_key: "tactile_sensor_gates"
-    tactile_global_gate_key: "tactile_global_gate"
-    visual_hidden_layers: [512, 256, 128, 64]
-    tactile_token_dim: 128
-    residual_hidden_dim: 256
-    gate_per_dim: False
-    residual_action_scales: [0.04, 0.04, 0.04, 0.20, 0.1]
+    fused_dim: 256
+    gate_hidden_dim: 64
+    mlp_layers: [256, 128, 64]
+    mlp_activation: elu
   value:
     class: DeterministicMixin
     clip_actions: False
@@ -70,8 +68,8 @@ agent:
   time_limit_bootstrap: False
   experiment:
     directory: "occluded_grasping"
-    experiment_name: "vt_mixed_sensor_gate_box"
-    write_interval: 1000
+    experiment_name: "vt_alpha_downsample_box"
+    write_interval: 500
     checkpoint_interval: 10000
     wandb: False
     wandb_kwargs: { "sync_tensorboard": True, "project": "occluded_grasping_vision_tactile" }

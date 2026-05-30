@@ -681,6 +681,10 @@ class OccludedGraspingVisionFourTactileBoxCfg(DirectRLEnvCfg):
     success_hold_steps = 5
     success_reward_weight = 100.0
     drop_after_success_penalty_weight = 150.0
+    tactile_inner_contact_reward_weight = 1.0
+    tactile_down_contact_reward_weight = 1.0
+    tactile_contact_diff_threshold = 0.05
+    tactile_contact_area_threshold = 0.01
     # 盒底顶面相对盒底中心的 z 偏移（m）
     box_floor_top_offset = BOX_FLOOR_THICKNESS * 0.5
 
@@ -710,6 +714,12 @@ class OccludedGraspingVisionFourTactileBoxCfg(DirectRLEnvCfg):
     # Keep the floor/object dynamics unchanged while allowing occluder geometry to be disabled per task.
     include_drawer_walls = True
     include_outer_cabinet_panels = True
+    # Optional third-person RGB degradation applied before the frozen visual encoder.
+    # Modes: "none", "downsample", "gaussian_blur".
+    visual_degradation_mode = "none"
+    visual_downsample_size = 32
+    visual_blur_kernel_size = 15
+    visual_blur_sigma = 3.0
 
     def _compute_tactile_obs_dim(self) -> int:
         """Compute per-sensor tactile observation dimension exposed to policy."""
@@ -738,6 +748,14 @@ class OccludedGraspingVisionFourTactileBoxCfg(DirectRLEnvCfg):
         if callable(parent_post_init):
             parent_post_init()
         self._sync_tactile_observation_space()
+
+
+@configclass
+class OccludedGraspingVisionFourTactileDownsampleBoxCfg(OccludedGraspingVisionFourTactileBoxCfg):
+    """VT task with downsampled third-person RGB before visual feature extraction."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
 
 
 class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
@@ -891,6 +909,21 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
             key: torch.zeros((self.num_envs, 3, target_h, target_w), dtype=torch.float32, device=self.device)
             for key in self._tactile_sensor_keys
         }
+        self._tactile_contact_rgb_baseline = {
+            key: torch.zeros((self.num_envs, 3, target_h, target_w), dtype=torch.float32, device=self.device)
+            for key in self._tactile_sensor_keys
+        }
+        self._pending_tactile_contact_baseline_refresh = torch.ones(
+            (self.num_envs,), dtype=torch.bool, device=self.device
+        )
+        self._latest_tactile_contact_ratio_by_sensor = torch.zeros(
+            (self.num_envs, 4), dtype=torch.float32, device=self.device
+        )
+        self._latest_tactile_contact_bits = torch.zeros(
+            (self.num_envs, 4), dtype=torch.float32, device=self.device
+        )
+        self._latest_inner_contact_reward = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self._latest_down_contact_reward = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
 
         # Index of fingers -> first id is left, second id is right finger
         self._finger_joint_ids, self._finger_joint_names = self._robot.find_joints(["panda_finger.*"])
@@ -1031,6 +1064,43 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         self.scene.rigid_objects["drawer_cabinet_back"] = self._drawer_cabinet_back
         self._drawer_cabinet_top = RigidObject(self.cfg.drawer_cabinet_top)
         self.scene.rigid_objects["drawer_cabinet_top"] = self._drawer_cabinet_top
+
+    def _degrade_third_person_rgb(self, third_rgb: torch.Tensor) -> torch.Tensor:
+        """Apply optional visual degradation before third-person RGB encoding."""
+        mode = str(getattr(self.cfg, "visual_degradation_mode", "none")).strip().lower()
+        if mode in {"", "none"}:
+            return third_rgb
+
+        rgb_nchw = third_rgb.permute(0, 3, 1, 2).contiguous()
+        height, width = rgb_nchw.shape[-2:]
+
+        if mode == "downsample":
+            size = max(1, int(getattr(self.cfg, "visual_downsample_size", 32)))
+            low_res = F.interpolate(rgb_nchw, size=(size, size), mode="bilinear", align_corners=False)
+            degraded = F.interpolate(low_res, size=(height, width), mode="bilinear", align_corners=False)
+            return degraded.permute(0, 2, 3, 1).contiguous().clamp(0.0, 1.0)
+
+        if mode == "gaussian_blur":
+            kernel_size = max(3, int(getattr(self.cfg, "visual_blur_kernel_size", 15)))
+            if kernel_size % 2 == 0:
+                kernel_size += 1
+            sigma = max(float(getattr(self.cfg, "visual_blur_sigma", 3.0)), 1e-6)
+            radius = kernel_size // 2
+            coords = torch.arange(kernel_size, device=self.device, dtype=rgb_nchw.dtype) - radius
+            kernel_1d = torch.exp(-0.5 * (coords / sigma) ** 2)
+            kernel_1d = kernel_1d / kernel_1d.sum().clamp(min=1e-12)
+            kernel_x = kernel_1d.view(1, 1, 1, kernel_size).expand(3, 1, 1, kernel_size)
+            kernel_y = kernel_1d.view(1, 1, kernel_size, 1).expand(3, 1, kernel_size, 1)
+            padded = F.pad(rgb_nchw, (radius, radius, 0, 0), mode="reflect")
+            blurred = F.conv2d(padded, kernel_x, groups=3)
+            padded = F.pad(blurred, (0, 0, radius, radius), mode="reflect")
+            blurred = F.conv2d(padded, kernel_y, groups=3)
+            return blurred.permute(0, 2, 3, 1).contiguous().clamp(0.0, 1.0)
+
+        raise ValueError(
+            f"Unsupported visual_degradation_mode='{mode}'. "
+            "Use 'none', 'downsample', or 'gaussian_blur'."
+        )
 
     def _initialize_can_positions(self):
         """Initialize can positions inside the drawer bounds used by the demo scene."""
@@ -1230,6 +1300,7 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
             )
         else:
             third_rgb = third_rgb.to(device=self.device, dtype=torch.float32) / 255.0
+        third_rgb = self._degrade_third_person_rgb(third_rgb)
 
         # Tactile RGB from GelSight sensors (left/right + left_down/right_down)
         tact_l_raw = self.gsmini_left.data.output.get("tactile_rgb")
@@ -1361,6 +1432,98 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         
         return {"policy": obs}
 
+    def _get_tactile_contact_raw_rgbs(self) -> dict[str, torch.Tensor | None]:
+        """Read raw tactile RGB tensors for contact reward computation."""
+        return {
+            "left": self.gsmini_left.data.output.get("tactile_rgb") if hasattr(self, "gsmini_left") else None,
+            "right": self.gsmini_right.data.output.get("tactile_rgb") if hasattr(self, "gsmini_right") else None,
+            "left_down": (
+                self.gsmini_left_down.data.output.get("tactile_rgb") if hasattr(self, "gsmini_left_down") else None
+            ),
+            "right_down": (
+                self.gsmini_right_down.data.output.get("tactile_rgb") if hasattr(self, "gsmini_right_down") else None
+            ),
+        }
+
+    def _prep_contact_rgb_01(self, rgb_tensor: torch.Tensor | None) -> torch.Tensor | None:
+        """Convert tactile RGB into normalized NCHW float32 for baseline differencing."""
+        if rgb_tensor is None:
+            return None
+        target_h, target_w = getattr(self.cfg, "tactile_img_res_hw", (96, 128))
+        rgb = rgb_tensor.to(device=self.device, dtype=torch.float32)
+        if rgb.numel() == 0:
+            return None
+        max_val = rgb.max()
+        if torch.isfinite(max_val) and max_val > 1.5:
+            rgb = rgb / 255.0
+        rgb = rgb.clamp(0.0, 1.0)
+        if rgb.ndim == 3:
+            rgb = rgb.unsqueeze(-1)
+        if rgb.ndim != 4:
+            return None
+        if rgb.shape[-1] in (1, 3):
+            rgb = rgb.permute(0, 3, 1, 2).contiguous()
+        elif rgb.shape[1] not in (1, 3):
+            return None
+        if rgb.shape[1] == 1:
+            rgb = rgb.repeat(1, 3, 1, 1)
+        elif rgb.shape[1] > 3:
+            rgb = rgb[:, :3]
+        if rgb.shape[2] != target_h or rgb.shape[3] != target_w:
+            rgb = F.interpolate(rgb, size=(target_h, target_w), mode="bilinear", align_corners=False)
+        return rgb
+
+    def _maybe_refresh_tactile_contact_baseline(self, sensor_rgbs: dict[str, torch.Tensor | None]) -> None:
+        """Capture reset-time tactile RGB baselines used for binary contact rewards."""
+        pending = self._pending_tactile_contact_baseline_refresh
+        if not torch.any(pending):
+            return
+        pending_ids = pending.nonzero(as_tuple=False).squeeze(-1)
+        if pending_ids.numel() == 0:
+            return
+
+        captured_any = False
+        for sensor_name, rgb in sensor_rgbs.items():
+            if rgb is None:
+                continue
+            baseline = self._tactile_contact_rgb_baseline[sensor_name]
+            baseline[pending_ids] = rgb[pending_ids]
+            captured_any = True
+        if captured_any:
+            pending[pending_ids] = False
+
+    def _compute_tactile_contact_rewards(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute pairwise 0/1 tactile contact rewards for inner and down sensors."""
+        raw_rgbs = self._get_tactile_contact_raw_rgbs()
+        sensor_rgbs = {name: self._prep_contact_rgb_01(raw) for name, raw in raw_rgbs.items()}
+        self._maybe_refresh_tactile_contact_baseline(sensor_rgbs)
+
+        ratios = []
+        diff_threshold = float(getattr(self.cfg, "tactile_contact_diff_threshold", 0.05))
+        area_threshold = float(getattr(self.cfg, "tactile_contact_area_threshold", 0.01))
+        for sensor_name in self._tactile_sensor_keys:
+            rgb = sensor_rgbs.get(sensor_name)
+            if rgb is None:
+                ratios.append(torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device))
+                continue
+            baseline = self._tactile_contact_rgb_baseline[sensor_name]
+            diff = torch.abs(rgb - baseline).mean(dim=1)
+            ratios.append((diff >= diff_threshold).to(torch.float32).mean(dim=(1, 2)))
+
+        ratio_by_sensor = torch.stack(ratios, dim=-1)
+        contact_bits = (ratio_by_sensor > area_threshold).to(torch.float32)
+        inner_contact_reward = contact_bits[:, :2].max(dim=-1).values
+        down_contact_reward = contact_bits[:, 2:4].max(dim=-1).values
+
+        self._latest_tactile_contact_ratio_by_sensor = ratio_by_sensor
+        self._latest_tactile_contact_bits = contact_bits
+        self._latest_inner_contact_reward = inner_contact_reward
+        self._latest_down_contact_reward = down_contact_reward
+        # Keep compatibility with existing auxiliary/logging variants that look for this name.
+        self._latest_tactile_over_thresh_ratio_by_sensor = ratio_by_sensor
+        self._latest_tactile_over_thresh_ratio_mean = ratio_by_sensor.mean(dim=-1)
+        return inner_contact_reward, down_contact_reward
+
     def _get_rewards(self) -> torch.Tensor:
         """Calculate rewards based on reaching, lifting, and success."""
         can_pos = self._can.data.root_pos_w
@@ -1400,7 +1563,10 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         lift_term = self.cfg.lift_weight * lift_reward
         success_term = self.cfg.success_reward_weight * success_reward
         drop_term = self.cfg.drop_after_success_penalty_weight * drop_penalty
-        rewards = reach_term + lift_term + success_term - drop_term
+        inner_contact_reward, down_contact_reward = self._compute_tactile_contact_rewards()
+        inner_contact_term = self.cfg.tactile_inner_contact_reward_weight * inner_contact_reward
+        down_contact_term = self.cfg.tactile_down_contact_reward_weight * down_contact_reward
+        rewards = reach_term + lift_term + success_term + inner_contact_term + down_contact_term - drop_term
 
         # accumulate per-episode returns and lengths
         self._ep_return = self._ep_return + rewards
@@ -1413,6 +1579,8 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
             "reward/lift_term",
             "reward/success_term",
             "reward/drop_after_success_term",
+            "reward/tactile_inner_contact_term",
+            "reward/tactile_down_contact_term",
             "info/can_avg_height",
             "info/episode_avg_reward_window",
             "info/policy_gate_mean",
@@ -1427,9 +1595,17 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         log["reward/success"] = success_reward.mean().detach()
         log["reward/drop_after_success"] = drop_penalty.mean().detach()
         log["reward/drop_after_success_term"] = drop_term.mean().detach()
+        log["reward/tactile_inner_contact"] = inner_contact_reward.mean().detach()
+        log["reward/tactile_down_contact"] = down_contact_reward.mean().detach()
+        log["reward/tactile_inner_contact_term"] = inner_contact_term.mean().detach()
+        log["reward/tactile_down_contact_term"] = down_contact_term.mean().detach()
         log["reward/total"] = rewards.mean().detach()
         log["info/reach_distance"] = reach_distance.mean().detach()
         log["info/can_height"] = can_avg_height.detach()
+        log["info/tactile_contact_left"] = self._latest_tactile_contact_bits[:, 0].mean().detach()
+        log["info/tactile_contact_right"] = self._latest_tactile_contact_bits[:, 1].mean().detach()
+        log["info/tactile_contact_left_down"] = self._latest_tactile_contact_bits[:, 2].mean().detach()
+        log["info/tactile_contact_right_down"] = self._latest_tactile_contact_bits[:, 3].mean().detach()
         gate_mean = get_latest_gate_mean()
         if gate_mean is not None:
             log["info/policy_gate_mean"] = torch.tensor(gate_mean, device=self.device)
@@ -1521,6 +1697,10 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
                     f"reach={reach_reward.mean().item():.3f} (w={self.cfg.reach_weight}), "
                     f"lift={lift_reward.mean().item():.3f} (w={self.cfg.lift_weight}), "
                     f"success_reward={success_reward.mean().item():.3f} (w={self.cfg.success_reward_weight}), "
+                    f"inner_contact={inner_contact_reward.mean().item():.3f} "
+                    f"(w={self.cfg.tactile_inner_contact_reward_weight}), "
+                    f"down_contact={down_contact_reward.mean().item():.3f} "
+                    f"(w={self.cfg.tactile_down_contact_reward_weight}), "
                     f"drop_after_success={drop_penalty.mean().item():.3f} "
                     f"(w={self.cfg.drop_after_success_penalty_weight}), "
                     f"can_avg_height={can_avg_height.item():.4f}, "
@@ -1689,6 +1869,14 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
             self._pending_tactile_history_refresh[env_ids] = True
             for key in self._tactile_sensor_keys:
                 self._tactile_rgb_history[key][env_ids] = 0.0
+        if hasattr(self, "_pending_tactile_contact_baseline_refresh"):
+            self._pending_tactile_contact_baseline_refresh[env_ids] = True
+            for key in self._tactile_sensor_keys:
+                self._tactile_contact_rgb_baseline[key][env_ids] = 0.0
+            self._latest_tactile_contact_ratio_by_sensor[env_ids] = 0.0
+            self._latest_tactile_contact_bits[env_ids] = 0.0
+            self._latest_inner_contact_reward[env_ids] = 0.0
+            self._latest_down_contact_reward[env_ids] = 0.0
         # also reset episode trackers on manual resets
         self._ep_return[env_ids] = 0.0
         self._ep_len[env_ids] = 0
@@ -1813,6 +2001,13 @@ class OccludedGraspingVisionFourTactileWristBoxEnv(OccludedGraspingVisionFourTac
 
 class OccludedGraspingVTAlphaBoxCfg(OccludedGraspingVisionFourTactileBoxCfg):
     """Alias cfg for the alpha-gated VT task."""
+
+
+class OccludedGraspingVTAlphaDownsampleBoxCfg(OccludedGraspingVTAlphaBoxCfg):
+    """Alpha-gated VT task with downsampled third-person RGB."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
 
 
 class OccludedGraspingVTAlphaBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):

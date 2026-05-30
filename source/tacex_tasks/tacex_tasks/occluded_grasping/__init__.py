@@ -10,6 +10,8 @@ from isaaclab.utils import configclass
 
 from . import agents
 from .vision_box import (
+    OccludedGraspingVisionBlurBoxCfg,
+    OccludedGraspingVisionDownsampleBoxCfg,
     OccludedGraspingVisionOnlyBoxCfg,
     OccludedGraspingVisionOnlyBoxEnv,
     OccludedGraspingVisionOnlyWristBoxCfg,
@@ -18,8 +20,10 @@ from .vision_box import (
 from .vt_box import (
     OccludedGraspingVisionFourTactileBoxCfg,
     OccludedGraspingVisionFourTactileBoxEnv,
+    OccludedGraspingVisionFourTactileDownsampleBoxCfg,
     OccludedGraspingVisionFourTactileSelfOcclusionBoxCfg,
     OccludedGraspingVTAlphaBoxCfg,
+    OccludedGraspingVTAlphaDownsampleBoxCfg,
     OccludedGraspingVTAlphaBoxEnv,
     OccludedGraspingVTConvexBoxCfg,
     OccludedGraspingVTConvexBoxEnv,
@@ -38,13 +42,13 @@ from .vt_pair_gru_box import (
     OccludedGraspingVTPairGRUBoxCfg,
     OccludedGraspingVTPairGRUBoxEnv,
 )
-from .vt_mixed_box import (
-    OccludedGraspingVisionMixedTactileBoxCfg,
-    OccludedGraspingVisionMixedTactileBoxEnv,
+from .vt_cnn_recon_box import (
+    OccludedGraspingVTCNNReconBoxCfg,
+    OccludedGraspingVTCNNReconBoxEnv,
 )
-from .vt_mixed_sensor_gate_box import (
-    OccludedGraspingVisionMixedSensorGateBoxCfg,
-    OccludedGraspingVisionMixedSensorGateBoxEnv,
+from .vt_down_residual_box import (
+    OccludedGraspingVTDownResidualBoxCfg,
+    OccludedGraspingVTDownResidualBoxEnv,
 )
 from .vt_reliability_stage_box import (
     OccludedGraspingVTReliabilityStageBoxCfg,
@@ -70,7 +74,16 @@ from .vt_alpha_gru_box import (
 )
 from .vt_gru_box import (
     OccludedGraspingVTGRUBoxCfg,
+    OccludedGraspingVTGRUDownsampleBoxCfg,
     OccludedGraspingVTGRUBoxEnv,
+)
+from .vt_gru_extra_tactile_box import (
+    OccludedGraspingVTGRUExtraTactileBoxCfg,
+    OccludedGraspingVTGRUExtraTactileBoxEnv,
+)
+from .vt_gru_sparsh_down_depth_box import (
+    OccludedGraspingVTGRUSparshDownDepthBoxCfg,
+    OccludedGraspingVTGRUSparshDownDepthBoxEnv,
 )
 from .vt_alpha_gru_beta_box import (
     OccludedGraspingVTAlphaGRUBetaBoxCfg,
@@ -88,10 +101,6 @@ from .vt_alpha_dual_gru_box import (
     OccludedGraspingVTAlphaDualGRUBoxCfg,
     OccludedGraspingVTAlphaDualGRUBoxEnv,
 )
-from .vt_alpha_gru_task_residual_box import (
-    OccludedGraspingVTAlphaGRUTaskResidualBoxCfg,
-    OccludedGraspingVTAlphaGRUTaskResidualBoxEnv,
-)
 from .vt_alpha_gru_visual_reliability_box import (
     OccludedGraspingVTAlphaGRUVisualReliabilityDrawerOcclusionBoxCfg,
     OccludedGraspingVTAlphaGRUVisualReliabilityDrawerOcclusionCubeCfg,
@@ -103,10 +112,6 @@ from .vt_dual_alpha_recon_box import (
     OccludedGraspingVTDualAlphaReconBoxCfg,
     OccludedGraspingVTDualAlphaReconBoxEnv,
 )
-from .vt_cross_box import (
-    OccludedGraspingVisionFourTactileCrossAttentionBoxCfg,
-    OccludedGraspingVisionFourTactileCrossAttentionBoxEnv,
-)
 from .vt_gate_box import (
     OccludedGraspingVTGateAlphaBoxCfg,
     OccludedGraspingVTGateAlphaBoxEnv,
@@ -115,11 +120,26 @@ from .vt_hard_gate_box import (
     OccludedGraspingVTHardGateBoxCfg,
     OccludedGraspingVTHardGateBoxEnv,
 )
+from .vt_dual_cross_alpha_aux_box import (
+    OccludedGraspingVTDualCrossAlphaAuxBoxEnv,
+    OccludedGraspingVTDualCrossAlphaAuxDownsampleBoxCfg,
+)
+from .vt_tactile_cross_alpha_visible_contact_box import (
+    OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
+    OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
+    OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv,
+)
+from .vt_tactile_cross_alpha_visual_tokens_box import (
+    OccludedGraspingVTTactileCrossAlphaVisualTokensBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaVisualTokensDownsampleBoxCfg,
+)
 from .vt_sparsh import (
     OccludedGraspingVisionFourTactileSparshBoxCfg,
     OccludedGraspingVisionFourTactileSparshBoxEnv,
-    OccludedGraspingVisionFourTactileSparshCrossAttentionBoxCfg,
-    OccludedGraspingVisionFourTactileSparshCrossAttentionBoxEnv,
+)
+from .vt_policy_token_transformer_box import (
+    OccludedGraspingVTPolicyTokenTransformerBoxCfg,
+    OccludedGraspingVTPolicyTokenTransformerBoxEnv,
 )
 
 
@@ -184,6 +204,9 @@ def _make_scene_object_cfg(base_cfg_cls, fusion_name: str, scene_name: str, obje
             _configure_cube_object(self)
         if use_cuboid:
             _configure_cuboid_object(self)
+        post_configure = getattr(self, "_post_configure_scene_object", None)
+        if callable(post_configure):
+            post_configure()
 
     attrs = {
         "__module__": __name__,
@@ -232,6 +255,16 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVisionOnlyBoxCfg,
             "ppo_v.yaml",
         ),
+        "V-Downsample": (
+            f"{__name__}.vision_box:OccludedGraspingVisionOnlyBoxEnv",
+            OccludedGraspingVisionDownsampleBoxCfg,
+            "ppo_v.yaml",
+        ),
+        "V-Blur": (
+            f"{__name__}.vision_box:OccludedGraspingVisionOnlyBoxEnv",
+            OccludedGraspingVisionBlurBoxCfg,
+            "ppo_v.yaml",
+        ),
         "V-Wrist": (
             f"{__name__}.vision_box:OccludedGraspingVisionOnlyWristBoxEnv",
             OccludedGraspingVisionOnlyWristBoxCfg,
@@ -241,6 +274,11 @@ def _register_scene_object_fusion_matrix() -> None:
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
             OccludedGraspingVisionFourTactileBoxCfg,
             "ppo_vt.yaml",
+        ),
+        "VT-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
+            OccludedGraspingVisionFourTactileDownsampleBoxCfg,
+            "ppo_vt_downsample.yaml",
         ),
         "VT-Wrist": (
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileWristBoxEnv",
@@ -257,15 +295,15 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVTPairGRUBoxCfg,
             "ppo_vt_pair_gru.yaml",
         ),
-        "Mixed": (
-            f"{__name__}.vt_mixed_box:OccludedGraspingVisionMixedTactileBoxEnv",
-            OccludedGraspingVisionMixedTactileBoxCfg,
-            "ppo_vt_mixed.yaml",
+        "CNN-Recon": (
+            f"{__name__}.vt_cnn_recon_box:OccludedGraspingVTCNNReconBoxEnv",
+            OccludedGraspingVTCNNReconBoxCfg,
+            "ppo_vt_cnn_recon.yaml",
         ),
-        "Mixed-Sensor-Gate": (
-            f"{__name__}.vt_mixed_sensor_gate_box:OccludedGraspingVisionMixedSensorGateBoxEnv",
-            OccludedGraspingVisionMixedSensorGateBoxCfg,
-            "ppo_vt_mixed_sensor_gate.yaml",
+        "VT-Down-Residual": (
+            f"{__name__}.vt_down_residual_box:OccludedGraspingVTDownResidualBoxEnv",
+            OccludedGraspingVTDownResidualBoxCfg,
+            "ppo_vt_down_residual.yaml",
         ),
         "Reliability-Stage": (
             f"{__name__}.vt_reliability_stage_box:OccludedGraspingVTReliabilityStageBoxEnv",
@@ -281,6 +319,96 @@ def _register_scene_object_fusion_matrix() -> None:
             f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
             OccludedGraspingVTAlphaBoxCfg,
             "ppo_vt_alpha.yaml",
+        ),
+        "Visual-Cross-Alpha": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaBoxCfg,
+            "ppo_vt_visual_cross_alpha.yaml",
+        ),
+        "Visual-Cross-Alpha-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_visual_cross_alpha.yaml",
+        ),
+        "Visual-Cross-Alpha-Tactile-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_visual_cross_alpha_tactile.yaml",
+        ),
+        "Tactile-Cross-Alpha": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaBoxCfg,
+            "ppo_vt_tactile_cross_alpha.yaml",
+        ),
+        "Tactile-Cross-Alpha-VisibleContact": (
+            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
+            "ppo_vt_tactile_cross_alpha_visible_contact.yaml",
+        ),
+        "Tactile-Cross-Alpha-VisibleContact-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_visible_contact.yaml",
+        ),
+        "Tactile-Cross-SensorAlpha-VisibleContact": (
+            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
+            "ppo_vt_tactile_cross_sensor_alpha_visible_contact.yaml",
+        ),
+        "Tactile-Cross-SensorAlpha-VisibleContact-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_sensor_alpha_visible_contact.yaml",
+        ),
+        "Tactile-Cross-Alpha-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha.yaml",
+        ),
+        "Tactile-Cross-Alpha-Visual-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_visual.yaml",
+        ),
+        "Tactile-Cross-Alpha-VisualTokens-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_visual_tokens_box:OccludedGraspingVTTactileCrossAlphaVisualTokensBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisualTokensDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_visual_tokens.yaml",
+        ),
+        "Dual-Cross-Alpha": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaBoxCfg,
+            "ppo_vt_dual_cross_alpha.yaml",
+        ),
+        "Dual-Cross-Alpha-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_dual_cross_alpha.yaml",
+        ),
+        "Dual-Cross-Alpha-Aux-Downsample": (
+            f"{__name__}.vt_dual_cross_alpha_aux_box:OccludedGraspingVTDualCrossAlphaAuxBoxEnv",
+            OccludedGraspingVTDualCrossAlphaAuxDownsampleBoxCfg,
+            "ppo_vt_dual_cross_alpha_aux.yaml",
+        ),
+        "Dual-Cross-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_dual_cross.yaml",
+        ),
+        "Token-Self-Attn-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_token_self_attention.yaml",
+        ),
+        "Alpha-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaDownsampleBoxCfg,
+            "ppo_vt_alpha_downsample.yaml",
+        ),
+        "Alpha-Learnable-Tactile": (
+            f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
+            OccludedGraspingVTAlphaBoxCfg,
+            "ppo_vt_alpha_learnable_tactile.yaml",
         ),
         "Alpha-Beta": (
             f"{__name__}.vt_alpha_beta_box:OccludedGraspingVTAlphaBetaBoxEnv",
@@ -301,11 +429,6 @@ def _register_scene_object_fusion_matrix() -> None:
             f"{__name__}.vt_alpha_dual_gru_box:OccludedGraspingVTAlphaDualGRUBoxEnv",
             OccludedGraspingVTAlphaDualGRUBoxCfg,
             "ppo_vt_alpha_dual_gru.yaml",
-        ),
-        "Alpha-GRU-Task-Residual": (
-            f"{__name__}.vt_alpha_gru_task_residual_box:OccludedGraspingVTAlphaGRUTaskResidualBoxEnv",
-            OccludedGraspingVTAlphaGRUTaskResidualBoxCfg,
-            "ppo_vt_alpha_gru_task_residual.yaml",
         ),
         "Alpha-GRU-VisualReliability": (
             visual_reliability_entry,
@@ -337,6 +460,21 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVTGRUBoxCfg,
             "ppo_vt_gru.yaml",
         ),
+        "GRU-Downsample": (
+            f"{__name__}.vt_gru_box:OccludedGraspingVTGRUBoxEnv",
+            OccludedGraspingVTGRUDownsampleBoxCfg,
+            "ppo_vt_gru_downsample.yaml",
+        ),
+        "GRU-Extra-Tactile": (
+            f"{__name__}.vt_gru_extra_tactile_box:OccludedGraspingVTGRUExtraTactileBoxEnv",
+            OccludedGraspingVTGRUExtraTactileBoxCfg,
+            "ppo_vt_gru_extra_tactile.yaml",
+        ),
+        "GRU-Sparsh-DownDepth": (
+            f"{__name__}.vt_gru_sparsh_down_depth_box:OccludedGraspingVTGRUSparshDownDepthBoxEnv",
+            OccludedGraspingVTGRUSparshDownDepthBoxCfg,
+            "ppo_vt_gru_sparsh_down_depth.yaml",
+        ),
         "Convex": (
             f"{__name__}.vt_box:OccludedGraspingVTConvexBoxEnv",
             OccludedGraspingVTConvexBoxCfg,
@@ -357,15 +495,10 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVisionFourTactileSparshBoxCfg,
             "ppo_vt_sparsh.yaml",
         ),
-        "Sparsh-Cross": (
-            f"{__name__}.vt_sparsh:OccludedGraspingVisionFourTactileSparshCrossAttentionBoxEnv",
-            OccludedGraspingVisionFourTactileSparshCrossAttentionBoxCfg,
-            "ppo_vt_sparsh_cross.yaml",
-        ),
-        "Cross": (
-            f"{__name__}.vt_cross_box:OccludedGraspingVisionFourTactileCrossAttentionBoxEnv",
-            OccludedGraspingVisionFourTactileCrossAttentionBoxCfg,
-            "ppo_vt_cross.yaml",
+        "Policy-Token-Transformer": (
+            f"{__name__}.vt_policy_token_transformer_box:OccludedGraspingVTPolicyTokenTransformerBoxEnv",
+            OccludedGraspingVTPolicyTokenTransformerBoxCfg,
+            "ppo_vt_policy_token_transformer.yaml",
         ),
     }
 
@@ -493,31 +626,6 @@ gym.register(
     },
 )
 
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Mixed-Box-v0 --num_envs 4 --enable_cameras
-# Mixed tactile:
-#   inner sensors -> tactile_rgb
-#   down sensors -> camera_depth
-gym.register(
-    id="TacEx-VT-Mixed-Box-v0",
-    entry_point=f"{__name__}.vt_mixed_box:OccludedGraspingVisionMixedTactileBoxEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": OccludedGraspingVisionMixedTactileBoxCfg,
-        "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_mixed.yaml",
-    },
-)
-
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Mixed-Sensor-Gate-Box-v0 --num_envs 4 --enable_cameras
-gym.register(
-    id="TacEx-VT-Mixed-Sensor-Gate-Box-v0",
-    entry_point=f"{__name__}.vt_mixed_sensor_gate_box:OccludedGraspingVisionMixedSensorGateBoxEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": OccludedGraspingVisionMixedSensorGateBoxCfg,
-        "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_mixed_sensor_gate.yaml",
-    },
-)
-
 # python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Reliability-Stage-Box-v0 --num_envs 4 --enable_cameras
 gym.register(
     id="TacEx-VT-Reliability-Stage-Box-v0",
@@ -600,21 +708,6 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": OccludedGraspingVTAlphaDualGRUBoxCfg,
         "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_alpha_dual_gru.yaml",
-    },
-)
-
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Alpha-GRU-Task-Residual-Box-v0 --num_envs 4 --enable_cameras
-# VT-Alpha-GRU-Task-Residual:
-#   1. Keep Alpha-GRU temporal tactile encoding
-#   2. Add visual heads for visibility / occlusion
-#   3. Add bottom and inner tactile residual branches with current-tactile gating
-gym.register(
-    id="TacEx-VT-Alpha-GRU-Task-Residual-Box-v0",
-    entry_point=f"{__name__}.vt_alpha_gru_task_residual_box:OccludedGraspingVTAlphaGRUTaskResidualBoxEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": OccludedGraspingVTAlphaGRUTaskResidualBoxCfg,
-        "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_alpha_gru_task_residual.yaml",
     },
 )
 
@@ -730,30 +823,6 @@ gym.register(
     },
 )
 #env.sparsh_encoder_name=dino_vitbase  dino_vitsmall  dinov2_vitbase ijepa_vitsmall ijepa_vitbase
-
-
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Sparsh-Cross-Box-v0 --num_envs 4 --enable_cameras
-gym.register(
-    id="TacEx-VT-Sparsh-Cross-Box-v0",
-    entry_point=f"{__name__}.vt_sparsh:OccludedGraspingVisionFourTactileSparshCrossAttentionBoxEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": OccludedGraspingVisionFourTactileSparshCrossAttentionBoxCfg,
-        "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_sparsh_cross.yaml",
-    },
-)
-
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Cross-Box-v0 --num_envs 4 --enable_cameras
-# python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Cross-Box-v0 --num_envs 4 --enable_cameras env.tactile_encoder_type=resnet
-gym.register(
-    id="TacEx-VT-Cross-Box-v0",
-    entry_point=f"{__name__}.vt_cross_box:OccludedGraspingVisionFourTactileCrossAttentionBoxEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": OccludedGraspingVisionFourTactileCrossAttentionBoxCfg,
-        "skrl_cfg_entry_point": f"{agents.__name__}:ppo_vt_cross.yaml",
-    },
-)
 
 
 # python scripts/reinforcement_learning/skrl/train.py --task TacEx-VT-Wrist-Box-v0 --num_envs 4 --enable_cameras
