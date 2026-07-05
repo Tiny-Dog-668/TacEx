@@ -55,7 +55,13 @@ parser.add_argument(
     "--save_start_frame",
     action="store_true",
     default=False,
-    help="Capture and save one training-start RGB frame after env reset.",
+    help="Capture and save training-start RGB frames after env reset.",
+)
+parser.add_argument(
+    "--start_frame_count",
+    type=int,
+    default=5,
+    help="Number of training-start RGB frames to save when start-frame capture is enabled.",
 )
 parser.add_argument(
     "--ml_framework",
@@ -217,33 +223,11 @@ def _find_preferred_rgb_sensor(base_env):
     return None, None
 
 
-def _save_training_start_camera_frame(env, log_dir: str) -> None:
-    """Capture one RGB frame after reset and save it into the run log directory."""
-    base_env = env.unwrapped
-    sensor_name, sensor = _find_preferred_rgb_sensor(base_env)
-    if sensor is None:
-        print("[INFO] No RGB camera sensor found. Skipping training-start camera snapshot.")
-        return
-
-    env.reset()
-
-    frame = None
-    for _ in range(3):
-        if base_env.sim.has_rtx_sensors():
-            base_env.sim.render()
-        base_env.scene.update(dt=base_env.physics_dt)
-        frame = _get_rgb_frame_from_sensor(sensor)
-        if frame is not None:
-            break
-
-    if frame is None:
-        print(f"[WARN] RGB camera sensor '{sensor_name}' is present but no frame was available.")
-        return
-
-    image = frame[0].detach().cpu()
+def _rgb_tensor_to_uint8_image(frame: torch.Tensor) -> torch.Tensor | None:
+    """Convert one HWC RGB/RGBA tensor to uint8 RGB on CPU."""
+    image = frame.detach().cpu()
     if image.ndim != 3:
-        print(f"[WARN] Unexpected RGB frame shape for sensor '{sensor_name}': {tuple(image.shape)}")
-        return
+        return None
     if image.shape[-1] > 3:
         image = image[..., :3]
     if image.dtype.is_floating_point:
@@ -252,10 +236,53 @@ def _save_training_start_camera_frame(env, log_dir: str) -> None:
         image = image.round().clamp(0, 255).to(torch.uint8)
     else:
         image = image.clamp(0, 255).to(torch.uint8)
+    return image
 
-    output_path = os.path.join(log_dir, f"train_start_{sensor_name}.png")
-    Image.fromarray(image.numpy()).save(output_path)
-    print(f"[INFO] Saved training-start camera snapshot to: {output_path}")
+
+def _save_training_start_camera_frames(env, log_dir: str, frame_count: int) -> None:
+    """Capture RGB frames after reset and save them into the run log directory."""
+    base_env = env.unwrapped
+    sensor_name, sensor = _find_preferred_rgb_sensor(base_env)
+    if sensor is None:
+        print("[INFO] No RGB camera sensor found. Skipping training-start camera snapshots.")
+        return
+
+    frame_count = max(1, int(frame_count))
+    output_dir = os.path.join(log_dir, "camera_frames")
+    os.makedirs(output_dir, exist_ok=True)
+
+    env.reset()
+
+    saved_count = 0
+    attempts = max(frame_count * 3, frame_count + 3)
+    for _ in range(attempts):
+        if base_env.sim.has_rtx_sensors():
+            base_env.sim.render()
+        base_env.scene.update(dt=base_env.physics_dt)
+        frame = _get_rgb_frame_from_sensor(sensor)
+
+        if frame is None:
+            continue
+
+        image = _rgb_tensor_to_uint8_image(frame[0])
+        if image is None:
+            print(f"[WARN] Unexpected RGB frame shape for sensor '{sensor_name}': {tuple(frame[0].shape)}")
+            return
+
+        height, width = image.shape[:2]
+        output_path = os.path.join(
+            output_dir,
+            f"start_{sensor_name}_env0_frame_{saved_count:03d}_{width}x{height}.png",
+        )
+        Image.fromarray(image.numpy()).save(output_path)
+        saved_count += 1
+        if saved_count >= frame_count:
+            break
+
+    if saved_count == 0:
+        print(f"[WARN] RGB camera sensor '{sensor_name}' is present but no frame was available.")
+    else:
+        print(f"[INFO] Saved {saved_count} training-start camera frame(s) to: {output_dir}")
 
 
 @hydra_task_config(args_cli.task, agent_cfg_entry_point)
@@ -319,11 +346,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo", "ppo_rnn"]:
         env = multi_agent_to_single_agent(env)
 
-    if args_cli.save_start_frame:
-        print("[INFO] Capturing training-start camera snapshot...")
-        _save_training_start_camera_frame(env, log_dir)
+    auto_save_start_frames = args_cli.task == "TacEx-Sim2Real-Cube-Grasp-v0"
+    if args_cli.save_start_frame or auto_save_start_frames:
+        print("[INFO] Capturing training-start camera frames...")
+        _save_training_start_camera_frames(env, log_dir, args_cli.start_frame_count)
     else:
-        print("[INFO] Skip training-start camera snapshot (use --save_start_frame to enable).")
+        print("[INFO] Skip training-start camera frames (use --save_start_frame to enable).")
 
     # wrap for video recording
     if args_cli.video:
@@ -371,7 +399,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "tactile_left_depth_resnet", "tactile_right_depth_resnet", "tactile_left_down_depth_resnet", "tactile_right_down_depth_resnet",
         "tactile_left_rgb", "tactile_right_rgb", "tactile_left_down_depth", "tactile_right_down_depth",
     }
-    obs_keys = set(getattr(env, "observation_space", {}) or {})
+    obs_space = getattr(env, "observation_space", None)
+    if hasattr(obs_space, "spaces"):
+        obs_keys = set(obs_space.spaces.keys())
+    else:
+        try:
+            obs_keys = set(obs_space.keys()) if obs_space is not None else set()
+        except AttributeError:
+            obs_keys = set()
     if (not USE_CUSTOM_POLICY) and is_recurrent and obs_keys.intersection(tactile_keys):
         print("[INFO] Enabling custom CylinderFusionLSTM (recurrent policy + tactile_resnet observations).")
         USE_CUSTOM_POLICY = True

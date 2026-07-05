@@ -1,69 +1,251 @@
-#
+# Occluded Visuotactile Grasping with TacEx
 
 [![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
 [![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.1.0-silver)](https://isaac-sim.github.io/IsaacLab)
 [![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://docs.python.org/3/whatsnew/3.10.html)
 [![Linux platform](https://img.shields.io/badge/platform-linux--64-orange.svg)](https://releases.ubuntu.com/22.04/)
-<!-- [![Windows platform](https://img.shields.io/badge/platform-windows--64-orange.svg)](https://www.microsoft.com/en-us/) -->
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/license/mit)
 
-**Keywords:** tactile sensing, gelsight, isaaclab, vision-based-tactile-sensor, vbts, reinforcement learning
+This repository builds on TacEx to study robot grasping under visual occlusion with vision-tactile fusion policies.
+The current project focus is an Isaac Sim / Isaac Lab reinforcement-learning task where a Franka Panda arm grasps and lifts objects in drawer-style or self-occlusion scenes using a third-person RGB camera, four GelSight Mini tactile sensors, proprioception, and PPO policies.
 
-> [!note]
-> **Preview Release**:
->
-> The framework is under active development and currently in its beta phase.  
-> If you encounter bugs or have suggestions on how the framework can be improved, please tell us about them (e.g. via [Issues](https://github.com/DH-Ng/TacEx/issues)/[Discussions](https://github.com/DH-Ng/TacEx/discussions)).
+## Project Focus
 
+The active task family is implemented under `source/tacex_tasks/tacex_tasks/occluded_grasping`.
+It provides composable task names:
 
-# TacEx - Tactile Extension for Isaac Sim/Isaac Lab
-**TacEx** brings **Vision-Based Tactile Sensor (VBTS)** into Isaac Sim/Lab.
-
-The framework integrates multiple simulation approaches for VBTS's and aims to be modular and extendable.
-Components can be easily switched out, added and modified.
-
-Currently, only the **GelSight Mini** is supported, but you can also easily add your own sensor (guide coming soon). We also plan to add more VBTS types later.
-
-## **Main features**:
-- [GPU accelerated Tactile RGB simulation](https://github.com/TimSchneider42/taxim) via [Taxim](https://github.com/Robo-Touch/Taxim)'s simulation approach
-- Marker Motion Simulation via [FOTS](https://github.com/Rancho-zhao/FOTS)
-- Integration of [UIPC](https://github.com/spiriMirror/libuipc) for GPU accelerated incremental potential contact to simulate FEM soft bodies, rigid bodies, cloth, etc. in a penetration-free and robust manner
-- Marker Motion Simulation with FEM soft body based on the simulator used by the [ManiSkill-ViTac challenge](https://github.com/chuanyune/ManiSkill-ViTac2025) that leverages UIPC
-
-
-Checkout the [website](https://sites.google.com/view/tacex) for showcases and the documentation for details, guides and tutorials.
-
-
-## Installation
-> [!NOTE]
-> TacEx currently works with **Isaac Sim 4.5** and **IsaacLab 2.1.0**.
-> The installation was tested on Ubuntu 22.04 with a 4090 GPU and Driver Version 550.163.01 + Cuda 12.4.
-
-**0.** Make sure that you have **git-lfs**:
-
-```bash
-# Need it for the USD assets
-git lfs install
+```text
+TacEx-{Fusion}-{Scene}-{Object}
 ```
 
-**1.** Clone this repository and its submodules:
+Supported scene names in the registered task matrix are:
+
+```text
+Drawer-Occlusion
+Self-Occlusion
+```
+
+Supported object names in the registered task matrix are:
+
+```text
+Cylinder
+Cube
+Cuboid
+SoftCylinder
+SoftCube
+SoftCuboid
+```
+
+The fusion axis includes vision-only, tactile-proprioception, vision-tactile, GelFusion-style, alpha-gated, GRU, cross-attention, auxiliary-head, Sparsh, and token-transformer variants. See `source/tacex_tasks/tacex_tasks/occluded_grasping/README.md` for the complete list.
+
+## Main Components
+
+- Environment and task registration:
+  `source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py`
+- Main vision-tactile environment:
+  `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_box.py`
+- Vision-only baseline:
+  `source/tacex_tasks/tacex_tasks/occluded_grasping/vision_box.py`
+- Policy and PPO configs:
+  `source/tacex_tasks/tacex_tasks/occluded_grasping/*policy.py`
+  and `source/tacex_tasks/tacex_tasks/occluded_grasping/agents/*.yaml`
+- skrl training entry point:
+  `scripts/reinforcement_learning/skrl/train.py`
+- skrl checkpoint playback:
+  `scripts/reinforcement_learning/skrl/play.py`
+- Fixed-position bucket evaluation:
+  `scripts/reinforcement_learning/skrl/play_bucket.py`
+- GelSight sensor implementation:
+  `source/tacex/tacex/gelsight_sensor.py`
+- GelSight Mini asset config:
+  `source/tacex_assets/tacex_assets/sensors/gelsight_mini/gsmini_cfg.py`
+
+## Observation and Action Summary
+
+The main environment `OccludedGraspingVisionFourTactileBoxEnv` exposes policy observations from:
+
+- `proprio_obs`: robot joint positions and velocities.
+- `third_resnet`: third-person RGB camera features.
+- `tactile_left_depth_resnet`, `tactile_right_depth_resnet`, `tactile_left_down_depth_resnet`, `tactile_right_down_depth_resnet`: four GelSight tactile feature streams.
+- `tactile_dynamic_stats`: optional GelFusion-style 8D tactile frame-difference statistics exposed by GelFusion tasks.
+- Privileged critic keys for object pose, gripper pose, velocities, and target distance.
+
+The `TacEx-T-{Scene}-{Object}` baseline exposes only `proprio_obs` and the four tactile feature streams to the actor while keeping the same action, reward, termination, and privileged critic definitions as the full VT task.
+
+The action space is 5-dimensional:
+
+```text
+[dx, dy, dz, dyaw, gripper]
+```
+
+The first four values are converted to a differential IK command for the Franka arm. The last value controls the gripper as an incremental opening/closing command.
+
+## Installation
+
+TacEx currently targets Isaac Sim 4.5 and Isaac Lab 2.1.0 on Linux with Python 3.10.
+
+Clone the repository with submodules and install the extensions following the existing TacEx installation docs:
+
 ```bash
+git lfs install
 git clone --recurse-submodules https://github.com/DH-Ng/TacEx
 cd TacEx
 ```
 
-Then **install TacEx** [locally](docs/source/installation/Local-Installation.md)
-or build a [Docker Container](docs/source/installation/Docker-Container-Setup.md).
+Then install locally using:
 
+```bash
+./tacex.sh --install
+```
 
-## Contributing
-Contributions of any kind are, of course, very welcome.
-Be it suggestions, feedback, bug reports or pull requests.
+For detailed setup notes, see:
 
-Let's work together to advance tactile sensing in robotics!!!
+- `docs/source/installation/Local-Installation.md`
+- `docs/source/installation/Docker-Container-Setup.md`
+
+## Train
+
+Example training command from the registered occluded-grasping tasks:
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Alpha-GRU-Drawer-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+```
+
+The training script loads the task config from the Gym/Isaac Lab registry, creates the environment, wraps it with `SkrlVecEnvWrapper`, and trains the PPO agent configured by the task's `skrl_cfg_entry_point`.
+
+### UR10 + Robotiq Direct Tasks
+
+This repository also includes migrated Isaac Lab direct RL tasks for UR10 + Robotiq:
+
+```text
+Isaac-UR10-Robotiq-Pick-Place-Direct-v0
+Isaac-UR10-Robotiq-2F85-Pick-Place-Direct-v0
+Isaac-UR10-Robotiq-2F85-Third-Person-Pick-Place-Direct-v0
+Isaac-UR10-Robotiq-2F85-Grasp-Direct-v0
+Isaac-UR10-Robotiq-Gripper-Close-Direct-v0
+```
+
+The UR10 + Robotiq 2F85 pick-place task uses a 27-dimensional state observation and 4-dimensional action `[dx, dy, dz, gripper]`. The Robotiq 2F85 policy controls `finger_joint` as the single active gripper DOF, while the other finger joints are driven by code-level coupling targets.
+The third-person variant is a standalone DirectRLEnv implementation for easier parameter edits. It adds a 224x224 RGB `third_person_camera` sensor using the camera intrinsics and pose from `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py`; its PPO policy observation remains the same 27-dimensional state vector unless a separate vision policy is added.
+
+Example training command:
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task Isaac-UR10-Robotiq-2F85-Pick-Place-Direct-v0 \
+  --num_envs 64 \
+  --headless
+```
+
+Third-person camera variant:
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task Isaac-UR10-Robotiq-2F85-Third-Person-Pick-Place-Direct-v0 \
+  --num_envs 64 \
+  --enable_cameras \
+  --headless
+```
+
+Keyboard reward debugger for the same UR/object/table layout:
+
+```bash
+python scripts/ur10_robotiq/teleop_2f85_rewards.py
+```
+
+Migrated checkpoint:
+
+```text
+logs/skrl/ur10_robotiq_pick_place_direct/2026-04-08_15-44-54_ppo_torch/checkpoints/best_agent.pt
+```
+
+## Evaluate
+
+Run a checkpoint with the regular playback script:
+
+```bash
+python scripts/reinforcement_learning/skrl/play.py \
+  --task TacEx-VT-Downsample-Drawer-Occlusion-Cube \
+  --num_envs 128 \
+  --enable_cameras \
+  --checkpoint logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/checkpoints/best_agent.pt
+```
+
+Record one environment's rollout actions and state traces during playback:
+
+```bash
+python scripts/reinforcement_learning/skrl/play.py \
+  --task TacEx-T-Drawer-Occlusion-Cuboid \
+  --num_envs 4 \
+  --enable_cameras \
+  --checkpoint logs/skrl/occluded_grasping/downsample/cuboid/2026-07-04_20-30-46_ppo_torch_tactile_box/checkpoints/best_agent.pt \
+  --record_rollout \
+  --record_rollout_env_id 0 \
+  --record_rollout_steps 200
+```
+
+Rollout recording writes a compressed NPZ under `metrics/play_rollout` with action, processed action, joint state, object pose, gripper position, reward, and done arrays for the selected environment.
+
+Run fixed-grid bucket evaluation over object start positions:
+
+```bash
+python scripts/reinforcement_learning/skrl/play_bucket.py \
+  --task TacEx-VT-Downsample-Drawer-Occlusion-Cube \
+  --num_envs 128 \
+  --enable_cameras \
+  --checkpoint logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/checkpoints/best_agent.pt \
+  --bucket_rounds 1 \
+  --headless
+```
+
+Bucket evaluation writes detail and summary CSV files under the checkpoint run's `metrics/play_bucket` directory.
+
+## Useful Checks
+
+Lightweight syntax check:
+
+```bash
+python -m compileall source scripts tools
+```
+
+Isaac Lab test discovery:
+
+```bash
+./tacex.sh -p tools/run_all_tests.py --discover_only
+```
+
+Environment tests require Isaac Sim / Isaac Lab, GPU, and a compatible rendering setup:
+
+```bash
+./tacex.sh -p tools/run_all_tests.py --extension tacex_tasks
+```
+
+## Documentation
+
+Project-specific architecture notes are in:
+
+- `docs/PROJECT_OVERVIEW.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DATA_FLOW.md`
+- `docs/KNOWN_ISSUES.md`
+- `docs/DECISIONS.md`
+
+The original TacEx framework documentation remains under `docs/source`.
+
+## Upstream TacEx
+
+TacEx brings vision-based tactile sensors into Isaac Sim / Isaac Lab. The upstream framework includes:
+
+- GPU-accelerated tactile RGB simulation via Taxim.
+- Marker-motion simulation via FOTS.
+- UIPC integration for GPU-accelerated incremental potential contact.
+- FEM-based marker-motion simulation inspired by the ManiSkill-ViTac challenge.
 
 ## Citation
+
 ```bibtex
 @article{nguyen2024tacexgelsighttactilesimulation,
       title={TacEx: GelSight Tactile Simulation in Isaac Sim -- Combining Soft-Body and Visuotactile Simulators},
@@ -78,8 +260,10 @@ Let's work together to advance tactile sensing in robotics!!!
 
 ## Acknowledgements
 
-TacEx is built upon code from
-- [Isaac Lab](https://github.com/isaac-sim/IsaacLab/tree/main)
+This project builds on:
+
+- [TacEx](https://github.com/DH-Ng/TacEx)
+- [Isaac Lab](https://github.com/isaac-sim/IsaacLab)
 - [Taxim](https://github.com/Robo-Touch/Taxim)
 - [FOTS](https://github.com/Rancho-zhao/FOTS)
 - [UIPC](https://github.com/spiriMirror/libuipc)

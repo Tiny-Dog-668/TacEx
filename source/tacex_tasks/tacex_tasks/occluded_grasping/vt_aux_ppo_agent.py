@@ -85,12 +85,17 @@ class PPOWithAuxHeadsLoss(PPO):
         cumulative_alpha = 0.0
         cumulative_m_probe = 0.0
         cumulative_m_grasp = 0.0
+        cumulative_router_load_loss = 0.0
+        cumulative_router_entropy_loss = 0.0
+        cumulative_router_max_prob = 0.0
+        cumulative_router_selected = 0.0
         aux_batches = 0
         saw_g_probe = False
         saw_g_grasp = False
         saw_alpha = False
         saw_m_probe = False
         saw_m_grasp = False
+        saw_router = False
 
         def _to_float(value) -> float:
             if value is None:
@@ -155,6 +160,10 @@ class PPOWithAuxHeadsLoss(PPO):
                     alpha = predicted_values.new_zeros(())
                     m_probe = predicted_values.new_zeros(())
                     m_grasp = predicted_values.new_zeros(())
+                    router_load_loss = predicted_values.new_zeros(())
+                    router_entropy_loss = predicted_values.new_zeros(())
+                    router_max_prob = predicted_values.new_zeros(())
+                    router_selected = predicted_values.new_zeros(())
                     if self._aux_enabled and isinstance(policy_outputs, dict):
                         aux_loss = policy_outputs.get("aux_loss", aux_loss)
                         aux_reliability_loss = policy_outputs.get("aux_reliability_loss", aux_reliability_loss)
@@ -175,6 +184,18 @@ class PPOWithAuxHeadsLoss(PPO):
                         if "m_grasp" in policy_outputs:
                             m_grasp = policy_outputs["m_grasp"]
                             saw_m_grasp = True
+                        if "router_load_loss" in policy_outputs:
+                            router_load_loss = policy_outputs["router_load_loss"]
+                            saw_router = True
+                        if "router_entropy_loss" in policy_outputs:
+                            router_entropy_loss = policy_outputs["router_entropy_loss"]
+                            saw_router = True
+                        if "router_probs" in policy_outputs:
+                            router_max_prob = policy_outputs["router_probs"].max(dim=-1).values
+                            saw_router = True
+                        if "router_selected" in policy_outputs:
+                            router_selected = policy_outputs["router_selected"]
+                            saw_router = True
                         if torch.is_tensor(aux_loss) and aux_loss.dim() > 0:
                             aux_loss = aux_loss.mean()
                         if torch.is_tensor(aux_reliability_loss) and aux_reliability_loss.dim() > 0:
@@ -193,6 +214,14 @@ class PPOWithAuxHeadsLoss(PPO):
                             m_probe = m_probe.mean()
                         if torch.is_tensor(m_grasp) and m_grasp.dim() > 0:
                             m_grasp = m_grasp.mean()
+                        if torch.is_tensor(router_load_loss) and router_load_loss.dim() > 0:
+                            router_load_loss = router_load_loss.mean()
+                        if torch.is_tensor(router_entropy_loss) and router_entropy_loss.dim() > 0:
+                            router_entropy_loss = router_entropy_loss.mean()
+                        if torch.is_tensor(router_max_prob) and router_max_prob.dim() > 0:
+                            router_max_prob = router_max_prob.mean()
+                        if torch.is_tensor(router_selected) and router_selected.dim() > 0:
+                            router_selected = router_selected.mean()
 
                     total_loss = policy_loss + entropy_loss + value_loss
                     if self._aux_enabled:
@@ -233,6 +262,10 @@ class PPOWithAuxHeadsLoss(PPO):
                     cumulative_alpha += _to_float(alpha)
                     cumulative_m_probe += _to_float(m_probe)
                     cumulative_m_grasp += _to_float(m_grasp)
+                    cumulative_router_load_loss += _to_float(router_load_loss)
+                    cumulative_router_entropy_loss += _to_float(router_entropy_loss)
+                    cumulative_router_max_prob += _to_float(router_max_prob)
+                    cumulative_router_selected += _to_float(router_selected)
 
             if self._learning_rate_scheduler:
                 if isinstance(self.scheduler, KLAdaptiveLR):
@@ -279,3 +312,8 @@ class PPOWithAuxHeadsLoss(PPO):
                 self.track_data("Policy / hard gate bottom", m_probe_mean)
             if saw_m_grasp:
                 self.track_data("Policy / hard gate inner", m_grasp_mean)
+            if saw_router:
+                self.track_data("Router / Load loss", cumulative_router_load_loss / aux_batches)
+                self.track_data("Router / Entropy loss", cumulative_router_entropy_loss / aux_batches)
+                self.track_data("Router / Max prob", cumulative_router_max_prob / aux_batches)
+                self.track_data("Router / Selected expert", cumulative_router_selected / aux_batches)

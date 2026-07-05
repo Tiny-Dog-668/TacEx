@@ -1,0 +1,417 @@
+# Development Log
+
+本文件记录工程、代码、配置和文档维护变更。实验结果记录到 `docs/EXPERIMENTS.md`，设计取舍记录到 `docs/DECISIONS.md`，问题和风险记录到 `docs/KNOWN_ISSUES.md`。
+
+## 记录规则
+
+- 每条记录必须写明日期、修改范围、依据和验证情况。
+- 不要把未运行的训练或评估写成已完成结果。
+- 不确定的作者、意图、commit、seed、checkpoint 或结果统一写“待确认”。
+- 涉及观测、动作、奖励、done、网络输入维度或 checkpoint 兼容性的改动必须明确说明。
+
+## 2026-07-04 CST — 新增四路触觉 + 本体 baseline 环境
+
+- 类型：代码 / 配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_box.py`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/agents/ppo_tactile.yaml`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py`
+  - `README.md`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增 `T` fusion 分支，可生成 `TacEx-T-Drawer-Occlusion-Cube`、`TacEx-T-Self-Occlusion-Cuboid` 等 Scene/Object 矩阵 task。
+  - 新增 `OccludedGraspingTactileProprioBoxEnv`，继承 full VT 环境并从 actor policy observation 中移除 `third_resnet`。
+  - `OccludedGraspingTactileProprioBoxCfg` 显式声明不含 `third_resnet` 的 `observation_space`，避免在 `configclass` 处理后的父类上进行 import-time 类属性读取。
+  - 新增 `ppo_tactile.yaml`，actor 输入为四路 tactile feature 和 `proprio_obs`，critic 仍使用 privileged state。
+- 影响的观测：actor 不再读取 `third_resnet`；保留 `proprio_obs: 18` 和四路 tactile feature，默认每路 256 维。
+- 影响的动作、奖励、done：无。仍为 5 维 `[dx, dy, dz, dyaw, gripper]`，奖励和终止逻辑沿用 `vt_box.py`。
+- 影响的网络输入维度：actor 输入由 VT 的视觉+触觉+本体改为触觉压缩 latent + 本体；critic 输入不变。
+- checkpoint 兼容性：现有 task/checkpoint 不受影响；`T` 新 task 的 actor 结构不同，需要重新训练，不能直接加载旧 VT actor checkpoint。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_box.py source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py`。
+  - 未运行 Isaac Sim 环境创建、训练或 `play_bucket.py` 评估。
+- 待确认：
+  - Isaac Sim 中 `TacEx-T-Drawer-Occlusion-Cube` 是否可完整创建并训练。
+  - 触觉-only baseline 在无视觉输入下的收敛速度和成功率。
+
+## 2026-07-04 CST — 新增 GelFusion 风格视触融合 RL 对比环境
+
+- 类型：代码 / 配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_box.py`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/agents/ppo_vt_gelfusion.yaml`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py`
+  - `README.md`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增 `GelFusion` 和 `GelFusion-Downsample` task 注册矩阵分支，可生成 `TacEx-GelFusion-Downsample-Drawer-Occlusion-Cube` 等 task id。
+  - 新增 `OccludedGraspingVTGelFusionBoxEnv`，继承现有 VT 环境，保持动作、奖励、done/success 和 reset 语义不变。
+  - actor 观测新增 `tactile_dynamic_stats`，维度为 8，表示四路触觉相邻帧二值差分的 `[mean, variance]`。
+  - 新增 `OccludedGraspingVTGelFusionPolicy`，实现 vision-led cross attention：视觉特征作为 query，视觉和四路触觉静态特征作为 key/value，再拼接原始视觉、动态触觉统计和 `proprio_obs` 输出 5 维动作分布。
+  - 新增 PPO 配置 `ppo_vt_gelfusion.yaml`，critic 仍使用原 privileged state。
+- 影响的观测：新增分支的 policy observation 增加 `tactile_dynamic_stats: 8`；四路 tactile feature 默认使用 `tactile_encoder_type="resnet"`，每路仍为 256 维。
+- 影响的动作、奖励、done：无。仍为 5 维 `[dx, dy, dz, dyaw, gripper]`，奖励和终止逻辑沿用 `vt_box.py`。
+- 影响的网络输入维度：仅 GelFusion actor 变化；critic 输入不变。
+- checkpoint 兼容性：现有 task/checkpoint 不受影响；GelFusion 新 task 需要重新训练，不能直接加载旧 VT actor checkpoint。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_box.py source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py`。
+  - 已执行基于文件路径导入的 `quick_gelfusion_policy_smoke_test()`，输出 `mean shape=(4, 5)`。
+  - 曾尝试通过包路径导入 smoke test，但当前非 Isaac Sim Python 环境缺少 `omni`，触发 `ModuleNotFoundError: No module named 'omni'`；随后改用文件路径导入完成 policy 测试。
+  - 未运行 Isaac Sim 环境创建、训练或 `play_bucket.py` 评估。
+- 待确认：
+  - Isaac Sim 中新 task 是否可完整创建并训练。
+  - ResNet tactile encoder 相比默认 CNN 的速度和显存开销是否可接受。
+  - GelFusion 分支成功率需通过训练和 `play_bucket.py` 固定网格评估确认。
+
+## 2026-06-28 CST — 将软物体材料调为更适合抓取的橡胶块参数
+
+- 类型：配置 / 物理参数 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增显式软物体材料密度 `SOFT_OBJECT_DENSITY = 300.0`，避免继续依赖 PhysX 默认密度。
+  - 将 `SOFT_OBJECT_YOUNGS_MODULUS` 从 `5.0e5` 提高到 `1.0e7`，减少类似果冻的大形变。
+  - 将 `SOFT_OBJECT_POISSONS_RATIO` 调整为 `0.35`，降低接近不可压材料时的侧向鼓胀趋势。
+  - 将 `SOFT_OBJECT_DYNAMIC_FRICTION` 设为 `2.0`，避免继续使用过高摩擦值掩盖材料刚度问题。
+  - 新增 `SOFT_OBJECT_ELASTICITY_DAMPING = 0.03` 并保留合法的 `SOFT_OBJECT_DAMPING_SCALE = 1.0`，抑制软体回弹和晃动。
+  - 将 `SOFT_OBJECT_SOLVER_POSITION_ITERATIONS` 从 `16` 提高到 `32`，增强软体接触/形变求解稳定性。
+- 影响范围：
+  - SoftCylinder、SoftCube、SoftCuboid 三类软物体任务共用 `_make_soft_material()` 和 `_make_soft_props()`，都会使用该参数组。
+- 影响的观测、动作、奖励、done：无代码语义变化；只改变软物体物理材料和 deformable solver 参数。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：模型结构和 checkpoint 加载不受影响；物理参数改变会影响 rollout 分布和评估/训练结果。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`。
+  - 未运行 Isaac Sim GUI 实测。
+- 待确认：
+  - Isaac Sim 中该参数组是否足以从“果冻感”转为可夹持的橡胶块行为。
+  - `density=300.0` 与当前物体尺寸下的质量是否符合任务期望；如仍难以抬起，可进一步下调密度或提高夹爪侧摩擦。
+
+## 2026-06-28 CST — 修正软体 damping scale 合法范围
+
+- 类型：修复 / 配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 将 `SOFT_OBJECT_DAMPING_SCALE` 从 `2.0` 改为 `1.0`。
+  - 依据 Isaac Sim/PhysX 运行时报错：`PxMaterial::setDampingScale` 要求值在 `[0.0, 1.0]` 范围内。
+- 影响的观测、动作、奖励、done：无。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：模型结构和 checkpoint 加载不受影响；软体材料阻尼参数合法化会影响 rollout 物理表现。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`。
+  - 未运行 Isaac Sim GUI 复测。
+- 待确认：
+  - Isaac Sim 重新启动后是否不再出现 `setDampingScale` invalid float 错误。
+
+## 2026-06-28 CST — 增加软物体动态摩擦配置
+
+- 类型：配置 / 物理参数 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增 `SOFT_OBJECT_DYNAMIC_FRICTION = 1.5`。
+  - `_make_soft_material()` 创建 `DeformableBodyMaterialCfg` 时显式传入 `dynamic_friction`，避免继续使用 Isaac Lab deformable material 默认值 `0.25`。
+  - 该材料函数被 SoftCylinder、SoftCube、SoftCuboid 共用，因此三类软物体任务都会使用新的动态摩擦系数。
+- 影响的观测、动作、奖励、done：无代码语义变化；只改变软物体接触物理材料。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：模型结构和 checkpoint 加载不受影响；物理参数改变会影响 rollout 分布和评估/训练结果。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/occluded_grasping/vt_alpha_gru_box.py`。
+  - 未运行 Isaac Sim GUI 实测。
+- 待确认：
+  - Isaac Sim 中新的 `dynamic_friction=1.5` 是否足以减少夹爪与软体之间的滑移。
+  - 较高摩擦在大形变接触下是否会引入粘滞、抖动或求解不稳定。
+
+## 2026-06-27 CST — 新增 UR10 + Robotiq 2F85 键盘奖励调试脚本
+
+- 类型：代码 / 调试工具 / 文档
+- 修改文件：
+  - `scripts/ur10_robotiq/teleop_2f85_rewards.py`
+  - `README.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增键盘 teleop 脚本，直接实例化 `UR10Robotiq2F85ThirdPersonPickPlaceEnvCfg` 和 `UR10Robotiq2F85ThirdPersonPickPlaceEnv`，保持当前环境的 UR、物体和木板位置配置。
+  - 键盘动作映射到环境原始 4 维 action `[dx, dy, dz, gripper]`。
+  - 周期打印 `reward/total`、`reward/reach`、`reward/lift`、`reward/success`、夹爪到物体距离、抬升量、夹爪内侧 link 最低高度、桌面高度、clearance、夹爪中心位置和物体位置。
+- 影响的观测、奖励、动作、done：不修改环境本身；脚本复用当前环境奖励公式做诊断打印。
+- checkpoint 兼容性：无影响。
+- 验证情况：
+  - 已执行 `python -m py_compile scripts/ur10_robotiq/teleop_2f85_rewards.py`。
+  - 未运行 Isaac Sim GUI teleop 实测。
+- 待确认：
+  - 当前 Isaac Sim 运行时 `KeyboardInput.SPACE` 在本机是否可用于 stop 按键。
+
+## 2026-06-27 CST — 新增 UR10 + Robotiq 2F85 third-person camera pick-place 变体
+
+- 类型：代码 / 环境注册 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_2f85_third_person_pick_place_env.py`
+  - `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/__init__.py`
+  - `README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 新增独立 `UR10Robotiq2F85ThirdPersonPickPlaceEnvCfg` 和 `UR10Robotiq2F85ThirdPersonPickPlaceEnv`，两者分别直接继承 `DirectRLEnvCfg` 和 `DirectRLEnv`，不继承其他 UR10 + Robotiq 环境或 cfg 类。
+  - 在 UR10 + Robotiq 2F85 pick-place scene 中额外注册 224x224 RGB `third_person_camera`。
+  - 相机内参、位姿和 OpenGL convention 参考 `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py:Sim2RealCubeGraspEnvCfg.wrist_camera`。
+  - 注册 task id：`Isaac-UR10-Robotiq-2F85-Third-Person-Pick-Place-Direct-v0`。
+- 影响的观测：新增相机 sensor buffer；默认 policy observation 仍是原 27 维 state vector，未把 RGB 加入 `policy` 观测。
+- 影响的动作、奖励、done：保持与原 UR10 + Robotiq 2F85 pick-place 当前逻辑一致，但代码已复制到独立文件中，后续可单独改参数。
+- checkpoint 兼容性：状态观测和动作维度不变，现有 state-based PPO 模型结构层面兼容；运行 third-person 变体需要 `--enable_cameras` 才能渲染相机。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_2f85_third_person_pick_place_env.py source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/__init__.py`。
+  - 已执行 `rg -n "Third-Person|third_person_camera|UR10Robotiq2F85ThirdPerson" source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace README.md docs/PROJECT_OVERVIEW.md docs/ARCHITECTURE.md docs/DEVLOG.md`。
+  - 已执行 `rg -n "UR10RobotiqPickPlaceEnv|UR10Robotiq2F85PickPlaceEnvCfg|继承同一|继承原" source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_2f85_third_person_pick_place_env.py README.md docs/PROJECT_OVERVIEW.md docs/ARCHITECTURE.md docs/DEVLOG.md` 检查继承残留描述。
+  - 已执行 `find source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace -type d -name __pycache__ -print` 并清理本次编译生成的 `__pycache__` 目录。
+  - 未运行 Isaac Sim 环境创建、训练或相机画面检查。
+- 待确认：
+  - Isaac Sim 中 `third_person_camera` 实际画面是否完整覆盖 UR10、Robotiq 2F85、桌面和方块。
+  - 是否需要进一步新增真正读取 RGB 的视觉策略 YAML 和 image encoder。
+
+## 2026-06-27 CST — 兼容 UR10 direct task 的 Box observation space
+
+- 类型：代码 / 训练入口 / 兼容性
+- 修改文件：
+  - `scripts/reinforcement_learning/skrl/train.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 将训练入口中 recurrent tactile policy 自动检测的 observation key 提取逻辑改为同时支持 Gymnasium `Dict`/dict 和普通 `Box` observation space。
+  - 对 UR10 + Robotiq direct task 这类 `Box` 状态观测环境，`obs_keys` 为空集合，不再对 `Box` 执行 `set(Box)`。
+- 影响的观测：不改变任何环境观测内容或维度；只改变训练脚本对 observation space 类型的分支判断。
+- 影响的动作、奖励、done：无。
+- checkpoint 兼容性：无模型结构变化。
+- 验证情况：
+  - 已执行 `python -m py_compile scripts/reinforcement_learning/skrl/train.py`。
+  - 未重新运行 Isaac Sim 训练。
+- 待确认：
+  - `Isaac-UR10-Robotiq-2F85-Pick-Place-Direct-v0` 完整训练启动是否继续通过后续阶段。
+
+## 2026-06-27 CST — 迁移 UR10 + Robotiq direct RL 任务
+
+- 类型：代码 / 配置 / 资产 / checkpoint artifact / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/direct/__init__.py`
+  - `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/*`
+  - `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_gripper_close/*`
+  - `source/tacex_assets/tacex_assets/data/Robots/URRobotiq/*`
+  - `logs/skrl/ur10_robotiq_pick_place_direct/2026-04-08_15-44-54_ppo_torch/*`
+  - `README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 从 `/home/tinydog/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/` 迁移 UR10 + Robotiq pick-place/grasp 和 gripper-close direct RL task 包。
+  - 注册 task id：`Isaac-UR10-Robotiq-Pick-Place-Direct-v0`、`Isaac-UR10-Robotiq-2F85-Pick-Place-Direct-v0`、`Isaac-UR10-Robotiq-2F85-Grasp-Direct-v0`、`Isaac-UR10-Robotiq-Gripper-Close-Direct-v0`。
+  - 迁移 UR10 + Robotiq USD 到 `source/tacex_assets/tacex_assets/data/Robots/URRobotiq/`，并将默认 asset path 改为仓库内路径，同时保留环境变量覆盖。
+  - 补齐 `ur10_robotiq_2f85.usda` 的相对 payload 依赖目录：`UniversalRobots/ur10/` 和 `Robotiq/2F-85/`。
+  - 迁移一个已确认存在的 skrl checkpoint run：`logs/skrl/ur10_robotiq_pick_place_direct/2026-04-08_15-44-54_ppo_torch/`。
+  - 删除迁移代码和 checkpoint `params/env.yaml` 中 Isaac Lab 2.1.1 不支持的 `InteractiveSceneCfg.clone_in_fabric` 字段。
+- 影响的观测：新增 UR10 + Robotiq task 使用 27 维状态观测；不影响 `occluded_grasping` 的观测 key 或维度。
+- 影响的动作：新增 UR10 + Robotiq 2F85 pick-place 使用 4 维动作 `[dx, dy, dz, gripper]`；Robotiq 2F85 策略只直接控制 `finger_joint`，其他指关节由 coupling rules 生成目标。
+- 影响的奖励和 done：仅新增 UR10 + Robotiq task 内部 reward/done；不影响现有 TacEx 遮挡抓取任务。
+- checkpoint 兼容性：迁移的 `best_agent.pt` 对应 27 维 observation 和 4 维 action 的 skrl PPO 模型；是否能在当前 TacEx wrapper 下直接 play 待 Isaac Sim 验证。
+- 验证情况：
+  - 已静态确认迁移源文件、USD、checkpoint 和 params 文件存在。
+  - 已执行 `test -f source/tacex_assets/tacex_assets/data/Robots/URRobotiq/UniversalRobots/ur10/ur10.usd && test -f source/tacex_assets/tacex_assets/data/Robots/URRobotiq/Robotiq/2F-85/Robotiq_2F_85_attachable.usda`，确认组合 USD 的两个缺失 payload 文件已存在。
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_pick_place_env.py source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_gripper_close/ur10_robotiq_gripper_close_env.py source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_2f85_pick_place_env_cfg.py`。
+  - 已执行 `rg -n "clone_in_fabric" source/tacex_tasks/tacex_tasks/direct logs/skrl/ur10_robotiq_pick_place_direct README.md docs`，确认无残留。
+  - 未运行 Isaac Sim 训练、回放或环境创建。
+- 待确认：
+  - 当前 TacEx 环境中 `gym.make("Isaac-UR10-Robotiq-2F85-Pick-Place-Direct-v0")` 是否可成功创建。
+  - 迁移 checkpoint 在当前 `scripts/reinforcement_learning/skrl/play.py` 下是否可直接加载。
+
+## 2026-06-26 22:24 CST — 建立项目文档维护机制
+
+- 类型：文档 / 维护机制
+- 修改文件：`AGENTS.md`、`docs/PROJECT_OVERVIEW.md`、`docs/ARCHITECTURE.md`、`docs/DATA_FLOW.md`、`docs/DEVLOG.md`、`docs/EXPERIMENTS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+- 修改内容：
+  - 建立统一项目地图、工作前检查步骤、验证规则和结束输出格式。
+  - 根据实际代码补充训练入口、评估入口、环境、传感器、策略、奖励、done/success 和日志路径。
+  - 新增实验索引模板和已确认 checkpoint/metrics artifact 记录。
+  - 新增设计决策和已知问题条目。
+- 依据：
+  - `scripts/reinforcement_learning/skrl/train.py:main`
+  - `scripts/reinforcement_learning/skrl/play.py:main`
+  - `scripts/reinforcement_learning/skrl/play_bucket.py:main`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/vt_box.py:OccludedGraspingVisionFourTactileBoxEnv`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/__init__.py:_register_scene_object_fusion_matrix`
+  - `source/tacex_tasks/tacex_tasks/occluded_grasping/agents/ppo_vt_alpha_gru.yaml`
+  - `logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/`
+- 接口与维度变化：无。仅文档变更。
+- 业务代码变化：无。
+- 验证情况：
+  - 已读取并整理仓库代码、配置、日志和 Git 状态。
+  - 已执行 `date '+%Y-%m-%d %H:%M %Z'` 记录文档时间。
+  - 已执行 `git status --short` 确认当前工作区存在既有未提交业务改动。
+  - 已执行 `git ls-files --others --exclude-standard AGENTS.md docs/PROJECT_OVERVIEW.md docs/ARCHITECTURE.md docs/DATA_FLOW.md docs/DEVLOG.md docs/EXPERIMENTS.md docs/DECISIONS.md docs/KNOWN_ISSUES.md` 确认本次允许文档处于未跟踪/待提交状态。
+  - 已执行 `rg` 检查关键章节和“待填写”等占位符。
+  - 已执行 `test -f` 确认训练入口、评估入口、核心环境、Alpha-GRU YAML 和示例 checkpoint 路径存在。
+  - 未运行 Isaac Sim 训练、评估或测试。
+
+## 历史状态恢复说明
+
+### 2026-06-26 23:10 CST — 保存 sim2real cube 训练起始相机帧
+
+- 类型：代码 / 训练入口 / 诊断
+- 修改文件：
+  - `scripts/reinforcement_learning/skrl/train.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 将已有 `--save_start_frame` 逻辑从单张图扩展为多帧保存。
+  - 新增 `--start_frame_count`，默认保存 5 帧。
+  - `TacEx-Sim2Real-Cube-Grasp-v0` 训练时自动保存训练开始后的相机帧。
+  - 输出目录为本次 skrl run 日志目录下的 `camera_frames/`。
+  - 文件名包含 sensor、env index、frame index 和实际图片尺寸，例如 `start_wrist_camera_env0_frame_000_224x224.png`。
+- 依据：
+  - 用户希望运行 `TacEx-Sim2Real-Cube-Grasp-v0` 时保存几帧 `224x224` 实际相机画面，用于确认方块、夹爪和有效抓取区域是否完整覆盖。
+  - skrl 训练日志目录由 `scripts/reinforcement_learning/skrl/train.py:main` 中 `log_root_path` 和 `log_dir` 生成。
+- 影响的观测：无。只从 camera sensor buffer 读取 RGB 并保存 env0 图像。
+- 影响的动作：无。
+- 影响的奖励：无。
+- 影响的 done/success：无。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：无结构影响。
+- 验证情况：
+  - 已执行 `python -m py_compile scripts/reinforcement_learning/skrl/train.py source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_grasp_env.py`。
+  - 未运行 Isaac Sim 环境创建、训练或评估。
+- 待确认：
+  - Isaac Sim 运行时实际保存图像是否满足画面覆盖检查。
+
+### 2026-06-26 23:06 CST — 调整 sim2real cube 相机分辨率
+
+- 类型：代码 / 配置
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 在 `Sim2RealCubeGraspEnvCfg` 中显式覆盖 `wrist_camera`，将 `TiledCameraCfg.height` 和 `TiledCameraCfg.width` 从继承的 `480x640` 改为 `224x224`。
+  - 将 `PinholeCameraCfg.from_intrinsic_matrix` 的 `width` 和 `height` 同步改为 `224x224`，并按原 `640x480` 配置比例缩放内参。
+- 依据：
+  - 用户要求 `TacEx-Sim2Real-Cube-Grasp-v0` 环境相机分辨率从 `640x480` 改为 `224x224`。
+  - 原始相机配置来自 `Sim2RealGraspEnvCfg.wrist_camera`。
+- 影响的观测：
+  - 相机原始 RGB 渲染尺寸变为 `224x224`。
+  - `wrist_resnet` 仍为 512 维。
+- 影响的动作：无。
+- 影响的奖励：无。
+- 影响的 done/success：无。
+- 影响的网络输入维度：policy/value 输入 key 和维度不变；视觉编码前的图像尺寸与 ResNet 输入尺寸一致。
+- checkpoint 兼容性：观测 key 和特征维度不变，模型结构层面不受影响；但视觉输入分布改变，旧 checkpoint 表现需要重新评估。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_grasp_env.py`。
+  - 未运行 Isaac Sim 环境创建、训练或评估。
+- 待确认：
+  - Isaac Sim 中 224x224 相机画面是否仍覆盖完整抓取区域。
+
+### 2026-06-26 22:50 CST — 新增 sim2real cube grasp 变体
+
+- 类型：代码 / 环境注册
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_grasp_env.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/__init__.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_vision_only_cfg_resnet18.yaml`
+- 修改内容：
+  - 新增独立 `sim2real_cube_grasp_env.py`，不再把 cube 变体放在 bottle/cylinder 环境文件尾部。
+  - 新增 `Sim2RealCubeGraspEnvCfg`，复用 `Sim2RealGraspEnvCfg` 的 Franka、固定第三视角相机和视觉随机化，将目标物体定义为 `sim_utils.CuboidCfg`。
+  - 新增 `Sim2RealCubeGraspEnv`，移除 bottle cap visual，对外观测使用 `critic_cube_*` key，奖励日志使用 `cube_*` key。
+  - 新增 `skrl_ppo_cube_vision_only_cfg_resnet18.yaml`，value network 使用 `critic_cube_*`。
+  - 注册 task id：`TacEx-Sim2Real-Cube-Grasp-v0`。
+- 影响的观测：保持 `wrist_resnet:512`、`proprio_obs:15`、`action_history:4`，critic keys 改为 `critic_cube_pos`、`critic_cube_quat`、`critic_cube_lin_vel`、`critic_cube_ang_vel`。
+- 影响的动作：保持 4 维动作空间不变。
+- 影响的奖励：cube 变体重写最低点高度计算，使用 cube 8 个角点的最低世界 z 参与 lift/success；reach/lift/success 权重沿用 sim2real grasp。
+- 影响的 done/success：沿用 sim2real grasp 的 timeout、ground collision 和 sustained upright lift success。
+- 影响的网络输入维度：policy 输入维度不变；value network key 名从 `critic_cylinder_*` 改为 `critic_cube_*`，总维度不变。
+- checkpoint 兼容性：新干净 task 使用独立 YAML 和 `critic_cube_*` key，旧 `TacEx-Sim2Real-Grasp-v0` bottle checkpoint 不作为直接兼容目标；需要为 cube 单独训练或另做 legacy 兼容评估入口。
+- 验证情况：
+  - 已执行 `python -m py_compile source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_grasp_env.py source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py source/tacex_tasks/tacex_tasks/sim2real_grasp/__init__.py`。
+  - 已执行 `rg` 确认 `Sim2RealCubeGraspEnvCfg`、`Sim2RealCubeGraspEnv` 和 `TacEx-Sim2Real-Cube-Grasp-v0` 存在。
+  - 未运行 Isaac Sim 环境创建、训练或评估。
+- 待确认：
+  - cube 变体实际物理稳定性。
+  - cube reward 阈值是否需要进一步调参。
+  - 是否需要为 cube 单独训练新 checkpoint。
+
+### 2026-06-26 — 用户确认项目主线
+
+- 状态：已确认
+- 确认内容：当前项目主线是 `occluded_grasping` 遮挡抓取实验。
+- 影响文档：`AGENTS.md`、`docs/PROJECT_OVERVIEW.md`
+- 仍待确认：`source/tacex_uipc` 是否属于当前主线必需依赖；通用 TacEx sensor framework 是否继续作为同仓库基础设施维护。
+
+### HEAD：`48e8f0a add some pipeline`
+
+- 状态：已提交历史
+- 分支：`dev/0517`
+- 依据：`git log --oneline --decorate -n 30`、`git show --stat --oneline HEAD`
+- 已确认内容：该提交大规模调整 `occluded_grasping` pipeline，统计为 53 files changed, 6169 insertions, 1447 deletions。
+- 影响范围：新增/调整多种 policy/env/YAML 变体，并删除部分 residual/mixed sensor gate 相关文件。
+- 具体设计意图：待确认。
+
+### 当前未提交工作区
+
+- 状态：待确认
+- 依据：`git status --short`
+- 已确认内容：工作区存在多个已修改、已删除和新增文件，主要集中在 `source/tacex_tasks/tacex_tasks/occluded_grasping`、`scripts/reinforcement_learning/skrl/play.py` 和 `scripts/occluded_grasping/*`。
+- 处理规则：后续任务不得回滚这些改动；若修改同一文件，必须先阅读并确认与当前任务相关。
+
+## 2026-06-28 — 将软物体触觉检查脚本改为键盘遥操作
+
+- 类型：实验脚本
+- 修改文件：
+  - `scripts/occluded_grasping/check_softcube_franka_tactile.py`
+- 修改内容：
+  - 将原固定 approach/press/close/lift 轨迹改为 GUI 键盘控制。
+  - 默认 task 改为 `TacEx-Alpha-GRU-Self-Occlusion-SoftCube`，用于去掉 drawer/cabinet 几何遮挡，仅保留自遮挡场景。
+  - 键盘动作映射到遮挡抓取环境 5 维 action：`[dx, dy, dz, dyaw, gripper]`。
+  - 保留软体节点形变指标 CSV 记录、周期打印和按键保存内侧 GelSight 触觉 PNG。
+  - `--steps 0` 表示持续运行直到 ESC 或窗口关闭；`--save_every 0` 表示只手动保存。
+  - 移除运行中的 `R` reset 快捷键；默认覆盖当前测试实例的 `_get_dones()`，阻止 timeout/ground-collision done 触发 `env.step()` 自动 reset。
+  - 保留启动后的第一次 `env.reset()`，这是 Gym/Isaac Lab 环境初始化所需，不是交互过程中的重置。
+- 影响的观测：无；不改环境观测 key 或张量维度。
+- 影响的动作：脚本侧 action 来源从固定控制器改为键盘输入；环境动作空间仍为 5 维。
+- 影响的奖励：无。
+- 影响的 done/success：仅此脚本运行时默认覆盖 `_get_dones()` 并关闭 done reset；环境源码 done/success 语义不变，可用 `--allow_done_resets` 恢复默认行为。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：不涉及 checkpoint 加载或模型结构。
+- 验证情况：
+  - 已执行 `python -m py_compile scripts/occluded_grasping/check_softcube_franka_tactile.py`。
+  - 未运行 Isaac Sim GUI 实测。
+- 待确认：
+  - Isaac Sim GUI 中键盘事件订阅和 SoftCylinder/SoftCube/SoftCuboid 三类任务的实际交互稳定性。
+  - 禁用 done reset 后，极端碰撞/穿模状态下是否仍需人工重启仿真。
+
+## 条目模板
+
+```text
+## YYYY-MM-DD HH:MM TZ — 标题
+
+- 类型：代码 / 配置 / 文档 / 实验脚本 / 修复 / 重构
+- 修改文件：
+- 修改内容：
+- 依据：
+- 影响的观测：
+- 影响的动作：
+- 影响的奖励：
+- 影响的 done/success：
+- 影响的网络输入维度：
+- checkpoint 兼容性：
+- 验证情况：
+- 待确认：
+```

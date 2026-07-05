@@ -1,0 +1,4 @@
+version="1.0"
+stage_url="omniverse://isaac-dev.ov.nvidia.com/Isaac/Robots/Robotiq/2F-85/payloads/Robotiq_2F_85_phyisics_mimic.usda"
+user_name="rgasoto@nvidia.com"
+mode="default"

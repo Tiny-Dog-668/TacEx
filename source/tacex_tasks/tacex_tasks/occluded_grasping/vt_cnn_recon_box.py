@@ -103,6 +103,7 @@ class OccludedGraspingVTCNNReconBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):
             )
         else:
             third_rgb = third_rgb.to(device=self.device, dtype=torch.float32) / 255.0
+        third_rgb = self._degrade_third_person_rgb(third_rgb)
 
         dev = self.device
         dev_type = getattr(dev, "type", None)
@@ -152,3 +153,17 @@ class OccludedGraspingVTCNNReconBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):
         obs["tactile_left_down_rgb_raw"] = tact_ld.reshape(self.num_envs, -1)
         obs["tactile_right_down_rgb_raw"] = tact_rd.reshape(self.num_envs, -1)
         return {"policy": obs}
+
+
+@configclass
+class OccludedGraspingVTTactileCrossAlphaReconDownsampleBoxCfg(OccludedGraspingVTCNNReconBoxCfg):
+    """Policy-side tactile reconstruction task with downsampled third-person RGB."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
+
+
+class OccludedGraspingVTTactileCrossAlphaReconBoxEnv(OccludedGraspingVTCNNReconBoxEnv):
+    """Alias env for tactile-cross-alpha reconstruction policy."""
+
+    cfg: OccludedGraspingVTTactileCrossAlphaReconDownsampleBoxCfg

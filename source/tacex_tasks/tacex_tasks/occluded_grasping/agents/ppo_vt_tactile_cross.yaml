@@ -3,7 +3,7 @@ seed: 42
 models:
   separate: True
   policy:
-    class: "tacex_tasks.occluded_grasping.vt_tactile_cross_alpha_visible_contact_policy:OccludedGraspingVTTactileCrossAlphaVisibleContactPolicy"
+    class: "tacex_tasks.occluded_grasping.vt_tactile_cross_policy:OccludedGraspingVTTactileCrossPolicy"
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0
@@ -20,13 +20,10 @@ models:
     ]
     vector_keys: ["proprio_obs"]
     proprio_key: "proprio_obs"
-    visible_ratio_key: "visual_visible_ratio"
-    tactile_contact_ratio_key: "tactile_contact_ratio"
     fused_dim: 256
     num_heads: 4
     attention_mlp_dim: 512
     dropout: 0.0
-    gate_hidden_dim: 64
     mlp_layers: [256, 128, 64]
     mlp_activation: elu
   value:
@@ -73,7 +70,7 @@ agent:
   time_limit_bootstrap: False
   experiment:
     directory: "occluded_grasping"
-    experiment_name: "vt_tactile_cross_alpha_visible_contact_box"
+    experiment_name: "vt_tactile_cross_box"
     write_interval: 500
     checkpoint_interval: 10000
     wandb: False

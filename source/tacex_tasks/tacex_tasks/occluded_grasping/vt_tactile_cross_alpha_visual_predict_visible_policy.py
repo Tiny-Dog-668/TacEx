@@ -1,4 +1,4 @@
-"""Tactile-cross-alpha policy gated by visibility and tactile contact ratios."""
+"""Tactile-cross-alpha visual policy gated by visual visible prediction and tactile contact."""
 
 from __future__ import annotations
 
@@ -6,40 +6,56 @@ from typing import Any, Dict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from skrl.utils.spaces.torch import unflatten_tensorized_space
 
 from .policy_alpha import set_latest_alpha
-from .vt_tactile_cross_alpha_policy import OccludedGraspingVTTactileCrossAlphaPolicy
+from .vt_tactile_cross_alpha_visual_policy import OccludedGraspingVTTactileCrossAlphaVisualPolicy
 
 
-class OccludedGraspingVTTactileCrossAlphaVisibleContactPolicy(OccludedGraspingVTTactileCrossAlphaPolicy):
-    """Compute alpha from visible ratio and four tactile contact ratios."""
+class OccludedGraspingVTTactileCrossAlphaVisualPredictVisiblePolicy(
+    OccludedGraspingVTTactileCrossAlphaVisualPolicy
+):
+    """Predict visible ratio from vision, supervise it with pseudo labels, and gate fusion with contact ratios."""
 
     def __init__(
         self,
         *args,
-        visible_ratio_key: str = "visual_visible_ratio",
+        pseudo_visible_ratio_key: str = "pseudo_visible_ratio",
         tactile_contact_ratio_key: str = "tactile_contact_ratio",
+        visible_hidden_dim: int = 128,
+        visible_aux_weight: float = 1.0,
         gate_hidden_dim: int = 64,
         **kwargs: Any,
     ):
+        mlp_activation = str(kwargs.get("mlp_activation", "elu")).lower()
         super().__init__(*args, gate_hidden_dim=gate_hidden_dim, **kwargs)
-        self.visible_ratio_key = str(visible_ratio_key)
+        self.pseudo_visible_ratio_key = str(pseudo_visible_ratio_key)
         self.tactile_contact_ratio_key = str(tactile_contact_ratio_key)
+        self.visible_aux_weight = float(visible_aux_weight)
 
-        for key, expected_dim in ((self.visible_ratio_key, 1), (self.tactile_contact_ratio_key, 4)):
+        for key, expected_dim in ((self.pseudo_visible_ratio_key, 1), (self.tactile_contact_ratio_key, 4)):
             if not self._has_obs_key(self.observation_space, key):
-                raise ValueError(f"Missing alpha gate observation key '{key}'")
+                raise ValueError(f"Missing observation key '{key}' for predict-visible policy")
             shape = self._get_obs_shape(self.observation_space, key)
             if shape is None or int(shape[-1]) != expected_dim:
                 raise ValueError(f"Expected '{key}' dim={expected_dim}, got {shape}")
             self._obs_shapes[key] = shape
             self._obs_dims[key] = expected_dim
 
+        act_cls = nn.ELU if mlp_activation == "elu" else nn.ReLU
+        vision_dim = self._obs_dims[self.vision_key]
+        self.visible_head = nn.Sequential(
+            nn.LayerNorm(vision_dim),
+            nn.Linear(vision_dim, int(visible_hidden_dim)),
+            act_cls(),
+            nn.Linear(int(visible_hidden_dim), 1),
+            nn.Sigmoid(),
+        )
         self.alpha_gate = nn.Sequential(
             nn.Linear(5, int(gate_hidden_dim)),
-            nn.ELU(),
+            act_cls(),
             nn.Linear(int(gate_hidden_dim), 1),
             nn.Sigmoid(),
         )
@@ -59,9 +75,12 @@ class OccludedGraspingVTTactileCrossAlphaVisibleContactPolicy(OccludedGraspingVT
         if batch_size is None:
             raise ValueError("No tensor observations found in inputs['states']")
 
-        vision = self.vision_proj(self._flatten_obs(obs, self.vision_key, batch_size)).unsqueeze(1)
+        vision_raw = self._flatten_obs(obs, self.vision_key, batch_size)
+        vision_feature = self.vision_proj(vision_raw)
+        vision = vision_feature.unsqueeze(1)
         tactile_flat = torch.cat([self._flatten_obs(obs, key, batch_size) for key in self.tactile_keys], dim=-1)
         tactile = self.tactile_base_proj(tactile_flat)
+
         tactile_tokens = torch.stack(
             [self.tactile_token_proj[key](self._flatten_obs(obs, key, batch_size)) for key in self.tactile_keys],
             dim=1,
@@ -76,16 +95,26 @@ class OccludedGraspingVTTactileCrossAlphaVisibleContactPolicy(OccludedGraspingVT
         tactile_cross_tokens = tactile_cross_tokens + self.attn_ff(self.attn_ff_norm(tactile_cross_tokens))
         tactile_cross = self.tactile_cross_proj(tactile_cross_tokens.reshape(batch_size, -1))
 
-        visible_ratio = self._flatten_obs(obs, self.visible_ratio_key, batch_size).clamp(0.0, 1.0)
-        tactile_contact_ratio = self._flatten_obs(obs, self.tactile_contact_ratio_key, batch_size).clamp(0.0, 1.0)
-        alpha_input = torch.cat([visible_ratio, tactile_contact_ratio], dim=-1)
-        alpha = self.alpha_gate(alpha_input)
+        visible_pred = self.visible_head(vision_raw)
+        tactile_contact_ratio = self._flatten_obs(obs, self.tactile_contact_ratio_key, batch_size)[:, :4].clamp(0.0, 1.0)
+        alpha = self.alpha_gate(torch.cat([visible_pred, tactile_contact_ratio], dim=-1))
         set_latest_alpha(alpha)
         tactile_mixed = alpha * tactile + (1.0 - alpha) * tactile_cross
 
         vector_features = [self._flatten_obs(obs, key, batch_size) for key in self.vector_keys]
-        fused = torch.cat([tactile_mixed, *vector_features], dim=-1) if vector_features else tactile_mixed
+        fused = torch.cat([vision_feature, tactile_mixed, *vector_features], dim=-1)
 
         hidden = self.mlp(fused)
         mu = self.mu(hidden)
-        return mu, self.log_std_parameter, {"alpha": alpha.mean()}
+
+        pseudo_visible_ratio = self._flatten_obs(obs, self.pseudo_visible_ratio_key, batch_size)[:, :1].clamp(0.0, 1.0)
+        visible_loss = F.mse_loss(visible_pred, pseudo_visible_ratio)
+        aux_loss = self.visible_aux_weight * visible_loss
+
+        return mu, self.log_std_parameter, {
+            "aux_loss": aux_loss,
+            "aux_reliability_loss": visible_loss,
+            "alpha": alpha.mean(),
+            "g_probe": visible_pred.mean(),
+            "g_grasp": tactile_contact_ratio.mean(),
+        }

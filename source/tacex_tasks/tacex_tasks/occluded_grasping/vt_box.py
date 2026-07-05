@@ -16,7 +16,7 @@ import torch.nn as nn
 # for Domain Randomization
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
-from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg, RigidObject, RigidObjectCfg
+from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg, DeformableObject, RigidObject, RigidObjectCfg
 from isaaclab.controllers.differential_ik import DifferentialIKController
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg, ViewerCfg
@@ -974,9 +974,13 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        # can
-        self._can = RigidObject(self.cfg.can)
-        self.scene.rigid_objects["can"] = self._can
+        # can / grasped object
+        if self._is_can_deformable:
+            self._can = DeformableObject(self.cfg.can)
+            self.scene.deformable_objects["can"] = self._can
+        else:
+            self._can = RigidObject(self.cfg.can)
+            self.scene.rigid_objects["can"] = self._can
 
         # partially opened drawer
         self._spawn_drawer_scene_geometry()
@@ -1104,7 +1108,8 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
 
     def _initialize_can_positions(self):
         """Initialize can positions inside the drawer bounds used by the demo scene."""
-        can_state = self._can.data.default_root_state.clone()
+        env_ids = torch.arange(self.num_envs, device=self.device)
+        can_state = self._get_default_can_root_state(env_ids)
 
         x_min, x_max, y_min, y_max = self._get_can_reset_xy_bounds()
         can_state[:, 0] = sample_uniform(x_min, x_max, (self.num_envs,), self.device)
@@ -1119,10 +1124,71 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         )
         can_state[:, 3:7] = rand_quat
 
-        env_ids = torch.arange(self.num_envs, device=self.device)
         can_state[:, :3] += self.scene.env_origins
-        self._can.write_root_state_to_sim(can_state, env_ids)
-        self._can.write_root_velocity_to_sim(torch.zeros((self.num_envs, 6), device=self.device), env_ids)
+        self._write_can_root_state_to_sim(can_state, env_ids)
+
+    @property
+    def _is_can_deformable(self) -> bool:
+        return bool(getattr(self.cfg, "can_is_deformable", False))
+
+    def _get_default_can_root_state(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Return a root-like state for rigid and deformable object reset code."""
+        if not self._is_can_deformable:
+            return self._can.data.default_root_state[env_ids].clone()
+
+        state = torch.zeros((len(env_ids), 13), dtype=torch.float32, device=self.device)
+        init_state = self.cfg.can.init_state
+        state[:, :3] = torch.tensor(init_state.pos, dtype=torch.float32, device=self.device)
+        state[:, 3:7] = torch.tensor(init_state.rot, dtype=torch.float32, device=self.device)
+        return state
+
+    def _ensure_deformable_can_root_buffers(self) -> None:
+        """Add rigid-object-like root buffers expected by existing observation code."""
+        if not self._is_can_deformable:
+            return
+        if not getattr(self._can, "is_initialized", False):
+            raise RuntimeError("Deformable grasp object is not initialized yet. Call this after simulation reset/play.")
+        data = self._can.data
+        if not hasattr(data, "root_quat_w"):
+            data.root_quat_w = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+            data.root_quat_w[:, 0] = 1.0
+        if not hasattr(data, "root_lin_vel_w"):
+            data.root_lin_vel_w = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        if not hasattr(data, "root_ang_vel_w"):
+            data.root_ang_vel_w = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        if not hasattr(data, "default_root_state"):
+            data.default_root_state = torch.zeros((self.num_envs, 13), dtype=torch.float32, device=self.device)
+            init_state = self.cfg.can.init_state
+            data.default_root_state[:, :3] = torch.tensor(init_state.pos, dtype=torch.float32, device=self.device)
+            data.default_root_state[:, 3:7] = torch.tensor(init_state.rot, dtype=torch.float32, device=self.device)
+
+    def _write_can_root_state_to_sim(self, can_state: torch.Tensor, env_ids: torch.Tensor) -> None:
+        """Write object pose to either a rigid or deformable object."""
+        if not self._is_can_deformable:
+            self._can.write_root_state_to_sim(can_state, env_ids=env_ids)
+            self._can.write_root_velocity_to_sim(torch.zeros((len(env_ids), 6), device=self.device), env_ids=env_ids)
+            return
+
+        nodal_state = self._can.data.default_nodal_state_w[env_ids].clone()
+        root_offset_w = can_state[:, :3] - nodal_state[..., :3].mean(dim=1)
+        nodal_state[..., :3] = self._can.transform_nodal_pos(
+            nodal_state[..., :3],
+            root_offset_w,
+            can_state[:, 3:7],
+        )
+        if nodal_state.shape[-1] > 3:
+            nodal_state[..., 3:] = 0.0
+        self._can.write_nodal_state_to_sim(nodal_state, env_ids=env_ids)
+
+        nodal_kinematic_target = self._can.data.nodal_kinematic_target[env_ids].clone()
+        nodal_kinematic_target[..., :3] = nodal_state[..., :3]
+        nodal_kinematic_target[..., 3] = 1.0
+        self._can.write_nodal_kinematic_target_to_sim(nodal_kinematic_target, env_ids=env_ids)
+        self._ensure_deformable_can_root_buffers()
+        self._can.data.root_quat_w[env_ids] = can_state[:, 3:7]
+        self._can.data.root_lin_vel_w[env_ids] = 0.0
+        self._can.data.root_ang_vel_w[env_ids] = 0.0
+        self._can.data.default_root_state[env_ids] = can_state
 
     def _get_can_reset_xy_bounds(self) -> tuple[float, float, float, float]:
         """Use the same can sampling region as the interactive drawer demo."""
@@ -1922,7 +1988,7 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
         # 重置物体位置 - 随机放置在开口盒内
-        can_state = self._can.data.default_root_state[env_ids].clone()
+        can_state = self._get_default_can_root_state(env_ids)
 
         x_min, x_max, y_min, y_max = self._get_can_reset_xy_bounds()
         can_state[:, 0] = sample_uniform(x_min, x_max, (len(env_ids),), self.device)
@@ -1941,8 +2007,7 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         can_state[:, :3] += self.scene.env_origins[env_ids]
 
         # 写入仿真
-        self._can.write_root_state_to_sim(can_state, env_ids=env_ids)
-        self._can.write_root_velocity_to_sim(torch.zeros((len(env_ids), 6), device=self.device), env_ids=env_ids)
+        self._write_can_root_state_to_sim(can_state, env_ids)
 
         # 重置动作缓冲区，并为超时步数加入抖动，错峰重置
         self.actions[env_ids] = 0

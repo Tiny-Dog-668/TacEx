@@ -177,6 +177,22 @@ class OccludedGraspingVTDualCrossAlphaAuxBoxEnv(OccludedGraspingVTAlphaBoxEnv):
     def _compute_occlusion_gt(self) -> torch.Tensor:
         fallback = float(getattr(self.cfg, "aux_alpha_fallback_occlusion", 0.0))
         occlusion = torch.full((self.num_envs,), fallback, dtype=torch.float32, device=self.device)
+        debug_bbox = bool(getattr(self.cfg, "print_bbox_debug", False))
+        debug_interval = int(
+            getattr(
+                self.cfg,
+                "bbox_debug_print_interval",
+                getattr(
+                    self.cfg,
+                    "visual_visible_ratio_print_interval",
+                    getattr(self.cfg, "reward_print_interval", 200),
+                ),
+            )
+        )
+        if debug_interval <= 0:
+            debug_interval = int(getattr(self.cfg, "reward_print_interval", 200))
+        step_count = int(getattr(self, "step_count", 0))
+        should_debug_bbox = debug_bbox and (debug_interval <= 1 or step_count % debug_interval == 0)
 
         if (
             bool(getattr(self.cfg, "aux_alpha_use_bbox3d", True))
@@ -186,34 +202,64 @@ class OccludedGraspingVTDualCrossAlphaAuxBoxEnv(OccludedGraspingVTAlphaBoxEnv):
             self._init_bbox_annotator()
 
         if not self._bbox_enabled or self._bbox_annotator is None:
+            if should_debug_bbox:
+                print(
+                    f"[bbox_debug] step={step_count} annotator_enabled={self._bbox_enabled} "
+                    f"annotator_present={self._bbox_annotator is not None} "
+                    f"render_products={self._bbox_render_products}",
+                    flush=True,
+                )
             return occlusion
 
         try:
             bbox_output = self._bbox_annotator.get_data()
-        except Exception:
+        except Exception as exc:
+            if should_debug_bbox:
+                print(f"[bbox_debug] step={step_count} get_data_failed={exc!r}", flush=True)
             return occlusion
 
         bbox_data, bbox_info = self._unpack_bbox_output(bbox_output)
         prim_paths = bbox_info.get("primPaths", [])
         if bbox_data is None or not isinstance(prim_paths, Iterable):
+            if should_debug_bbox:
+                print(
+                    f"[bbox_debug] step={step_count} invalid_output "
+                    f"data_type={type(bbox_data).__name__} primPaths_type={type(prim_paths).__name__} "
+                    f"info_keys={list(bbox_info.keys())}",
+                    flush=True,
+                )
             return occlusion
+        prim_paths = list(prim_paths)
 
         max_occlusion_by_env: list[float | None] = [None] * self.num_envs
+        debug_rows: list[str] = []
         for row_idx, prim_path in enumerate(prim_paths):
             path_str = str(prim_path)
             env_id = self._extract_env_id_from_path(path_str)
+            debug_occlusion_ratio: float | None = None
             if env_id is None or env_id < 0 or env_id >= self.num_envs:
+                if should_debug_bbox and len(debug_rows) < 80:
+                    debug_rows.append(f"{row_idx}:env=None occ=None path={path_str}")
                 continue
 
             can_prefix = f"/World/envs/env_{env_id}/can"
             if path_str != can_prefix and not path_str.startswith(f"{can_prefix}/"):
+                if should_debug_bbox and len(debug_rows) < 80:
+                    debug_rows.append(f"{row_idx}:env={env_id} can=False occ=None path={path_str}")
                 continue
 
             try:
                 row = bbox_data[row_idx]
             except Exception:
+                if should_debug_bbox and len(debug_rows) < 80:
+                    debug_rows.append(f"{row_idx}:env={env_id} can=True row_error path={path_str}")
                 continue
             occlusion_ratio = self._extract_occlusion_ratio(row)
+            debug_occlusion_ratio = occlusion_ratio
+            if should_debug_bbox and len(debug_rows) < 80:
+                debug_rows.append(
+                    f"{row_idx}:env={env_id} can=True occ={debug_occlusion_ratio} path={path_str}"
+                )
             if occlusion_ratio is None:
                 continue
             previous = max_occlusion_by_env[env_id]
@@ -222,6 +268,18 @@ class OccludedGraspingVTDualCrossAlphaAuxBoxEnv(OccludedGraspingVTAlphaBoxEnv):
         for env_id, occlusion_ratio in enumerate(max_occlusion_by_env):
             if occlusion_ratio is not None:
                 occlusion[env_id] = float(occlusion_ratio)
+        if should_debug_bbox:
+            matched_text = ", ".join(
+                f"env_{env_id}={value if value is not None else 'None'}"
+                for env_id, value in enumerate(max_occlusion_by_env)
+            )
+            row_text = " | ".join(debug_rows) if debug_rows else "<no rows>"
+            print(
+                f"[bbox_debug] step={step_count} rows={len(prim_paths)} "
+                f"matched_occlusion={matched_text}",
+                flush=True,
+            )
+            print(f"[bbox_debug] rows: {row_text}", flush=True)
         return occlusion
 
     def _compute_tactile_contact_gt(self) -> torch.Tensor:

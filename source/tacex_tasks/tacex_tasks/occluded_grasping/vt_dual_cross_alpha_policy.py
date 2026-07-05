@@ -78,16 +78,9 @@ class OccludedGraspingVTDualCrossAlphaPolicy(GaussianMixin, Model):
         vision_dim = self._obs_dims[self.vision_key]
         proprio_dim = self._obs_dims[self.proprio_key]
         vector_dim = sum(self._obs_dims[key] for key in self.vector_keys)
-        tactile_total_dim = sum(self._obs_dims[key] for key in self.tactile_keys)
-
         self.vision_proj = nn.Sequential(
             nn.LayerNorm(vision_dim),
             nn.Linear(vision_dim, self.fused_dim),
-            nn.ELU(),
-        )
-        self.tactile_base_proj = nn.Sequential(
-            nn.LayerNorm(tactile_total_dim),
-            nn.Linear(tactile_total_dim, self.fused_dim),
             nn.ELU(),
         )
         self.tactile_token_proj = nn.ModuleDict(
@@ -101,6 +94,11 @@ class OccludedGraspingVTDualCrossAlphaPolicy(GaussianMixin, Model):
             }
         )
         self.tactile_sensor_embed = nn.Embedding(len(self.tactile_keys), self.fused_dim)
+        self.tactile_base_proj = nn.Sequential(
+            nn.LayerNorm(len(self.tactile_keys) * self.fused_dim),
+            nn.Linear(len(self.tactile_keys) * self.fused_dim, self.fused_dim),
+            nn.ELU(),
+        )
 
         self.vision_query_norm = nn.LayerNorm(self.fused_dim)
         self.tactile_context_norm = nn.LayerNorm(self.fused_dim)
@@ -206,14 +204,13 @@ class OccludedGraspingVTDualCrossAlphaPolicy(GaussianMixin, Model):
             raise ValueError("No tensor observations found in inputs['states']")
 
         vision = self.vision_proj(self._flatten_obs(obs, self.vision_key, batch_size))
-        tactile_flat = torch.cat([self._flatten_obs(obs, key, batch_size) for key in self.tactile_keys], dim=-1)
-        tactile = self.tactile_base_proj(tactile_flat)
         tactile_tokens = torch.stack(
             [self.tactile_token_proj[key](self._flatten_obs(obs, key, batch_size)) for key in self.tactile_keys],
             dim=1,
         )
         sensor_ids = torch.arange(len(self.tactile_keys), device=self.device)
         tactile_tokens = tactile_tokens + self.tactile_sensor_embed(sensor_ids).unsqueeze(0)
+        tactile = self.tactile_base_proj(tactile_tokens.reshape(batch_size, -1))
 
         vision_query = self.vision_query_norm(vision).unsqueeze(1)
         tactile_context = self.tactile_context_norm(tactile_tokens)

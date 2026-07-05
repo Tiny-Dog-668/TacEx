@@ -30,6 +30,10 @@ from .vt_box import (
     OccludedGraspingVisionFourTactileWristBoxCfg,
     OccludedGraspingVisionFourTactileWristBoxEnv,
 )
+from .vt_tactile_box import (
+    OccludedGraspingTactileProprioBoxCfg,
+    OccludedGraspingTactileProprioBoxEnv,
+)
 from .vt_alpha_beta_box import (
     OccludedGraspingVTAlphaBetaBoxCfg,
     OccludedGraspingVTAlphaBetaBoxEnv,
@@ -45,6 +49,8 @@ from .vt_pair_gru_box import (
 from .vt_cnn_recon_box import (
     OccludedGraspingVTCNNReconBoxCfg,
     OccludedGraspingVTCNNReconBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaReconBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaReconDownsampleBoxCfg,
 )
 from .vt_down_residual_box import (
     OccludedGraspingVTDownResidualBoxCfg,
@@ -71,6 +77,9 @@ from .vt_alpha_gru_box import (
     OccludedGraspingVTAlphaGRUSelfOcclusionBoxCfg,
     _configure_cube_object,
     _configure_cuboid_object,
+    _configure_soft_cube_object,
+    _configure_soft_cuboid_object,
+    _configure_soft_cylinder_object,
 )
 from .vt_gru_box import (
     OccludedGraspingVTGRUBoxCfg,
@@ -124,14 +133,26 @@ from .vt_dual_cross_alpha_aux_box import (
     OccludedGraspingVTDualCrossAlphaAuxBoxEnv,
     OccludedGraspingVTDualCrossAlphaAuxDownsampleBoxCfg,
 )
-from .vt_tactile_cross_alpha_visible_contact_box import (
-    OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
-    OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
-    OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv,
-)
 from .vt_tactile_cross_alpha_visual_tokens_box import (
     OccludedGraspingVTTactileCrossAlphaVisualTokensBoxEnv,
     OccludedGraspingVTTactileCrossAlphaVisualTokensDownsampleBoxCfg,
+)
+from .vt_tactile_cross_alpha_visual_predict_visible_box import (
+    OccludedGraspingVTTactileCrossAlphaVisualPredictVisibleBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaVisualPredictVisibleDownsampleBoxCfg,
+)
+from .vt_tactile_cross_alpha_aux_box import (
+    OccludedGraspingVTTactileCrossAlphaAuxBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaAuxDownsampleBoxCfg,
+)
+from .vt_tactile_cross_alpha_aux_gru_box import (
+    OccludedGraspingVTTactileCrossAlphaAuxGRUBoxEnv,
+    OccludedGraspingVTTactileCrossAlphaAuxGRUDownsampleBoxCfg,
+)
+from .vt_gelfusion_box import (
+    OccludedGraspingVTGelFusionBoxCfg,
+    OccludedGraspingVTGelFusionBoxEnv,
+    OccludedGraspingVTGelFusionDownsampleBoxCfg,
 )
 from .vt_sparsh import (
     OccludedGraspingVisionFourTactileSparshBoxCfg,
@@ -194,6 +215,9 @@ def _make_scene_object_cfg(base_cfg_cls, fusion_name: str, scene_name: str, obje
     include_outer = scene_name == "Drawer-Occlusion"
     use_cube = object_name == "Cube"
     use_cuboid = object_name == "Cuboid"
+    use_soft_cylinder = object_name == "SoftCylinder"
+    use_soft_cube = object_name == "SoftCube"
+    use_soft_cuboid = object_name == "SoftCuboid"
     class_name = f"OccludedGrasping{fusion_name.replace('-', '')}{scene_name.replace('-', '')}{object_name}Cfg"
 
     def __post_init__(self):
@@ -204,6 +228,12 @@ def _make_scene_object_cfg(base_cfg_cls, fusion_name: str, scene_name: str, obje
             _configure_cube_object(self)
         if use_cuboid:
             _configure_cuboid_object(self)
+        if use_soft_cylinder:
+            _configure_soft_cylinder_object(self)
+        if use_soft_cube:
+            _configure_soft_cube_object(self)
+        if use_soft_cuboid:
+            _configure_soft_cuboid_object(self)
         post_configure = getattr(self, "_post_configure_scene_object", None)
         if callable(post_configure):
             post_configure()
@@ -226,6 +256,28 @@ def _make_scene_object_cfg(base_cfg_cls, fusion_name: str, scene_name: str, obje
             }
         )
     if use_cuboid:
+        attrs.update(
+            {
+                "cuboid_size": (0.05, 0.05, 0.06),
+                "can_radius": 0.025,
+                "can_reset_root_z": 0.0598,
+                "lift_reward_start_height": 0.0598,
+                "success_height": 0.1198,
+                "drop_after_success_penalty_weight": 150.0,
+            }
+        )
+    if use_soft_cube:
+        attrs.update(
+            {
+                "cube_side": 0.05,
+                "can_radius": 0.025,
+                "can_reset_root_z": 0.0548,
+                "lift_reward_start_height": 0.0548,
+                "success_height": 0.1048,
+                "drop_after_success_penalty_weight": 150.0,
+            }
+        )
+    if use_soft_cuboid:
         attrs.update(
             {
                 "cuboid_size": (0.05, 0.05, 0.06),
@@ -270,6 +322,11 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVisionOnlyWristBoxCfg,
             "ppo_v_wrist.yaml",
         ),
+        "T": (
+            f"{__name__}.vt_tactile_box:OccludedGraspingTactileProprioBoxEnv",
+            OccludedGraspingTactileProprioBoxCfg,
+            "ppo_tactile.yaml",
+        ),
         "VT": (
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
             OccludedGraspingVisionFourTactileBoxCfg,
@@ -279,6 +336,21 @@ def _register_scene_object_fusion_matrix() -> None:
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
             OccludedGraspingVisionFourTactileDownsampleBoxCfg,
             "ppo_vt_downsample.yaml",
+        ),
+        "VT-Router-MAE-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
+            OccludedGraspingVisionFourTactileDownsampleBoxCfg,
+            "ppo_vt_router_mae_downsample.yaml",
+        ),
+        "GelFusion": (
+            f"{__name__}.vt_gelfusion_box:OccludedGraspingVTGelFusionBoxEnv",
+            OccludedGraspingVTGelFusionBoxCfg,
+            "ppo_vt_gelfusion.yaml",
+        ),
+        "GelFusion-Downsample": (
+            f"{__name__}.vt_gelfusion_box:OccludedGraspingVTGelFusionBoxEnv",
+            OccludedGraspingVTGelFusionDownsampleBoxCfg,
+            "ppo_vt_gelfusion.yaml",
         ),
         "VT-Wrist": (
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileWristBoxEnv",
@@ -340,35 +412,40 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVTAlphaBoxCfg,
             "ppo_vt_tactile_cross_alpha.yaml",
         ),
-        "Tactile-Cross-Alpha-VisibleContact": (
-            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
-            OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
-            "ppo_vt_tactile_cross_alpha_visible_contact.yaml",
-        ),
-        "Tactile-Cross-Alpha-VisibleContact-Downsample": (
-            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
-            OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
-            "ppo_vt_tactile_cross_alpha_visible_contact.yaml",
-        ),
-        "Tactile-Cross-SensorAlpha-VisibleContact": (
-            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
-            OccludedGraspingVTTactileCrossAlphaVisibleContactBoxCfg,
-            "ppo_vt_tactile_cross_sensor_alpha_visible_contact.yaml",
-        ),
-        "Tactile-Cross-SensorAlpha-VisibleContact-Downsample": (
-            f"{__name__}.vt_tactile_cross_alpha_visible_contact_box:OccludedGraspingVTTactileCrossAlphaVisibleContactBoxEnv",
-            OccludedGraspingVTTactileCrossAlphaVisibleContactDownsampleBoxCfg,
-            "ppo_vt_tactile_cross_sensor_alpha_visible_contact.yaml",
-        ),
         "Tactile-Cross-Alpha-Downsample": (
             f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
             OccludedGraspingVTAlphaDownsampleBoxCfg,
             "ppo_vt_tactile_cross_alpha.yaml",
         ),
+        "Tactile-Cross-Alpha-Recon-Downsample": (
+            f"{__name__}.vt_cnn_recon_box:OccludedGraspingVTTactileCrossAlphaReconBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaReconDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_recon.yaml",
+        ),
+        "Tactile-Cross-Alpha-Aux-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_aux_box:OccludedGraspingVTTactileCrossAlphaAuxBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaAuxDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_aux.yaml",
+        ),
+        "Tactile-Cross-Alpha-Aux-GRU-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_aux_gru_box:OccludedGraspingVTTactileCrossAlphaAuxGRUBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaAuxGRUDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_aux_gru.yaml",
+        ),
+        "Tactile-Cross-Downsample": (
+            f"{__name__}.vt_box:OccludedGraspingVisionFourTactileBoxEnv",
+            OccludedGraspingVisionFourTactileDownsampleBoxCfg,
+            "ppo_vt_tactile_cross.yaml",
+        ),
         "Tactile-Cross-Alpha-Visual-Downsample": (
             f"{__name__}.vt_box:OccludedGraspingVTAlphaBoxEnv",
             OccludedGraspingVTAlphaDownsampleBoxCfg,
             "ppo_vt_tactile_cross_alpha_visual.yaml",
+        ),
+        "Tactile-Cross-Alpha-Visual-PredictVisible-Downsample": (
+            f"{__name__}.vt_tactile_cross_alpha_visual_predict_visible_box:OccludedGraspingVTTactileCrossAlphaVisualPredictVisibleBoxEnv",
+            OccludedGraspingVTTactileCrossAlphaVisualPredictVisibleDownsampleBoxCfg,
+            "ppo_vt_tactile_cross_alpha_visual_predict_visible.yaml",
         ),
         "Tactile-Cross-Alpha-VisualTokens-Downsample": (
             f"{__name__}.vt_tactile_cross_alpha_visual_tokens_box:OccludedGraspingVTTactileCrossAlphaVisualTokensBoxEnv",
@@ -523,7 +600,7 @@ def _register_scene_object_fusion_matrix() -> None:
 
     for fusion_name, (entry_point, base_cfg_cls, skrl_cfg) in fusion_specs.items():
         for scene_name in ("Drawer-Occlusion", "Self-Occlusion"):
-            for object_name in ("Cylinder", "Cube", "Cuboid"):
+            for object_name in ("Cylinder", "Cube", "Cuboid", "SoftCylinder", "SoftCube", "SoftCuboid"):
                 cfg_cls = explicit_cfgs.get(
                     (fusion_name, scene_name, object_name),
                     _make_scene_object_cfg(base_cfg_cls, fusion_name, scene_name, object_name),

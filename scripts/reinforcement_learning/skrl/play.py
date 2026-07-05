@@ -72,6 +72,30 @@ parser.add_argument(
     default=4.0,
     help="Scale factor for the optional third-person OpenCV preview window.",
 )
+parser.add_argument(
+    "--record_rollout",
+    action="store_true",
+    default=False,
+    help="Record one environment's rollout actions and states to a compressed NPZ file.",
+)
+parser.add_argument(
+    "--record_rollout_env_id",
+    type=int,
+    default=0,
+    help="Environment index to record when --record_rollout is enabled.",
+)
+parser.add_argument(
+    "--record_rollout_steps",
+    type=int,
+    default=200,
+    help="Maximum number of rollout steps to record. Use 0 to record until play exits.",
+)
+parser.add_argument(
+    "--record_rollout_output",
+    type=str,
+    default=None,
+    help="Optional NPZ output path for --record_rollout. Defaults to the checkpoint run's metrics/play_rollout directory.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -93,6 +117,7 @@ import os
 import pickle
 import re
 import time
+import numpy as np
 import torch
 import yaml
 
@@ -220,6 +245,160 @@ def _show_third_person_frame(env_obj, env_id: int, scale: float, cv2_module):
         image = cv2_module.resize(image, None, fx=scale, fy=scale, interpolation=cv2_module.INTER_NEAREST)
     cv2_module.imshow(f"third_person_camera env {env_id}", cv2_module.cvtColor(image, cv2_module.COLOR_RGB2BGR))
     cv2_module.waitKey(1)
+
+
+def _tensor_slice_to_numpy(value, env_id: int):
+    """Return one env slice as a CPU numpy array while preserving the env dimension."""
+    if value is None:
+        return None
+    if not isinstance(value, torch.Tensor):
+        try:
+            value = torch.as_tensor(value)
+        except Exception:
+            return None
+    if value.ndim == 0:
+        return value.detach().reshape(1).cpu().numpy()
+    if env_id < 0 or env_id >= int(value.shape[0]):
+        return None
+    return value[env_id : env_id + 1].detach().cpu().numpy()
+
+
+def _maybe_squeeze_single_body(value):
+    """Normalize body tensors shaped (N, 1, D) to (N, D)."""
+    if isinstance(value, torch.Tensor) and value.ndim == 3 and value.shape[1] == 1:
+        return value[:, 0, :]
+    return value
+
+
+def _merge_done_tensors(terminated, truncated):
+    """Merge terminated/truncated outputs from torch tensors or tensor-like containers."""
+    if not isinstance(terminated, torch.Tensor):
+        terminated = torch.as_tensor(terminated)
+    if not isinstance(truncated, torch.Tensor):
+        truncated = torch.as_tensor(truncated, device=terminated.device)
+    else:
+        truncated = truncated.to(device=terminated.device)
+    return torch.logical_or(terminated.to(dtype=torch.bool), truncated.to(dtype=torch.bool))
+
+
+class RolloutRecorder:
+    """Record a single-env rollout to compressed numpy arrays with shape (T, 1, ...)."""
+
+    def __init__(self, env_id: int, max_steps: int, output_path: str):
+        self.env_id = int(env_id)
+        self.max_steps = max(0, int(max_steps))
+        self.output_path = output_path
+        self.saved = False
+        self.metadata = {}
+        self.data = {
+            "step": [],
+            "action": [],
+            "processed_action": [],
+            "joint_pos": [],
+            "joint_vel": [],
+            "joint_pos_target": [],
+            "object_pos": [],
+            "object_pos_local": [],
+            "object_quat": [],
+            "gripper_pos": [],
+            "reward": [],
+            "done": [],
+        }
+
+    def should_record(self) -> bool:
+        return self.max_steps == 0 or len(self.data["step"]) < self.max_steps
+
+    def is_complete(self) -> bool:
+        return self.max_steps > 0 and len(self.data["step"]) >= self.max_steps
+
+    def capture_initial_state(self, env_obj) -> None:
+        base_env = _get_base_env(env_obj)
+        obj = getattr(base_env, "_can", None)
+        obj_data = getattr(obj, "data", None)
+        env_origin = self._get_env_origin(base_env)
+        initial_object_pos = _tensor_slice_to_numpy(getattr(obj_data, "root_pos_w", None), self.env_id)
+        initial_object_quat = _tensor_slice_to_numpy(getattr(obj_data, "root_quat_w", None), self.env_id)
+        self.metadata["env_id"] = np.asarray(self.env_id, dtype=np.int64)
+        if env_origin is not None:
+            self.metadata["env_origin"] = env_origin
+        if initial_object_pos is not None:
+            self.metadata["initial_object_pos"] = initial_object_pos
+            if env_origin is not None and env_origin.shape == initial_object_pos.shape:
+                self.metadata["initial_object_pos_local"] = initial_object_pos - env_origin
+        if initial_object_quat is not None:
+            self.metadata["initial_object_quat"] = initial_object_quat
+
+    def append(self, step: int, env_obj, actions, rewards, dones) -> None:
+        if not self.should_record():
+            return
+        base_env = _get_base_env(env_obj)
+        robot = getattr(base_env, "_robot", None)
+        robot_data = getattr(robot, "data", None)
+        obj = getattr(base_env, "_can", None)
+        obj_data = getattr(obj, "data", None)
+        body_idx = getattr(base_env, "_body_idx", None)
+        env_origin = self._get_env_origin(base_env)
+
+        self.data["step"].append(np.asarray(step, dtype=np.int64))
+        self._append_tensor("action", actions)
+        self._append_tensor("processed_action", getattr(base_env, "processed_actions", None))
+        self._append_tensor("joint_pos", getattr(robot_data, "joint_pos", None))
+        self._append_tensor("joint_vel", getattr(robot_data, "joint_vel", None))
+        self._append_tensor("joint_pos_target", getattr(robot_data, "joint_pos_target", None))
+        object_pos = getattr(obj_data, "root_pos_w", None)
+        self._append_tensor("object_pos", object_pos)
+        if object_pos is not None and env_origin is not None:
+            self._append_array("object_pos_local", _tensor_slice_to_numpy(object_pos, self.env_id) - env_origin)
+        else:
+            self._append_array("object_pos_local", None)
+        self._append_tensor("object_quat", getattr(obj_data, "root_quat_w", None))
+
+        gripper_pos = None
+        body_pos = getattr(robot_data, "body_link_pos_w", None)
+        if body_pos is not None and body_idx is not None:
+            try:
+                gripper_pos = _maybe_squeeze_single_body(body_pos[:, body_idx])
+            except Exception:
+                gripper_pos = None
+        self._append_tensor("gripper_pos", gripper_pos)
+        self._append_tensor("reward", rewards)
+        self._append_tensor("done", dones)
+
+    def _append_tensor(self, key: str, value) -> None:
+        array = _tensor_slice_to_numpy(value, self.env_id)
+        self._append_array(key, array)
+
+    def _append_array(self, key: str, array) -> None:
+        if array is None:
+            array = np.asarray([], dtype=np.float32)
+        self.data[key].append(array)
+
+    def _get_env_origin(self, base_env):
+        scene = getattr(base_env, "scene", None)
+        origins = getattr(scene, "env_origins", None)
+        return _tensor_slice_to_numpy(origins, self.env_id)
+
+    def save(self) -> None:
+        if self.saved:
+            return
+        if not self.data["step"]:
+            print("[WARN] Rollout recorder did not capture any steps; no NPZ was written.")
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(self.output_path)), exist_ok=True)
+        arrays = {}
+        for key, values in self.data.items():
+            if key == "step":
+                arrays[key] = np.stack(values, axis=0)
+                continue
+            first_shape = values[0].shape
+            if first_shape and all(value.shape == first_shape for value in values):
+                arrays[key] = np.stack(values, axis=0)
+            else:
+                arrays[key] = np.asarray(values, dtype=object)
+        arrays.update(self.metadata)
+        np.savez_compressed(self.output_path, **arrays)
+        self.saved = True
+        print(f"[INFO] Saved rollout NPZ: {self.output_path}")
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -546,6 +725,10 @@ def main():
     # Disable training-time action noise during evaluation.
     if hasattr(env_cfg, "action_noise_scale"):
         env_cfg.action_noise_scale = 0.0
+    if hasattr(env_cfg, "robot_joint_pos_noise"):
+        env_cfg.robot_joint_pos_noise = 0.0
+    if hasattr(env_cfg, "robot_joint_vel_noise"):
+        env_cfg.robot_joint_vel_noise = 0.0
 
     print(
         f"[INFO] Evaluation env config: num_envs={env_cfg.scene.num_envs}, "
@@ -553,6 +736,10 @@ def main():
     )
     if hasattr(env_cfg, "action_noise_scale"):
         print(f"[INFO] Evaluation override: action_noise_scale={env_cfg.action_noise_scale}")
+    if hasattr(env_cfg, "robot_joint_pos_noise"):
+        print(f"[INFO] Evaluation override: robot_joint_pos_noise={env_cfg.robot_joint_pos_noise}")
+    if hasattr(env_cfg, "robot_joint_vel_noise"):
+        print(f"[INFO] Evaluation override: robot_joint_vel_noise={env_cfg.robot_joint_vel_noise}")
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
     # create isaac environment
@@ -829,6 +1016,26 @@ def main():
     metrics_writer.writerow(["step", "recent_success_rate", "window_success_rate"])
     metrics_file.flush()
     print(f"[INFO] Streaming play metrics to CSV: {metrics_csv} (every {record_interval} steps)")
+    rollout_recorder = None
+    if args_cli.record_rollout:
+        if args_cli.record_rollout_env_id < 0 or args_cli.record_rollout_env_id >= env.num_envs:
+            raise ValueError(
+                f"--record_rollout_env_id must be in [0, {env.num_envs - 1}], "
+                f"got {args_cli.record_rollout_env_id}"
+            )
+        rollout_dir = os.path.join(log_dir, "metrics", "play_rollout")
+        rollout_output = args_cli.record_rollout_output or os.path.join(rollout_dir, f"rollout_{run_tag}.npz")
+        rollout_recorder = RolloutRecorder(
+            env_id=args_cli.record_rollout_env_id,
+            max_steps=args_cli.record_rollout_steps,
+            output_path=os.path.abspath(rollout_output),
+        )
+        rollout_recorder.capture_initial_state(env)
+        step_text = "all steps until play exits" if args_cli.record_rollout_steps == 0 else args_cli.record_rollout_steps
+        print(
+            f"[INFO] Recording rollout env {args_cli.record_rollout_env_id} "
+            f"for {step_text} step(s) to: {rollout_recorder.output_path}"
+        )
     if args_cli.stochastic_eval:
         print("[INFO] Evaluation action mode: stochastic (sampled actions)")
     else:
@@ -844,9 +1051,14 @@ def main():
                 outputs = agent.act(obs, timestep=timestep, timesteps=timestep)
                 actions = outputs[0] if args_cli.stochastic_eval else outputs[-1].get("mean_actions", outputs[0])
                 # env stepping
-                obs, _, _, _, infos = env.step(actions)
+                obs, rewards, terminated, truncated, infos = env.step(actions)
 
                 current_step = timestep + 1
+                if rollout_recorder is not None:
+                    dones = _merge_done_tensors(terminated, truncated)
+                    rollout_recorder.append(current_step, env, actions, rewards, dones)
+                    if rollout_recorder.is_complete():
+                        rollout_recorder.save()
                 if current_step % record_interval == 0:
                     extras = _extract_env_extras(env)
                     success_rate = _find_metric(
@@ -891,6 +1103,8 @@ def main():
         metrics_file.flush()
         metrics_file.close()
         print(f"[INFO] Saved play metrics CSV: {metrics_csv}")
+        if rollout_recorder is not None:
+            rollout_recorder.save()
 
         # close the simulator
         env.close()

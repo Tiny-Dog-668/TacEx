@@ -3,7 +3,7 @@ seed: 42
 models:
   separate: True
   policy:
-    class: "tacex_tasks.occluded_grasping.vt_tactile_cross_sensor_alpha_visible_contact_policy:OccludedGraspingVTTactileCrossSensorAlphaVisibleContactPolicy"
+    class: "tacex_tasks.occluded_grasping.vt_router_mae_policy:OccludedGraspingVTRouterMAEPolicy"
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0
@@ -18,16 +18,15 @@ models:
       "tactile_left_down_depth_resnet",
       "tactile_right_down_depth_resnet"
     ]
-    vector_keys: ["proprio_obs"]
     proprio_key: "proprio_obs"
-    visible_ratio_key: "visual_visible_ratio"
-    tactile_contact_ratio_key: "tactile_contact_ratio"
-    fused_dim: 256
-    num_heads: 4
-    attention_mlp_dim: 512
-    dropout: 0.0
-    gate_hidden_dim: 64
-    mlp_layers: [256, 128, 64]
+    expert_dim: 256
+    vision_downsample_dim: 128
+    expert_hidden_dim: 256
+    num_experts: 4
+    router_hard: True
+    load_loss_weight: 0.01
+    entropy_loss_weight: 0.001
+    mlp_layers: [512, 256, 128, 64]
     mlp_activation: elu
   value:
     class: DeterministicMixin
@@ -47,7 +46,7 @@ memory:
   memory_size: -1
 
 agent:
-  class: PPO
+  class: "tacex_tasks.occluded_grasping.vt_aux_ppo_agent:PPOWithAuxHeadsLoss"
   rollouts: 128
   learning_epochs: 4
   mini_batches: 16
@@ -56,7 +55,7 @@ agent:
   learning_rate: 5.0e-04
   learning_rate_scheduler: null
   learning_rate_scheduler_kwargs: null
-  state_preprocessor: RunningStandardScaler
+  state_preprocessor: null
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
   value_preprocessor_kwargs: null
@@ -71,10 +70,12 @@ agent:
   kl_threshold: 0.0
   rewards_shaper_scale: 1.0
   time_limit_bootstrap: False
+  aux_enable: True
+  aux_loss_scale: 1.0
   experiment:
     directory: "occluded_grasping"
-    experiment_name: "vt_tactile_cross_sensor_alpha_visible_contact_box"
-    write_interval: 500
+    experiment_name: "vt_router_mae_downsample_box"
+    write_interval: 1000
     checkpoint_interval: 10000
     wandb: False
     wandb_kwargs: { "sync_tensorboard": True, "project": "occluded_grasping_vision_tactile" }
