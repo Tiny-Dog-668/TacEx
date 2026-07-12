@@ -9,6 +9,42 @@
 - 不确定的作者、意图、commit、seed、checkpoint 或结果统一写“待确认”。
 - 涉及观测、动作、奖励、done、网络输入维度或 checkpoint 兼容性的改动必须明确说明。
 
+## 2026-07-12 CST — 统一 sim2real Cube 训练与导出 contract
+
+- 类型：环境修复 / Agent 配置 / export provenance / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/cylinder_grasping/cylinder_grasping_vision_only_resnet18.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_grasp_env.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_vision_only_cfg_resnet18.yaml`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml`
+  - `scripts/reinforcement_learning/skrl/vision_encoder_artifact.py`
+  - `scripts/reinforcement_learning/skrl/train.py`
+  - `scripts/reinforcement_learning/skrl/play.py`
+  - `scripts/reinforcement_learning/skrl/play_bucket.py`
+  - `scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py`
+  - `scripts/reinforcement_learning/skrl/test_sim2real_grasp_policy_jit.py`
+  - `scripts/reinforcement_learning/skrl/summary_utils.py`
+  - `README.md`、`docs/PROJECT_OVERVIEW.md`、`docs/ARCHITECTURE.md`、`docs/DATA_FLOW.md`、`docs/EXPERIMENTS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`、`docs/DEVLOG.md`
+- 修改内容：
+  - ResNet18 初始化后立即 `eval()` 并冻结全部参数；两个实际 feature extraction 路径在每次 forward 前再次强制 `eval()`，使用 `torch.no_grad()`，避免 BatchNorm running statistics 在训练 rollout 中变化，同时让输出保持为可供下游 Actor 反向传播使用的普通 detached tensor。
+  - `action_history` 从 `prev_actions` 改为当前 `processed_actions.detach().clone()`，使 observation `t+1` 记录与 transition 对应的上一拍 scaled/clamped command；sim2real action noise 为 0，所以其范围约为 `[-0.05,0.05]`。该值位于 privileged near-table `dz` gate 之前，不一定等于最终 IK `dz`。
+  - 两个 Cube PPO 配置的 Gaussian Actor 输出改为 `tanh(ACTIONS)`；训练、按 checkpoint saved cfg 的 deterministic play 和 export 返回相同的 bounded mean。训练时 Gaussian sample 仍可能越界，环境继续负责 processed-action clamp。
+  - 每个 sim2real vision training run 在 `params/` 保存 encoder state dict 与 manifest；manifest 绑定 task、agent/env config hash、history 版本、相机/频率、action scale、夹爪 substep target 重发语义和 encoder hash。旧 sim2real resume、错 task、source config 篡改、Actor/preprocessor、normalization 或已声明 live-env 字段漂移会 fail closed；play/play_bucket/exporter 直接恢复 saved env cfg，加载同一 encoder，并在 export 中检查 finite output 及 eager/traced/reloaded 一致性。
+- 影响的观测：key 和 shape 不变，仍为 `wrist_resnet:512`、`proprio_obs:15`、`action_history:4` 及原 `critic_*`；`action_history` 的时间语义改变。
+- 影响的动作：shape 不变，仍为 `[N,4] = [dx,dy,dz,gripper]`；deterministic Actor mean 从 unbounded 改为 `[-1,1]`，乘 `action_scale=0.05` 后 processed command 为约 `[-0.05,0.05]`。
+- 影响的奖励和 done：公式与阈值未修改；action-rate reward 仍使用 `processed_actions` 和 `prev_actions`。
+- checkpoint 兼容性：修复前 checkpoint 虽然参数 shape 兼容，但已适应旧 BatchNorm/history/Actor 语义，不能 resume 或通过 exporter 临时补 `tanh`；必须从头训练。共享基类的 BN/history 修复也影响 `TacEx-Cylinder-Grasping-Vision-Only-ResNet18-v0` 和 `CylinderGraspingComplexEnv` 子类，对应旧 checkpoint 同样存在语义变化。
+- 验证情况：
+  - ResNet18 动态检查：train + `no_grad` 会改变 60 个 BatchNorm buffers；eval + `no_grad` 改变 0 个。
+  - 两个 Cube YAML 通过 skrl `gaussian_model` 实例化，随机 batch 的 deterministic mean shape 为 `[32,4]` 且全部位于 `[-1,1]`。
+  - encoder artifact 临时目录 round-trip 通过：artifact/state hash 一致，strict load 后 encoder 为 eval 且全部参数 frozen。
+  - Isaac headless 环境 smoke：非零 raw action `[0.4,-0.2,0.1,-0.5]` 得到 history `[0.02,-0.01,0.005,-0.025]`，一次 step 后 60 个 BN buffers 变化数为 0；观测 shape 为 `512+15+4`。
+  - PPO/export/play smoke：`2026-07-12_14-29-22_ppo_torch_vision_only_resnet18` 以 1 env 完成 128 steps 和一次 update，退出码 0；生成的 skrl policy source 明确为 `nn.functional.tanh(net)`，并保存 encoder artifact、v1 contract 和测试 checkpoint `agent_128.pt`。RGB/feature 两种 export 的 eager/trace/reload error 均为 0；独立 tester 得到 `(2,4)` finite/bounded output、repeat diff 0；普通 play 用 exact saved env cfg 和 verified encoder 执行 2 steps，退出码 0。该 smoke checkpoint 不能作为可用策略。
+  - `python -m compileall source scripts tools`、最终相关文件 `py_compile` 和 `git diff --check` 通过。
+  - `TERM=xterm conda run -n isaaclab_2.1.1 --no-capture-output ./tacex.sh -p tools/run_all_tests.py --discover_only` 完成 Isaac warm start 后失败：测试工具配置要求跳过不存在的 `test_argparser_launch.py`。这是 discovery 配置问题，不是本次环境 smoke 失败。
+- 未运行：修复后的完整 200000-step PPO、bucket 成功率和真机部署。
+- 待确认：修复后策略的训练收敛、仿真抓取成功率和真机成功率。
+
 ## 2026-07-12 CST — 导出现实对齐 Cube best policy
 
 - 类型：checkpoint artifact / TorchScript export / 文档

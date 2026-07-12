@@ -107,6 +107,18 @@ import torch
 from packaging import version
 from PIL import Image
 from summary_utils import write_training_summary
+from vision_encoder_artifact import (
+    ENCODER_ARTIFACT_FILENAME,
+    ENCODER_MANIFEST_FILENAME,
+    checkpoint_run_dir,
+    load_saved_agent_config,
+    load_verified_vision_encoder,
+    save_training_vision_encoder,
+    validate_live_env_against_policy_contract,
+    validate_live_vision_contract,
+    validate_resume_agent_config,
+    validate_sim2real_policy_contract,
+)
 
 # check for minimum supported skrl version
 SKRL_VERSION = "1.4.1"
@@ -143,6 +155,12 @@ import tacex_tasks  # noqa: F401
 # config shortcuts
 algorithm = args_cli.algorithm.lower()
 agent_cfg_entry_point = "skrl_cfg_entry_point" if algorithm in ["ppo"] else f"skrl_{algorithm}_cfg_entry_point"
+
+SIM2REAL_VISION_ENCODER_TASKS = {
+    "TacEx-Sim2Real-Grasp-v0",
+    "TacEx-Sim2Real-Cube-Grasp-v0",
+    "TacEx-Sim2Real-Cube-Real-Alignment-v0",
+}
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -345,6 +363,43 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo", "ppo_rnn"]:
         env = multi_agent_to_single_agent(env)
+
+    # Every task in this inheritance chain receives the BN/history semantic
+    # change. Cube additionally requires the tanh contract in the validator.
+    if args_cli.task in SIM2REAL_VISION_ENCODER_TASKS and resume_path is not None:
+        source_params_dir = checkpoint_run_dir(resume_path) / "params"
+        source_manifest_path = source_params_dir / ENCODER_MANIFEST_FILENAME
+        source_contract = validate_sim2real_policy_contract(
+            source_manifest_path,
+            task=args_cli.task,
+            params_dir=source_params_dir,
+        )
+        source_agent_cfg, _ = load_saved_agent_config(source_params_dir)
+        validate_resume_agent_config(agent_cfg, source_agent_cfg)
+        source_encoder_manifest = load_verified_vision_encoder(
+            env.unwrapped._resnet18,
+            artifact_path=source_params_dir / ENCODER_ARTIFACT_FILENAME,
+            manifest_path=source_manifest_path,
+        )
+        validate_live_vision_contract(env.unwrapped, source_encoder_manifest)
+        validate_live_env_against_policy_contract(env.unwrapped, source_contract)
+        print(f"[INFO] Verified strict sim2real resume contract from: {source_params_dir}")
+
+    if args_cli.task in SIM2REAL_VISION_ENCODER_TASKS and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        encoder_manifest = save_training_vision_encoder(
+            env.unwrapped,
+            os.path.join(log_dir, "params"),
+            task=args_cli.task,
+            policy_output=agent_cfg.get("models", {}).get("policy", {}).get("output"),
+        )
+        if encoder_manifest is None:
+            raise RuntimeError(f"Task {args_cli.task} requires a frozen _resnet18 vision encoder.")
+        print(
+            "[INFO] Saved verified training vision encoder: "
+            f"state_dict_sha256={encoder_manifest['state_dict_sha256']}"
+        )
 
     auto_save_start_frames = args_cli.task == "TacEx-Sim2Real-Cube-Grasp-v0"
     if args_cli.save_start_frame or auto_save_start_frames:

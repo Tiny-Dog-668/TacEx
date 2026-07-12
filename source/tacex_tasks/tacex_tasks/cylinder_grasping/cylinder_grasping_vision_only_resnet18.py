@@ -371,8 +371,14 @@ class CylinderGraspingVisionOnlyEnv(DirectRLEnv):
             backbone = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             # remove final fc; keep feature extractor
             self._resnet18 = torch.nn.Sequential(*list(backbone.children())[:-1]).to(self.device)
-            for p in self._resnet18.parameters():
-                p.requires_grad_(False)
+            # This encoder is a fixed ImageNet feature extractor. Keeping it in
+            # eval mode is essential: no_grad() alone does not stop BatchNorm
+            # running statistics from changing in train mode.
+            self._resnet18.eval()
+            for param in self._resnet18.parameters():
+                param.requires_grad_(False)
+            self._resnet18_architecture = "torchvision.models.resnet18[:-1]"
+            self._resnet18_weights_id = "ResNet18_Weights.IMAGENET1K_V1"
             # ImageNet normalization constants
             self._imgnet_mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
             self._imgnet_std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
@@ -524,8 +530,10 @@ class CylinderGraspingVisionOnlyEnv(DirectRLEnv):
             dz = torch.where(near_plate & near_obj_xy, torch.clamp(dz, min=-0.005), dz)
             arm_actions[:, 2] = dz
         self._ik_controller.set_command(arm_actions, ee_pos_curr_b, ee_quat_curr_b)
-        # 暂存上一时刻动作作为历史特征
-        self.action_history = self.prev_actions.clone()
+        # obs(t+1) must contain the processed command associated with transition
+        # t -> t+1. Using prev_actions here introduced one additional delay.
+        # This is the scaled/clamped/noisy action before the privileged dz gate.
+        self.action_history = self.processed_actions.detach().clone()
 
     def _apply_action(self):
         """Apply actions to the robot using IK controller."""
@@ -666,11 +674,16 @@ class CylinderGraspingVisionOnlyEnv(DirectRLEnv):
 
         # compute ResNet18 features if available
         if hasattr(self, "_use_resnet18") and self._use_resnet18:
+            # Defend the frozen encoder contract if a future caller toggles the
+            # module hierarchy back to train mode.
+            self._resnet18.eval()
             x = wrist_rgb.permute(0, 3, 1, 2).contiguous()
             # resize to 224x224 to match ResNet18 training resolution
             x = F.interpolate(x, size=(224, 224), mode="bilinear", align_corners=False)
             # ImageNet normalization
             x = (x - self._imgnet_mean) / self._imgnet_std
+            # no_grad keeps encoder activations detached while returning a
+            # normal tensor that the trainable Actor may safely consume.
             with torch.no_grad():
                 feat = self._resnet18(x)  # [N, 512, 1, 1]
                 feat = feat.view(self.num_envs, 512)

@@ -115,6 +115,8 @@ UR10 + Robotiq 2F85 direct task 的控制方式：
 
 现实参考对齐相机配置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentEnvCfg.wrist_camera`。该配置把 D435 原始 640x480 图像的中央 480x480 crop 等效为直接 224x224 渲染，使用变换后的内参 `fx=282.4603, fy=282.2679, cx=113.1917, cy=116.3019`，并将 camera/policy 周期设为 30 Hz。当前图像拟合位姿为 world `pos=(1.90,0.0,0.468)`、光轴向下约 15°；Omniverse 4.5 不支持非方形像素和 aperture offset，会使用平均焦距和图像中心主点。该位姿仍是图像推算值，待 hand-eye calibration。
 
+Sim2real Cube 的 ResNet18 使用 `ResNet18_Weights.IMAGENET1K_V1`，参数冻结且模块始终处于 `eval()`。训练入口在每个 run 的 `params/` 下保存一次完整 encoder state artifact 和 manifest；encoder 不重复写入每个 PPO checkpoint。Manifest 同时保存 policy contract version、task id、history 语义、agent/env config hash、观测维度、相机尺寸、控制频率、action scale 和夹爪 target 重发语义。训练 resume、普通 play、bucket play 和 exporter 都验证该 contract、encoder identity 与 normalization；RGB 路径 strict-load 同一 encoder state。Exporter 还恢复 saved env cfg，并在保存后重新加载 TorchScript，校验 eager/traced/reloaded output 的有限性、一致性和 embedded encoder hash。
+
 视觉数据生成：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._get_observations` 从 `self.third_person_camera.data.output["rgb"]` 读取 RGB。
 
 UR10 + Robotiq 2F85 third-person 变体的相机配置在 `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace/ur10_robotiq_2f85_third_person_pick_place_env.py:UR10Robotiq2F85ThirdPersonPickPlaceEnvCfg.third_person_camera`。该相机使用 224x224 RGB 输出，内参和位姿参考 `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py:Sim2RealCubeGraspEnvCfg.wrist_camera`。当前变体默认不把 RGB 加入 policy observation，因此现有 `agents/skrl_ppo_cfg.yaml` 的 MLP 输入仍是 `STATES`。该文件内同时独立定义 2F85 的 USD 路径、coupling rules、初始关节、噪声、夹爪目标角度、桌面、物体、奖励和 camera 参数。
@@ -234,6 +236,13 @@ Critic 多数使用 privileged state，而不是原始视觉/触觉 feature。
 ## 15. 模型保存与加载
 
 训练日志和模型默认位于 `logs/skrl/occluded_grasping/`。
+
+Sim2real RGB run 额外保存：
+
+- `params/vision_encoder_resnet18.pt`：训练实际使用的 frozen encoder state dict。
+- `params/vision_encoder_resnet18.json`：架构、权重 ID、eval/frozen 状态、torch/torchvision 版本、ImageNet normalization、artifact/state SHA-256，以及 task/agent/env/action/history/timing policy contract。
+
+Cube train resume/play/play_bucket/export 均要求 checkpoint run manifest。Exporter 恢复 run 自己的 `params/agent.yaml` 和 `params/env.pkl`，并校验 task 与四份 agent/env artifact hash，避免当前 registry 或错 task 改变模型语义。新 Cube checkpoint 必须声明 `models.policy.output: "tanh(ACTIONS)"`；旧 checkpoint 即使参数 shape 可加载，也会被拒绝 resume/play/export。
 
 已确认存在 checkpoint：
 

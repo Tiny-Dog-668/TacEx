@@ -34,6 +34,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 ## 4. 当前已实现功能
 
 - 现实参考对齐的 vision-only Cube task：`TacEx-Sim2Real-Cube-Real-Alignment-v0`。它使用实测 5x5x5 cm 方块，并从 `20260711_214450_real_alignment_reference/alignment_reference.json` 对齐 Franka 初态、夹爪宽度、D435 crop 后 224x224 内参和 30 Hz 图像/策略周期；台面后沿、背景颜色和方块 nominal 图像位置来自参考图估计。相机外参未测量，当前使用图像拟合近似位姿。
+- Sim2real Cube strict policy contract：ResNet18 参数冻结且始终 `eval()`，`action_history [N,4]` 表示上一拍、privileged `dz` gate 前的 scaled/clamped processed command，Actor deterministic mean 在模型内通过 `tanh` 约束到 `[-1,1]`。训练 run manifest 绑定 task、agent/env config、控制参数和 encoder；resume/play/play_bucket/export 严格校验，旧 checkpoint 需要重新训练。
 - Franka Panda + GS Mini gripper 任务配置：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.robot` 使用 `source/tacex_assets/tacex_assets/robots/franka/franka_gsmini_gripper_rigid.py:FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG`。
 - 第三视角 RGB 相机：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera`。
 - 四路触觉输入：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.gsmini_left`、`gsmini_right`、`gsmini_left_down`、`gsmini_right_down`。

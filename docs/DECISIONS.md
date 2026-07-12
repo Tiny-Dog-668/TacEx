@@ -79,3 +79,19 @@
 - 决策：使用 `logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/checkpoints/best_agent.pt` 作为普通评估和 bucket 评估示例。
 - 依据：该 checkpoint、`params/agent.yaml`、`params/env.yaml` 和 metrics CSV 在仓库中存在。
 - 影响：命令可追溯；该 checkpoint 是否为当前推荐 baseline 待确认。
+
+## DEC-011 — Sim2real Cube 使用统一的 frozen-vision、history 和 bounded-mean contract
+
+- 状态：已采用；需要按新 contract 重新训练
+- 背景：训练时 BatchNorm statistics、策略看到的动作历史和导出 Actor mean 与真机推理存在漂移，会直接破坏 sim2real 输入/输出语义。
+- 决策：ResNet18 参数冻结且每次编码前强制 `eval()`；`action_history(t+1)` 保存与 transition 对应、privileged `dz` gate 之前的 `processed_actions(t)`；Cube Gaussian Actor 在模型输出处使用 `tanh(ACTIONS)`。
+- 依据：`cylinder_grasping_vision_only_resnet18.py`、`sim2real_grasp_env.py`、两个 `skrl_ppo_cube_*_cfg_resnet18.yaml`。
+- 影响：观测 key、`512+15+4` Actor 输入维度和 4 维动作 shape 不变，但视觉、时间和 Actor mean 语义改变；修复前 checkpoint 不能继续训练或直接迁移。
+
+## DEC-012 — Encoder provenance 作为 run-level artifact 保存并在导出时 fail closed
+
+- 状态：已采用
+- 背景：视觉 encoder 位于环境而不在 PPO Actor checkpoint 中；exporter 重新创建 ImageNet encoder 无法证明它与训练实际使用的 state 完全一致。
+- 决策：训练 run 的 `params/` 保存 frozen ResNet18 state dict 和 manifest；manifest 记录架构、权重 ID、normalization、task、policy/history contract、agent/env config hash 和 encoder SHA-256。Resume/play/export 校验 run contract；exporter 恢复 saved env cfg，严格加载 encoder，并比较 eager/traced/reloaded output 与 embedded encoder hash。
+- 依据：`scripts/reinforcement_learning/skrl/vision_encoder_artifact.py`、`train.py`、`export_sim2real_grasp_jit.py`。
+- 影响：encoder 不重复写入每个 checkpoint，但 deployment artifact 必须与整个 run 的 `params/` 一起保存；缺失或 hash 不符时拒绝 RGB 导出。

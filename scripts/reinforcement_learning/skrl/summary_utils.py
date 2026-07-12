@@ -411,6 +411,8 @@ def write_training_summary(
         "Fusion",
         (
             ("policy_class", _get_value(agent_cfg, "models.policy.class", "GaussianMixin")),
+            ("policy_output", _get_value(agent_cfg, "models.policy.output")),
+            ("policy_clip_actions", _get_value(agent_cfg, "models.policy.clip_actions")),
             ("fusion_method", fusion_method),
             ("fusion_detail", fusion_detail),
             ("fused_dim", _get_value(agent_cfg, "models.policy.fused_dim")),

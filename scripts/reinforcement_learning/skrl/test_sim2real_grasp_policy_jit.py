@@ -19,6 +19,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from vision_encoder_artifact import module_state_dict_sha256, sha256_file
+
 try:
     from PIL import Image
 except ImportError:
@@ -172,11 +174,42 @@ def main():
 
     action_hist_dim = input_signature["action_history"][0]
     proprio_dim = input_signature["proprio_obs"][0]
+    output_signature = metadata.get("output_signature", {})
+    if "mean_actions" not in output_signature:
+        raise RuntimeError("Metadata must declare output_signature.mean_actions.")
+    action_dim = int(output_signature["mean_actions"][0])
+    if not isinstance(metadata.get("policy_contract"), dict):
+        raise RuntimeError("Metadata does not contain a verified run policy contract.")
 
     device = torch.device(args.device)
     model = torch.jit.load(str(model_path), map_location=device)
     model.eval()
     model.to(device)
+
+    expected_model_hash = metadata.get("torchscript_sha256")
+    if not expected_model_hash:
+        raise RuntimeError("Metadata does not declare torchscript_sha256.")
+    actual_model_hash = sha256_file(model_path)
+    if actual_model_hash != expected_model_hash:
+        raise RuntimeError(
+            f"TorchScript SHA-256 mismatch: expected {expected_model_hash}, got {actual_model_hash}"
+        )
+
+    encoder_metadata = metadata.get("vision_encoder")
+    if input_mode == "rgb":
+        if not isinstance(encoder_metadata, dict) or not encoder_metadata.get("verified"):
+            raise RuntimeError("RGB export metadata does not contain a verified training vision encoder.")
+        if not hasattr(model, "vision_encoder"):
+            raise RuntimeError("RGB TorchScript model does not contain vision_encoder.")
+        embedded_encoder_hash = module_state_dict_sha256(model.vision_encoder)
+        expected_encoder_hash = encoder_metadata.get("state_dict_sha256")
+        if embedded_encoder_hash != expected_encoder_hash:
+            raise RuntimeError(
+                "Embedded vision encoder SHA-256 mismatch: "
+                f"expected {expected_encoder_hash}, got {embedded_encoder_hash}"
+            )
+    else:
+        embedded_encoder_hash = None
 
     num_params = sum(parameter.numel() for parameter in model.parameters())
     print(f"model         : {model_path}")
@@ -185,6 +218,9 @@ def main():
     print(f"num_parameters: {num_params}")
     print(f"input_mode    : {input_mode}")
     print(f"device        : {device}")
+    print(f"model_sha256  : {actual_model_hash}")
+    if embedded_encoder_hash is not None:
+        print(f"encoder_sha256: {embedded_encoder_hash}")
 
     action_history = _parse_vector_arg(args.action_history, action_hist_dim, "action_history")
     action_history = action_history.unsqueeze(0).repeat(args.batch_size, 1).to(device)
@@ -205,14 +241,30 @@ def main():
         out_b = model(action_history, proprio_obs, wrist_input)
         out_c = model(action_history, proprio_obs, perturbed_input)
 
-    finite_ok = bool(torch.isfinite(out_a).all().item())
+    expected_output_shape = (args.batch_size, action_dim)
+    shape_ok = tuple(out_a.shape) == expected_output_shape and tuple(out_c.shape) == expected_output_shape
+    finite_ok = bool(torch.isfinite(out_a).all().item() and torch.isfinite(out_c).all().item())
     same_input_diff = float(torch.max(torch.abs(out_a - out_b)).item())
     perturb_diff = float(torch.max(torch.abs(out_a - out_c)).item())
 
+    actor_bounds = metadata.get("actor_mean_bounds")
+    if actor_bounds is not None:
+        lower, upper = (float(value) for value in actor_bounds)
+        bounds_ok = bool(
+            torch.all(out_a >= lower - 1e-6).item()
+            and torch.all(out_a <= upper + 1e-6).item()
+            and torch.all(out_c >= lower - 1e-6).item()
+            and torch.all(out_c <= upper + 1e-6).item()
+        )
+    else:
+        bounds_ok = None
+
     print(f"output_shape  : {tuple(out_a.shape)}")
+    print(f"expected_shape: {expected_output_shape}")
     print(f"finite_output : {finite_ok}")
     print(f"repeat_diff   : {same_input_diff:.8f}")
     print(f"perturb_diff  : {perturb_diff:.8f}")
+    print(f"bounded_output: {bounds_ok if bounds_ok is not None else 'not declared'}")
     print("actions       :")
     print(out_a.detach().cpu())
 
@@ -232,6 +284,14 @@ def main():
 
     if not finite_ok:
         raise RuntimeError("Model output contains NaN or Inf.")
+    if not shape_ok:
+        raise RuntimeError(
+            f"Model output shape mismatch: expected {expected_output_shape}, got {tuple(out_a.shape)}"
+        )
+    if same_input_diff > 1e-7:
+        raise RuntimeError(f"Deterministic model changed for identical input: max_abs_diff={same_input_diff}")
+    if bounds_ok is False:
+        raise RuntimeError(f"Model output violates declared actor bounds: {actor_bounds}")
 
 
 if __name__ == "__main__":

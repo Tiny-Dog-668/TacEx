@@ -45,11 +45,25 @@ D435 real: 640x480 RGB @ 30 Hz
 aligned simulation: direct 224x224 render with transformed crop intrinsics @ 30 Hz
   -> reference-centred brightness/contrast/gamma/blur/noise
   -> ImageNet normalization
-  -> frozen ResNet18
+  -> frozen ResNet18 in eval mode (BatchNorm running statistics never update)
   -> wrist_resnet [N, 512]
 ```
 
-对应 task 为 `TacEx-Sim2Real-Cube-Real-Alignment-v0`；`proprio_obs [N,15]` 和 `action_history [N,4]` 保持不变，policy 输出仍是 `[dx,dy,dz,gripper]`。相机外参没有出现在现实参考文件中，当前仅为近似对齐。
+对应 task 为 `TacEx-Sim2Real-Cube-Real-Alignment-v0`；`proprio_obs [N,15]` 和 `action_history [N,4]` 保持不变，policy 输出仍是 `[dx,dy,dz,gripper]`。Cube Actor 在 policy model 内执行 `tanh`，因此 deterministic mean 在训练、play 和 export 中统一位于 `[-1,1]`。相机外参没有出现在现实参考文件中，当前仅为近似对齐。
+
+动作历史时序为：
+
+```text
+actor action a_t
+  -> finite check / action_scale / clamp / optional action noise
+  -> processed_action p_t
+  -> observation history for transition: action_history_{t+1} = detach(p_t)
+  -> privileged near-table/object-XY dz gate modifies the IK-only arm command
+  -> IK and gripper control during transition t -> t+1
+  -> observation o_{t+1}
+```
+
+`action_history` 记录的是与该 transition 对应、privileged near-table `dz` gate 之前的 processed command；它不一定等于最终送入 IK 的 `dz`。sim2real Cube 配置的 action noise 为 0，因此范围为 `[-0.05,0.05]`。旧实现从 `prev_actions` 取值，会额外延迟一个决策周期。
 
 1. `vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera` 创建第三视角 `TiledCameraCfg`。
 2. `_get_observations` 读取 `self.third_person_camera.data.output["rgb"]`。

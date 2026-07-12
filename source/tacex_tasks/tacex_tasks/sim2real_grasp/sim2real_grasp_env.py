@@ -611,10 +611,15 @@ class Sim2RealGraspEnv(CylinderGraspingVisionOnlyEnv):
         if wrist_rgb is None:
             wrist_feat = torch.zeros((self.num_envs, 512), device=self.device, dtype=torch.float32)
         elif use_resnet18:
+            # The shared ImageNet encoder is frozen and must never update
+            # BatchNorm running statistics during environment rollouts.
+            self._resnet18.eval()
             x = wrist_rgb.to(torch.float32).permute(0, 3, 1, 2).contiguous() / 255.0
             x = self._apply_wrist_visual_randomization(x)
             x = F.interpolate(x, size=(224, 224), mode="bilinear", align_corners=False)
             x = (x - self._imgnet_mean) / self._imgnet_std
+            # Keep a regular detached tensor: the downstream Actor still needs
+            # to save this input while computing gradients for its own weights.
             with torch.no_grad():
                 wrist_feat = self._resnet18(x)
                 wrist_feat = wrist_feat.view(self.num_envs, 512)
@@ -788,4 +793,3 @@ class Sim2RealGraspEnv(CylinderGraspingVisionOnlyEnv):
 
         dones = time_out | collision_with_ground | success
         return dones, time_out
-

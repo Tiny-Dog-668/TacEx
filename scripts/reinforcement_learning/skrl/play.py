@@ -150,6 +150,16 @@ from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from isaaclab_tasks.utils import get_checkpoint_path, load_cfg_from_registry, parse_env_cfg
 
 import tacex_tasks  # noqa: F401
+from vision_encoder_artifact import (
+    ENCODER_ARTIFACT_FILENAME,
+    ENCODER_MANIFEST_FILENAME,
+    STRICT_SIM2REAL_CUBE_TASKS,
+    load_saved_env_config,
+    load_verified_vision_encoder,
+    validate_live_env_against_policy_contract,
+    validate_live_vision_contract,
+    validate_sim2real_policy_contract,
+)
 
 # config shortcuts
 algorithm = args_cli.algorithm.lower()
@@ -690,6 +700,14 @@ def main():
 
     # Prefer checkpoint-run configs for backward compatibility and train/play alignment.
     run_dir = os.path.dirname(os.path.dirname(resume_path))
+    strict_policy_contract = None
+    if args_cli.task in STRICT_SIM2REAL_CUBE_TASKS:
+        params_dir = os.path.join(run_dir, "params")
+        strict_policy_contract = validate_sim2real_policy_contract(
+            os.path.join(params_dir, ENCODER_MANIFEST_FILENAME),
+            task=args_cli.task,
+            params_dir=params_dir,
+        )
 
     checkpoint_agent_cfg = _load_pickle_if_exists(os.path.join(run_dir, "params", "agent.pkl"))
     if checkpoint_agent_cfg is None:
@@ -698,9 +716,13 @@ def main():
         experiment_cfg = checkpoint_agent_cfg
         print(f"[INFO] Loaded agent config from checkpoint run: {os.path.join(run_dir, 'params')}")
 
-    checkpoint_env_cfg = _load_env_cfg_from_checkpoint(run_dir)
-    if checkpoint_env_cfg is not None:
-        env_cfg = checkpoint_env_cfg
+    if strict_policy_contract is not None:
+        env_cfg, strict_env_cfg_path = load_saved_env_config(os.path.join(run_dir, "params"))
+        print(f"[INFO] Loaded exact strict environment config: {strict_env_cfg_path}")
+    else:
+        checkpoint_env_cfg = _load_env_cfg_from_checkpoint(run_dir)
+        if checkpoint_env_cfg is not None:
+            env_cfg = checkpoint_env_cfg
 
     if env_cfg is None:
         env_cfg = parse_env_cfg(
@@ -744,6 +766,18 @@ def main():
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+
+    if strict_policy_contract is not None:
+        params_dir = os.path.join(run_dir, "params")
+        base_env = env.unwrapped
+        encoder_manifest = load_verified_vision_encoder(
+            base_env._resnet18,
+            artifact_path=os.path.join(params_dir, ENCODER_ARTIFACT_FILENAME),
+            manifest_path=os.path.join(params_dir, ENCODER_MANIFEST_FILENAME),
+        )
+        validate_live_vision_contract(base_env, encoder_manifest)
+        validate_live_env_against_policy_contract(base_env, strict_policy_contract)
+        print(f"[INFO] Verified strict sim2real policy and encoder contract: {params_dir}")
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo", "ppo_rnn"]:

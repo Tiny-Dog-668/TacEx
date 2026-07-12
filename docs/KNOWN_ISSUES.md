@@ -98,3 +98,50 @@
 - 现象：存在多个类似训练/评估入口。
 - 风险：新协作者难以判断推荐入口；修复可能漏掉历史脚本。
 - 建议：先在文档中标出推荐入口；清理前查询 Git 历史和使用记录。
+
+## ISSUE-011 — 旧 sim2real Cube checkpoint 不兼容 strict deployment contract
+
+- 状态：已知行为，需要重新训练
+- 严重性：高
+- 位置：`logs/skrl/sim2real_cube_grasp/`、`logs/skrl/sim2real_cube_real_alignment/`
+- 现象：2026-07-12 修复前的 run 使用可能更新 BatchNorm running statistics 的 encoder、额外延迟一拍的 `action_history` 和 unbounded Actor mean；run 中也没有训练 encoder artifact/manifest。
+- 风险：旧 checkpoint 即使参数 shape 可以加载，其视觉、时间和动作语义也与新训练/真机 contract 不一致；为旧模型仅在 exporter 中增加 `tanh` 会进一步改变策略。
+- 当前处理：Cube train resume、play、play_bucket 和 exporter 都要求 v1 run contract；缺少 training-time `tanh`、task/config hash 或 verified encoder artifact 的旧 run fail closed。
+- 建议：使用当前配置从头训练，不要 resume 旧 checkpoint；checkpoint、`params/agent.*` 和 `params/vision_encoder_resnet18.*` 必须作为同一个 run 一起保留。
+
+## ISSUE-012 — `tanh` 约束 Actor mean，不是 squashed Gaussian sample
+
+- 状态：已知范围边界
+- 严重性：低到中
+- 位置：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_*_cfg_resnet18.yaml`
+- 现象：`output: "tanh(ACTIONS)"` 将 Gaussian mean 约束在 `[-1,1]`，确定性 play/export 因此有界；训练采样仍会叠加 Gaussian noise，单次 sampled action 理论上可越界。
+- 当前处理：环境在乘以 `action_scale` 后将 processed action clamp 到 `[-0.05,0.05]`；sim2real 环境额外 action noise 为 0。
+- 建议：若未来要求概率分布样本本身严格有界，应单独实现 squashed Gaussian 及其 log-prob/Jacobian 修正，并重新训练；不能只在采样后静默加 `tanh`。
+
+## ISSUE-013 — Sim2real Cube 仍有 privileged `dz` gate 与真机 history 配置差异
+
+- 状态：未处理；本次只修改仿真/训练侧指定 contract
+- 严重性：高
+- 位置：`cylinder_grasping_vision_only_resnet18.py:_pre_physics_step`、`franka/configs/e2e_bundle_real_exported_0712.json`
+- 现象：仿真在接近台面时使用 ground-truth object XY 决定是否允许负向 `dz`，真机没有该 privileged state；history 记录 gate 前 processed command，因此也不包含实际被阻止的 `dz`。当前真机 0712 配置仍是旧策略的 `history_scale=0.05, history_delay_steps=2`，arm adapter scale 约为新训练 contract 的十分之一，并使用阻塞 move，不能稳定等同 30 Hz 仿真控制。仿真夹爪则在每个 physics substep 重算增量 target，单个 policy step 的实际位移取决于 PD 跟踪，不能简化为固定宽度 delta。
+- 风险：即使视觉、history 单位和 Actor mean 已对齐，仿真控制 transition 仍可能与真机不同；直接复用旧真机配置会再次引入一拍 history 延迟、arm 约 10 倍尺度差异和不同的夹爪动态。
+- 建议：新策略部署配置至少使用 `history_source=clipped_action`、`history_scale=0.05`、`history_delay_steps=1`，并按 metadata 校验 XYZ 尺度、robot-root 坐标系、夹爪控制语义和实测周期；另行决定移除仿真 privileged gate，或在真机增加可验证的 object-pose safety gate 后重新训练。
+
+## ISSUE-014 — Run hashes 是一致性校验，不是签名认证
+
+- 状态：已知边界
+- 严重性：低
+- 位置：`vision_encoder_artifact.py`、`export_sim2real_grasp_jit.py`
+- 现象：manifest 绑定 config/encoder hash，export metadata 记录 checkpoint/TorchScript hash，可发现普通 config/encoder 误配和损坏；但训练时 manifest 尚未绑定之后产生的每个 checkpoint，当前依赖 `<run>/checkpoints/` 目录归属约定，sidecar 也没有数字签名。
+- 风险：把另一个同 shape checkpoint 放进该 run，或同时替换 artifact/manifest，当前机制不能证明 checkpoint 同源或发布者身份。
+- 建议：若未来需要供应链认证，对整个 deployment bundle 使用受信公钥签名；当前不要把 SHA-256 一致性描述为防篡改认证。
+
+## ISSUE-015 — 测试 discovery 引用了不存在的 skip target
+
+- 状态：未处理
+- 严重性：低
+- 位置：`tools/run_all_tests.py` 使用的 test skip 配置
+- 复现：`TERM=xterm conda run -n isaaclab_2.1.1 --no-capture-output ./tacex.sh -p tools/run_all_tests.py --discover_only`
+- 现象：Isaac warm start 成功后抛出 `ValueError: Test to skip 'test_argparser_launch.py' not found in tests.`。
+- 风险：标准 discovery 命令退出码为 1，不能作为 CI 发现阶段的成功信号。
+- 建议：从 skip 列表移除已不存在的测试，或把缺失 skip target 降级为 warning；修改前确认该测试是否应恢复。

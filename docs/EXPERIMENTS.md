@@ -11,12 +11,12 @@
 
 ## EXP-004 — Real-reference-aligned vision-only Cube PPO
 
-- 状态：200000-step checkpoint artifact 和 TorchScript export 已存在；策略效果结论待确认
+- 状态：历史 200000-step checkpoint artifact 和 TorchScript export 已存在，但它们来自 2026-07-12 strict sim2real contract 修复之前，仅保留作历史记录；修复后策略待重新训练
 - 实验类型：Franka + D435 vision-only Cube sim2real
 - Task id：`TacEx-Sim2Real-Cube-Real-Alignment-v0`
 - 现实依据：`20260711_214450_real_alignment_reference/alignment_reference.json` 和同目录 RGB reference images
 - 环境：`source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
-- Agent：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml`
+- 当前 Agent：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml`，Actor mean 已改为 `tanh(ACTIONS)`
 - Seed：42
 - Actor observation：`wrist_resnet:512`、`proprio_obs:15`、`action_history:4`
 - Action：4 维 `[dx, dy, dz, gripper]`
@@ -26,14 +26,18 @@
 - Num envs：256，依据 `training_summary.txt`
 - 日志目录：`logs/skrl/sim2real_cube_real_alignment/2026-07-11_23-15-23_ppo_torch_vision_only_resnet18/`
 - Checkpoint：`checkpoints/best_agent.pt`；同目录存在 `agent_200000.pt`
-- 部署 export：`checkpoints/exported/policy_actor_e2e_best_agent.pt` 和同名 JSON metadata
-- Export contract：raw uint8 RGB `[N,224,224,3]`、`proprio_obs [N,15]`、`action_history [N,4]` -> raw mean action `[N,4]`，nominal frequency 30 Hz
+- 历史部署 export：`checkpoints/exported/policy_actor_e2e_best_agent.pt` 和同名 JSON metadata；不能作为修复后 contract 的部署文件
+- 历史 Export contract：raw uint8 RGB `[N,224,224,3]`、`proprio_obs [N,15]`、`action_history [N,4]` -> unbounded raw mean action `[N,4]`，nominal frequency 30 Hz
 - Export validation：trace max abs error 0；synthetic/sim start/real median RGB 均输出 finite `(1,4)`，同输入重复误差 0；本机 CPU 平均推理约 8.4-9.3 ms
 - 普通 play metrics：`metrics/play/play_metrics_20260712_120929.csv` 当前记录的 success rate 为 `nan`，不能据此报告成功率
 - 已确认 smoke：环境可创建、reset、执行零动作；观测 shape 和动作空间正确。
 - 奖励 smoke：reset 后连续 4 个零动作得到 `lift_delta≈0.001 m`、`lift=0`、`success=0`、`total≈0.022`，未 terminated/truncated。
 - 5 cm 尺寸/阈值 smoke：实际 spawn size 为 `(0.05,0.05,0.05) m`；delta `[0,0.020,0.035] m` 得到 lift `[0,0.5,1]` 和 success `[False,False,True]`。
 - 图像对齐 smoke：按现实较平视的构图将相机拟合为 world `pos=(1.90,0.0,0.468)`、向下约 15°。seed 42 仿真帧 RGB mean `[70.6,113.0,70.1]`，现实 model median 为 `[80.1,113.0,81.9]`；方块中心分别为 `(86.6,128.6)` 和 `(85.6,128.5)` pixel。这是单帧外观检查，不是策略结果。
+- 修复后训练 contract：ResNet18 始终 `eval()` 且参数冻结；`action_history` 为上一拍 scaled/clamped processed action；Actor deterministic mean 为 `tanh(raw_mean)`；每个 run 保存可校验的 encoder artifact/manifest。
+- Checkpoint 兼容性：上述历史 checkpoint 虽然张量 shape 不变，但已经适应旧 BatchNorm、两拍延迟 history 和 unbounded mean 语义，不能 resume 后继续训练，也不能由 exporter 临时补 `tanh`；需要从头重新训练。
+- 修复后 checkpoint、部署 export、训练成功率和真机成功率：待确认，尚未执行新训练。
+- 修复后链路 smoke：`logs/skrl/sim2real_cube_real_alignment/2026-07-12_14-29-22_ppo_torch_vision_only_resnet18/` 以 1 env 完成 128 steps/一次 PPO update，并用测试 `agent_128.pt` 跑通 RGB/feature export、独立 JIT tester 和 2-step deterministic play。该 checkpoint 只验证代码链路，不计作策略效果实验。
 - 待确认：D435-to-Franka 外参、真实方块世界坐标/尺寸/质量/摩擦、真机成功率。
 
 ### EXP-004 推荐训练命令

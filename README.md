@@ -178,6 +178,15 @@ logs/skrl/ur10_robotiq_pick_place_direct/2026-04-08_15-44-54_ppo_torch/checkpoin
 
 `TacEx-Sim2Real-Cube-Real-Alignment-v0` is the vision-only Franka cube task aligned to `20260711_214450_real_alignment_reference`. It uses a measured 5x5x5 cm target cube, the captured Franka joint state and gripper width, the cropped D435 model-input intrinsics, a 30 Hz camera/policy cadence, an image-aligned table and cube start region, and reference-centred appearance randomization.
 
+The sim-to-real Cube policy contract is intentionally strict:
+
+- ResNet18 is frozen and kept in `eval()` so BatchNorm always uses the ImageNet running statistics.
+- `action_history [N,4]` in observation `t+1` is the pre-gate processed command associated with transition `t -> t+1`: actor action times `action_scale`, sanitized and clamped. The privileged near-table `dz` gate is applied afterwards, so its modified `dz` is not encoded in history.
+- The Gaussian Actor mean applies `tanh` inside the policy model and is therefore bounded to `[-1,1]` in training, deterministic playback, and export.
+- Each training run stores `params/vision_encoder_resnet18.pt` and `params/vision_encoder_resnet18.json`. The manifest binds the task, policy/history contract, deployment-relevant env values, agent/env config hashes, and encoder hashes. Keep the entire `params/` directory with the checkpoints.
+
+These changes preserve the 4-D action and observation dimensions but change visual, temporal, and Actor semantics. Checkpoints trained before this contract must be retrained rather than resumed or re-exported with the new configuration; train, play, bucket play, and export reject legacy Cube runs that lack the manifest contract.
+
 ```bash
 conda run -n isaaclab_2.1.1 --no-capture-output python \
   scripts/reinforcement_learning/skrl/train.py \
@@ -193,10 +202,11 @@ Run a checkpoint with the regular playback script:
 
 ```bash
 python scripts/reinforcement_learning/skrl/play.py \
-  --task TacEx-VT-Downsample-Drawer-Occlusion-Cube \
-  --num_envs 128 \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-v0 \
+  --checkpoint logs/skrl/sim2real_cube_real_alignment/<new-run>/checkpoints/best_agent.pt \
+  --num_envs 1 \
   --enable_cameras \
-  --checkpoint logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/checkpoints/best_agent.pt
+  --headless
 ```
 
 ### Export a sim-to-real cube policy
@@ -206,19 +216,25 @@ Export the trained Cube vision-only actor as an end-to-end CPU TorchScript model
 ```bash
 conda run -n isaaclab_2.1.1 --no-capture-output python \
   scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py \
-  --task TacEx-Sim2Real-Cube-Grasp-v0 \
-  --checkpoint logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/best_agent.pt \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-v0 \
+  --checkpoint logs/skrl/sim2real_cube_real_alignment/<new-run>/checkpoints/best_agent.pt \
   --num_envs 1 \
   --headless
 ```
 
-The default output is `checkpoints/exported/policy_actor_e2e_best_agent.pt`, accompanied by a JSON metadata file. The model inputs are batched `action_history` `[N, 4]`, `proprio_obs` `[N, 15]`, and `wrist_rgb` `[N, H, W, 3]` as uint8 RGB. Although the observation key remains `wrist_rgb`, this Cube task uses a fixed third-person camera. Its output is the raw four-dimensional actor mean `[dx, dy, dz, gripper]`; real-robot code must still reproduce the environment-side scaling, IK, limits, watchdog, and emergency-stop behavior.
+The default output is `checkpoints/exported/policy_actor_e2e_best_agent.pt`, accompanied by a JSON metadata file. The model inputs are batched `action_history` `[N, 4]`, `proprio_obs` `[N, 15]`, and `wrist_rgb` `[N, H, W, 3]` as uint8 RGB. Although the observation key remains `wrist_rgb`, this Cube task uses a fixed third-person camera. Its output is the tanh-bounded four-dimensional Actor mean `[dx, dy, dz, gripper]`; real-robot code must still reproduce `history_source=clipped_action`, `history_scale=0.05`, `history_delay_steps=1`, the robot-root XYZ frame, IK, gripper scaling, limits, watchdog, and emergency-stop behavior.
+
+The exporter restores the checkpoint run's saved agent and environment configs instead of applying the current registry values. It verifies task identity, config hashes, encoder identity, normalization, and finite outputs, then reloads the saved model and compares eager/traced/reloaded outputs and the embedded encoder hash. These hashes detect accidental config/encoder drift or corruption; checkpoint-to-run association still relies on the run-directory layout, and the hashes are not a cryptographic publisher signature.
+
+The gripper controller reapplies an incremental finger target on every physics substep. Its realized motion over one policy step depends on PD tracking and is not a fixed width delta; deployment code must not infer a single per-step gripper displacement from `action_scale` alone.
+
+The simulation still applies a privileged near-table `dz` gate using ground-truth object XY. A real robot cannot reproduce that gate without an object-pose estimator; this remaining control mismatch must be resolved or explicitly disabled before claiming end-to-end sim2real equivalence.
 
 Run the Isaac-independent smoke test after exporting:
 
 ```bash
 python scripts/reinforcement_learning/skrl/test_sim2real_grasp_policy_jit.py \
-  --model logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.pt
+  --model logs/skrl/sim2real_cube_real_alignment/<new-run>/checkpoints/exported/policy_actor_e2e_best_agent.pt
 ```
 
 Record one environment's rollout actions and state traces during playback:

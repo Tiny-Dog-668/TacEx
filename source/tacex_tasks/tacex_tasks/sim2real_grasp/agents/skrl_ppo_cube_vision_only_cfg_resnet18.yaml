@@ -18,7 +18,9 @@ models:
         input: "concatenate([wrist_resnet_identity, STATES['proprio_obs'], STATES['action_history']])"
         layers: [512, 256, 128, 64]
         activations: elu
-    output: ACTIONS
+    # Bound the Gaussian mean in the model itself so the training-time mean,
+    # deterministic play, and TorchScript export share the same transform.
+    output: "tanh(ACTIONS)"
   value:
     class: DeterministicMixin
     clip_actions: False
