@@ -9,6 +9,29 @@
 - 不确定的作者、意图、commit、seed、checkpoint 或结果统一写“待确认”。
 - 涉及观测、动作、奖励、done、网络输入维度或 checkpoint 兼容性的改动必须明确说明。
 
+## 2026-07-12 CST — 导出现实对齐 Cube best policy
+
+- 类型：checkpoint artifact / TorchScript export / 文档
+- 修改文件：
+  - `logs/skrl/sim2real_cube_real_alignment/2026-07-11_23-15-23_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.pt`
+  - `logs/skrl/sim2real_cube_real_alignment/2026-07-11_23-15-23_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.json`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 从该 run 的 `best_agent.pt` 导出包含 frozen ResNet18、state preprocessor 和 PPO Actor 的端到端 CPU TorchScript。
+  - 输入 contract 为 `action_history [N,4]`、`proprio_obs [N,15]`、`wrist_rgb [N,224,224,3] uint8 RGB`；输出为 raw mean `[dx,dy,dz,gripper]`。
+  - metadata 记录 nominal 30 Hz、environment action scale 0.05 和 trace error。
+- 影响的观测、动作、奖励、done、网络维度：无代码修改；仅固化已训练 checkpoint。
+- checkpoint 兼容性：源 checkpoint 已成功加载；export 专用于非 recurrent TorchScript inference。
+- 验证情况：
+  - export 退出码 0，`trace_max_abs_err=0`。
+  - synthetic RGB、run 内仿真起始帧、真实 `rgb_model_median.png` 三种输入均得到 finite `(1,4)` output，repeat diff 为 0。
+  - 本机 CPU 平均推理约 8.4-9.3 ms；TorchScript 大小 44.53 MiB，参数量 11,621,640。
+  - SHA-256：PT `9606058905f7204c54a5da24d56bfe139e2902ce889b980c72e5311bafd4fa67`；JSON `6095c2a91ddac73d895b963e9b301f1e18a2bbefb4952cb7a6dcd253e4db8dc3`。
+- 待确认：
+  - `play_metrics_20260712_120929.csv` 中 success rate 为 `nan`，仿真有效成功率待重新评估。
+  - 尚未执行真实 Franka 闭环部署、安全限幅验证或真实抓取成功率评估。
+
 ## 2026-07-04 CST — 新增四路触觉 + 本体 baseline 环境
 
 - 类型：代码 / 配置 / 文档
@@ -97,6 +120,124 @@
 - 待确认：
   - Isaac Sim 中该参数组是否足以从“果冻感”转为可夹持的橡胶块行为。
   - `density=300.0` 与当前物体尺寸下的质量是否符合任务期望；如仍难以抬起，可进一步下调密度或提高夹爪侧摩擦。
+
+## 2026-07-11 CST — 将现实对齐目标方块改为实测 5 cm
+
+- 类型：环境配置 / 奖励阈值 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
+  - `README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 现实对齐 task 使用独立 `0.05x0.05x0.05 m` Cuboid、`cube_half_xy_extent=0.025 m` 和相匹配的 inherited action gate radius。
+  - 保持 `lift_reward_start_delta=0.005 m` 过滤接触抖动；将现实对齐 task 的 `success_lift_delta` 从 0.040 m 调整为 0.035 m。
+  - 原 `TacEx-Sim2Real-Cube-Grasp-v0` 继续使用 6 cm 方块和 40 mm success delta，不受影响。
+- 影响的观测、动作、网络输入维度：无。
+- 影响的奖励/done：仅现实对齐 task 在相对抬升 35 mm 时达到完整 lift 和 success height 条件，仍需 upright 且 hold 5 steps。
+- checkpoint 兼容性：网络 shape 兼容，但物体几何和 success 阈值改变；当前训练必须重启并建议新开 run。
+- 验证情况：
+  - Isaac Sim headless 确认 cfg 和实际 spawn size 均为 `(0.05,0.05,0.05) m`。
+  - 静止 smoke：`center_z≈0.0360 m`、`lowest_z≈0.0110 m`、`lift_delta≈0.0010 m`、`lift=0`、`success=0`。
+  - 边界 smoke：delta `[0,0.020,0.035] m` 对应 lift `[0,0.5,1]`、success `[False,False,True]`。
+  - 5 cm 仿真方块 bbox 为 `(82,123)-(92,136)`，现实参考为 `(80,121)-(92,136)`。
+- 待确认：5 mm/35 mm 阈值的最终 PPO 训练和真机成功率。
+
+## 2026-07-11 CST — 修复 sim2real Cube 静止状态误获 lift reward
+
+- 类型：奖励修复 / 环境 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_grasp_env.py`
+  - `docs/DATA_FLOW.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 将 Cube lift reward 和 success 从绝对 world lowest-z 阈值改为相对每个 env reset lowest height 的抬升增量。
+  - 新增 `lift_reward_start_delta=0.005 m` 和 `success_lift_delta=0.040 m`。
+  - 删除 lift 计算中的 `base_reward=1` 跳变；lift progress 现在严格限制在 `[0,1]`。
+  - reward 与 done/success hold 共用 `_compute_cube_lift_terms()`，避免阈值语义漂移。
+  - 增加 `info/cube_lift_delta` 日志和 reward print 字段。
+- 影响的观测、动作：无；仍为原 observation dict 和 4 维 `[dx,dy,dz,gripper]`。
+- 影响的奖励：方块静止在台面时 lift 从原约 `1.093` 修正为 0；抬升 5 mm 后开始线性奖励，40 mm 时 lift=1 并满足 success height 条件。
+- 影响的 done/success：success hold 改用相对 reset 抬升 40 mm；timeout 和 ground collision 不变。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：模型参数和 shape 兼容；reward/done 语义改变，已有 checkpoint 的重新评估指标会变化，继续训练建议新开 run。
+- 验证情况：
+  - 已执行 `python -m py_compile` 和 `git diff --check`。
+  - 已用 Isaac Sim 4.5 headless 创建 `TacEx-Sim2Real-Cube-Real-Alignment-v0`，reset 后连续执行 4 个零动作。
+  - smoke 结果：`lift_delta=0.00099995`、`lift=0`、`success=0`、`total=0.022164`、`terminated=False`、`truncated=False`。
+  - lift terms 边界 smoke：delta `[0,0.0225,0.040] m` 分别得到 lift `[0,0.5,1]` 和 success `[False,False,True]`。
+- 待确认：
+  - 5 mm lift start 和 40 mm success delta 的最终训练效果需通过新 PPO run 确认。
+  - reach shaping 是否需要在 lift 修复后单独调大 `reach_sigma`，待观察训练曲线后决定。
+
+## 2026-07-11 CST — 新增现实参考对齐 Cube 强化学习环境
+
+- 类型：环境 / 配置 / sim2real / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml`
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/__init__.py`
+  - `scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py`
+  - `README.md`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：
+  - 注册 `TacEx-Sim2Real-Cube-Real-Alignment-v0`，使用独立 PPO 配置和 `sim2real_cube_real_alignment` 日志目录。
+  - 从 `20260711_214450_real_alignment_reference/alignment_reference.json` 对齐真实 Franka 七关节初态、夹爪开口、D435 crop 后内参、RGB 输入格式和 30 Hz 图像周期。
+  - 将 policy decimation 设为 2，使 60 Hz physics 下 policy/control dt 和 camera update period 都为 1/30 s。
+  - 新增深色台面和绿色背景近似，台面后沿与方块 nominal XY offset 根据 `rgb_model_median.png` 投影估计；保留小范围视觉和物体位置随机化。
+  - 根据现实画面更平视的构图，将相机从原约 60° 俯拍改为 world `pos=(1.90,0.0,0.468)`、光轴向下约 15°；同步恢复台面后沿到 robot base 附近并扩大台面前向范围。
+  - 将新 task 纳入 sim2real TorchScript exporter 支持列表。
+- 影响的观测：key 和维度保持 `wrist_resnet:512`、`proprio_obs:15`、`action_history:4` 以及原 `critic_*` keys；视觉内容、FOV 和更新周期改变。
+- 影响的动作：仍为 4 维 `[dx,dy,dz,gripper]`，`action_scale=0.05` 和 IK 逻辑不变；policy/control frequency 从原 Cube task 的 60 Hz 改为新 task 的 30 Hz。
+- 影响的奖励、done：无，继承 `Sim2RealCubeGraspEnv` 的 reach/lift/success 和 timeout/ground collision/sustained success 语义。
+- 影响的网络输入维度：无。
+- checkpoint 兼容性：网络结构兼容旧 Cube checkpoint，但视觉分布和时间尺度不同，不视为性能兼容；建议新 task 重新训练。
+- 验证情况：
+  - 已执行 Python `py_compile` 和 YAML parse。
+  - 已用 Isaac Sim 4.5 headless 创建 task、reset 并执行 4 次零动作；观测 shape、4 维动作、30 Hz control/camera period、真实关节初态均符合配置。
+  - 已初始化 skrl `Runner`，新 PPO Actor 对环境 observation 成功输出 finite `(1,4)` action。
+  - 已执行 `python -m compileall source scripts tools` 和 `git diff --check`，通过。
+  - seed 42 最终仿真帧 mean RGB 为 `[70.6,113.0,70.1]`；现实 `rgb_model_median.png` mean RGB 为 `[80.1,113.0,81.9]`。方块亮区中心分别约 `(86.6,128.6)` 与 `(85.6,128.5)` pixel。
+- 待确认：
+  - reference 明确未测量 D435-to-Franka 外参，当前相机位姿只是既有人工近似值。
+  - 真实方块世界坐标、尺寸、质量、摩擦和台面精确几何没有记录；当前物体/台面几何部分来自既有 task 和参考图估计。
+  - 尚未运行 PPO 训练、checkpoint 评估或真机闭环验证。
+
+## 2026-07-11 CST — 导出 Cube sim-to-real TorchScript policy
+
+- 类型：代码 / 部署工具 / checkpoint artifact / 文档
+- 修改文件：
+  - `scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py`
+  - `scripts/reinforcement_learning/skrl/test_sim2real_grasp_policy_jit.py`
+  - `README.md`
+  - `docs/DEVLOG.md`
+  - `logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.pt`
+  - `logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.json`
+- 修改内容：
+  - 将 `TacEx-Sim2Real-Cube-Grasp-v0` 加入现有 sim-to-real TorchScript 导出器的支持范围，保留原 cylinder task 支持。
+  - 为 sidecar JSON 增加 4 维动作语义、训练环境 nominal policy frequency 和 action scale。
+  - 从指定 `best_agent.pt` 导出包含冻结 ResNet18 和 actor 的端到端 CPU TorchScript 模型。
+  - 修复 smoke test 加载 Pillow 图像时 NumPy 数组只读导致的 PyTorch warning。
+- 影响的观测：不改变环境观测；导出模型接受 `action_history [N, 4]`、`proprio_obs [N, 15]` 和 `wrist_rgb [N, 224, 224, 3]` uint8。Cube task 中该 key 实际来自固定第三视角相机。
+- 影响的动作：不改变环境动作空间；模型输出 raw actor mean `[dx, dy, dz, gripper]`，真机控制器仍需实现 `action_scale=0.05`、IK 和安全约束。
+- 影响的奖励、done：无。
+- 影响的网络输入维度：无；只将已有 checkpoint 固化为 TorchScript。
+- checkpoint 兼容性：指定 checkpoint 已成功加载和导出，无需重新训练。
+- 验证情况：
+  - 已执行 `python -m py_compile scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py`，通过。
+  - 已执行 `conda run -n isaaclab_2.1.1 --no-capture-output python scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py --task TacEx-Sim2Real-Cube-Grasp-v0 --checkpoint logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/best_agent.pt --num_envs 1 --headless`，退出码 0；trace max absolute error 为 0。
+  - 已用 synthetic RGB 和训练 run 中保存的 224x224 相机帧分别执行 `test_sim2real_grasp_policy_jit.py`；输出 shape 均为 `(1, 4)`、数值有限、同输入重复误差为 0，本机 CPU 平均推理耗时在重复测试中约 6.7–12.8 ms。
+- 待确认：
+  - 尚未连接真实 Franka、真实相机或真机安全控制器；TorchScript 成功不等同于真实抓取成功。
+  - 真机相机的内参、外参、曝光、颜色分布与仿真相机的一致程度待标定。
+  - 当前 checkpoint 的真实成功率和闭环稳定性待低速、受限工作空间条件下验证。
 
 ## 2026-06-28 CST — 修正软体 damping scale 合法范围
 

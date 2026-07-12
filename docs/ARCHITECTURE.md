@@ -19,6 +19,7 @@ TacEx 采用 Isaac Lab extension 结构组织代码：
 | `source/tacex_assets/tacex_assets` | 资产配置 | `sensors/gelsight_mini/gsmini_cfg.py`、`robots/franka/franka_gsmini_gripper_rigid.py` |
 | `source/tacex_tasks/tacex_tasks` | RL task 包 | `__init__.py`、`occluded_grasping/*` |
 | `source/tacex_tasks/tacex_tasks/occluded_grasping` | 遮挡抓取环境、策略、agent YAML | `vt_box.py`、`vision_box.py`、`agents/ppo_vt_alpha_gru.yaml` |
+| `source/tacex_tasks/tacex_tasks/sim2real_grasp` | Franka vision-only sim2real Cube/Bottle 和现实参考对齐变体 | `sim2real_cube_grasp_env.py`、`sim2real_cube_real_alignment_env.py`、`agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml` |
 | `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace` | UR10 + Robotiq pick-place/grasp direct RL 环境 | `ur10_robotiq_pick_place_env.py`、`ur10_robotiq_2f85_pick_place_env_cfg.py`、`ur10_robotiq_2f85_third_person_pick_place_env.py`、`agents/skrl_ppo_cfg.yaml` |
 | `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_gripper_close` | UR10 + Robotiq 夹爪关闭 direct RL 环境 | `ur10_robotiq_gripper_close_env.py`、`agents/rsl_rl_ppo_cfg.py` |
 | `source/tacex_assets/tacex_assets/data/Robots/URRobotiq` | 迁移的 UR10 + Robotiq USD 资产 | `ur10_robotiq_2f85.usda`、`ur10_robotiq_140.usda`、`ur10_robotiq_f140.usda` |
@@ -111,6 +112,8 @@ UR10 + Robotiq 2F85 direct task 的控制方式：
 ## 7. 视觉模块
 
 第三视角相机配置：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera`。
+
+现实参考对齐相机配置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentEnvCfg.wrist_camera`。该配置把 D435 原始 640x480 图像的中央 480x480 crop 等效为直接 224x224 渲染，使用变换后的内参 `fx=282.4603, fy=282.2679, cx=113.1917, cy=116.3019`，并将 camera/policy 周期设为 30 Hz。当前图像拟合位姿为 world `pos=(1.90,0.0,0.468)`、光轴向下约 15°；Omniverse 4.5 不支持非方形像素和 aperture offset，会使用平均焦距和图像中心主点。该位姿仍是图像推算值，待 hand-eye calibration。
 
 视觉数据生成：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._get_observations` 从 `self.third_person_camera.data.output["rgb"]` 读取 RGB。
 

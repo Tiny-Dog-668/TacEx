@@ -1,4 +1,4 @@
-"""Export the TacEx sim2real grasp skrl actor as a TorchScript module.
+"""Export a TacEx sim2real grasp skrl actor as a TorchScript module.
 
 By default the exported module is end-to-end for deployment:
 
@@ -24,12 +24,19 @@ from packaging import version
 from isaaclab.app import AppLauncher
 
 
-parser = argparse.ArgumentParser(description="Export TacEx-Sim2Real-Grasp skrl actor to TorchScript.")
+SUPPORTED_TASKS = (
+    "TacEx-Sim2Real-Grasp-v0",
+    "TacEx-Sim2Real-Cube-Grasp-v0",
+    "TacEx-Sim2Real-Cube-Real-Alignment-v0",
+)
+
+
+parser = argparse.ArgumentParser(description="Export a TacEx sim2real grasp skrl actor to TorchScript.")
 parser.add_argument(
     "--task",
     type=str,
     default="TacEx-Sim2Real-Grasp-v0",
-    help="Task name. This exporter is intended for TacEx-Sim2Real-Grasp-v0.",
+    help=f"Task name. Supported tasks: {', '.join(SUPPORTED_TASKS)}.",
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to the skrl checkpoint.")
 parser.add_argument(
@@ -179,9 +186,9 @@ class Sim2RealGraspRgbActorWrapper(Sim2RealGraspFeatureActorWrapper):
 def main():
     algorithm = args_cli.algorithm.lower()
 
-    if args_cli.task != "TacEx-Sim2Real-Grasp-v0":
+    if args_cli.task not in SUPPORTED_TASKS:
         raise ValueError(
-            f"This exporter is task-specific. Expected --task TacEx-Sim2Real-Grasp-v0, got {args_cli.task}"
+            f"Unsupported task {args_cli.task!r}. Expected one of: {', '.join(SUPPORTED_TASKS)}"
         )
 
     env_cfg = parse_env_cfg(
@@ -326,6 +333,9 @@ def main():
             "output_signature": {
                 "mean_actions": [policy.num_actions],
             },
+            "action_semantics": ["dx", "dy", "dz", "gripper"],
+            "nominal_policy_frequency_hz": 1.0 / (float(env_cfg.sim.dt) * int(env_cfg.decimation)),
+            "environment_action_scale": float(env_cfg.action_scale),
             "notes": notes,
             "trace_max_abs_err": max_abs_err,
         }

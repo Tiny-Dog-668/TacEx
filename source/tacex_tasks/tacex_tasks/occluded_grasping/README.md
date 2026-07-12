@@ -39,6 +39,8 @@ VT-Downsample
 VT-Router-MAE-Downsample
 GelFusion
 GelFusion-Downsample
+GelFusion-ViT
+GelFusion-ViT-Downsample
 VT-Wrist
 VT-Pair
 VT-Pair-GRU
@@ -75,6 +77,7 @@ Alpha-Recon
 Dual-Alpha-Recon
 Gate-Alpha
 Hard-Gate
+Hard-Gate-Downsample
 GRU
 GRU-Downsample
 GRU-Extra-Tactile
@@ -130,7 +133,7 @@ python scripts/reinforcement_learning/skrl/train.py \
 
 ## GelFusion 风格 RL 对比环境
 
-`GelFusion` 和 `GelFusion-Downsample` 是对 Jiang et al. 2025 GelFusion 视触融合思路的 RL 复现分支，不是论文原版 Diffusion Policy。该分支保持当前遮挡抓取的 5 维 PPO action、奖励、done/success 语义和 privileged critic 输入不变，只改变 actor 侧观测和融合策略：
+`GelFusion`、`GelFusion-Downsample`、`GelFusion-ViT` 和 `GelFusion-ViT-Downsample` 是对 Jiang et al. 2025 GelFusion 视触融合思路的 RL 复现分支，不是论文原版 Diffusion Policy。该分支保持当前遮挡抓取的 5 维 PPO action、奖励、done/success 语义和 privileged critic 输入不变，只改变 actor 侧观测和融合策略：
 
 ```text
 third_resnet: 256
@@ -141,11 +144,27 @@ proprio_obs: 18
 
 policy 配置为 `agents/ppo_vt_gelfusion.yaml`，actor class 为 `vt_gelfusion_policy.py:OccludedGraspingVTGelFusionPolicy`。融合方式是 vision-led cross attention：视觉特征作为 query，视觉和四路触觉静态特征作为 key/value；输出再与原始视觉特征、8 维动态触觉统计和本体状态拼接。
 
+`GelFusion-ViT` 变体把视觉侧改为冻结预训练 ViT-B/16 CLS 特征：
+
+```text
+third_vit_cls: [2, 768]
+四路 tactile_*_depth_resnet: 每路 [2, 256]
+tactile_dynamic_stats: 8
+proprio_obs: [2, 18]
+```
+
+默认配置优先使用 `open_clip` 的 `ViT-B-16` / `openai` 预训练权重，保持冻结；如果本机没有 open_clip 或权重缓存，可在 cfg 中把 `vit_encoder_backend` 改成 `torchvision` 使用 ImageNet 预训练 ViT-B/16。`GelFusion-ViT` 默认 `gelfusion_obs_horizon=2`，视觉、四路触觉静态特征和 proprio 都保留最近两个 step；`tactile_dynamic_stats` 仍是四个触觉传感器的相邻帧二值差分 mean/variance。policy 配置为 `agents/ppo_vt_gelfusion_vit.yaml`，actor class 为 `vt_gelfusion_vit_policy.py:OccludedGraspingVTGelFusionViTPolicy`。
+
 建议与现有视觉受限 baseline 在同一 `Scene/Object` 上对比：
 
 ```bash
 python scripts/reinforcement_learning/skrl/train.py \
   --task TacEx-GelFusion-Downsample-Drawer-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-GelFusion-ViT-Downsample-Drawer-Occlusion-Cube \
   --num_envs 4 \
   --enable_cameras
 
@@ -516,6 +535,7 @@ action: 5
 | `Dual-Alpha-Recon` | vision latent `256`；down tactile latent `128`；inner tactile latent `128`；最终 MLP input 为 `256 + 128 + 128 = 512`；proprio 只用于两个 alpha gates |
 | `Gate-Alpha` | vision `256 -> 256`；tactile `1024 -> 256`；最终 input 为 `256 + 256 + 18 = 530`，并带有 tactile-valid gating |
 | `Hard-Gate` | 复用 `VT` policy：四个 tactile features 先从 `1024 -> 256`；再与 `third_resnet 256`、`proprio 18` 拼接，最终 input 为 `530`；没有接触的 tactile features 会在进入 policy 前被置零 |
+| `Hard-Gate-Downsample` | 与 `Hard-Gate` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet；用于和 `VT-Downsample` 做更公平的 Hansen-style hard tactile gate 对比 |
 | `GRU` | vision `256 -> 256`；每个 tactile sensor 使用 `10 * 256` 作为 GRU 输入，每个 GRU 输出 `128`；四个 tactile GRU latent `512 -> 256`；不使用 alpha gate，直接拼接得到最终 input `256 + 256 + 18 = 530` |
 | `GRU-Downsample` | 与 `GRU` 相同，但 third-person RGB 会先降到 `32x32` 再上采样到相机分辨率后进入 ResNet |
 | `GRU-Extra-Tactile` | 在 `GRU` 的基础上，额外取每个 tactile window 的最后一帧当前 tactile feature，四个传感器 `4 * 256 = 1024 -> 256` 后再拼接；最终 input 为 `256 + 256 + 256 + 18 = 786` |
@@ -649,6 +669,8 @@ proprio: 18
 final MLP input: 530
 no-contact tactile features: zeroed before policy
 ```
+
+`Hard-Gate-Downsample` 保持上述硬门控和 policy 结构不变，只把第三视角 RGB 视觉输入改为 `32x32` downsample degradation，适合与 `VT-Downsample` 对齐比较。
 
 对 `Gate-Alpha` 来说，alpha gate 会额外使用 `tactile_valid`：
 

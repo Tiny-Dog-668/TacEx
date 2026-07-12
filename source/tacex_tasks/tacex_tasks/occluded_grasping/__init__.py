@@ -128,6 +128,7 @@ from .vt_gate_box import (
 from .vt_hard_gate_box import (
     OccludedGraspingVTHardGateBoxCfg,
     OccludedGraspingVTHardGateBoxEnv,
+    OccludedGraspingVTHardGateDownsampleBoxCfg,
 )
 from .vt_dual_cross_alpha_aux_box import (
     OccludedGraspingVTDualCrossAlphaAuxBoxEnv,
@@ -153,6 +154,11 @@ from .vt_gelfusion_box import (
     OccludedGraspingVTGelFusionBoxCfg,
     OccludedGraspingVTGelFusionBoxEnv,
     OccludedGraspingVTGelFusionDownsampleBoxCfg,
+)
+from .vt_gelfusion_vit_box import (
+    OccludedGraspingVTGelFusionViTBoxCfg,
+    OccludedGraspingVTGelFusionViTBoxEnv,
+    OccludedGraspingVTGelFusionViTDownsampleBoxCfg,
 )
 from .vt_sparsh import (
     OccludedGraspingVisionFourTactileSparshBoxCfg,
@@ -352,6 +358,16 @@ def _register_scene_object_fusion_matrix() -> None:
             OccludedGraspingVTGelFusionDownsampleBoxCfg,
             "ppo_vt_gelfusion.yaml",
         ),
+        "GelFusion-ViT": (
+            f"{__name__}.vt_gelfusion_vit_box:OccludedGraspingVTGelFusionViTBoxEnv",
+            OccludedGraspingVTGelFusionViTBoxCfg,
+            "ppo_vt_gelfusion_vit.yaml",
+        ),
+        "GelFusion-ViT-Downsample": (
+            f"{__name__}.vt_gelfusion_vit_box:OccludedGraspingVTGelFusionViTBoxEnv",
+            OccludedGraspingVTGelFusionViTDownsampleBoxCfg,
+            "ppo_vt_gelfusion_vit.yaml",
+        ),
         "VT-Wrist": (
             f"{__name__}.vt_box:OccludedGraspingVisionFourTactileWristBoxEnv",
             OccludedGraspingVisionFourTactileWristBoxCfg,
@@ -530,6 +546,11 @@ def _register_scene_object_fusion_matrix() -> None:
         "Hard-Gate": (
             f"{__name__}.vt_hard_gate_box:OccludedGraspingVTHardGateBoxEnv",
             OccludedGraspingVTHardGateBoxCfg,
+            "ppo_vt.yaml",
+        ),
+        "Hard-Gate-Downsample": (
+            f"{__name__}.vt_hard_gate_box:OccludedGraspingVTHardGateBoxEnv",
+            OccludedGraspingVTHardGateDownsampleBoxCfg,
             "ppo_vt.yaml",
         ),
         "GRU": (

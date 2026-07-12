@@ -66,7 +66,7 @@ def _load_rgb_image(image_path: Path, height: int, width: int) -> torch.Tensor:
     image = Image.open(image_path).convert("RGB")
     if image.size != (width, height):
         image = image.resize((width, height))
-    return torch.from_numpy(np.asarray(image, dtype=np.uint8))
+    return torch.from_numpy(np.asarray(image, dtype=np.uint8).copy())
 
 
 def _build_rgb_input(args, height: int, width: int) -> torch.Tensor:

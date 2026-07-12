@@ -36,7 +36,7 @@ SoftCube
 SoftCuboid
 ```
 
-The fusion axis includes vision-only, tactile-proprioception, vision-tactile, GelFusion-style, alpha-gated, GRU, cross-attention, auxiliary-head, Sparsh, and token-transformer variants. See `source/tacex_tasks/tacex_tasks/occluded_grasping/README.md` for the complete list.
+The fusion axis includes vision-only, tactile-proprioception, vision-tactile, GelFusion-style, frozen ViT GelFusion-style, alpha-gated, GRU, cross-attention, auxiliary-head, Sparsh, and token-transformer variants. See `source/tacex_tasks/tacex_tasks/occluded_grasping/README.md` for the complete list.
 
 ## Main Components
 
@@ -66,6 +66,7 @@ The main environment `OccludedGraspingVisionFourTactileBoxEnv` exposes policy ob
 
 - `proprio_obs`: robot joint positions and velocities.
 - `third_resnet`: third-person RGB camera features.
+- `third_vit_cls`: optional frozen ViT-B/16 CLS visual feature used by GelFusion-ViT tasks.
 - `tactile_left_depth_resnet`, `tactile_right_depth_resnet`, `tactile_left_down_depth_resnet`, `tactile_right_down_depth_resnet`: four GelSight tactile feature streams.
 - `tactile_dynamic_stats`: optional GelFusion-style 8D tactile frame-difference statistics exposed by GelFusion tasks.
 - Privileged critic keys for object pose, gripper pose, velocities, and target distance.
@@ -110,6 +111,15 @@ Example training command from the registered occluded-grasping tasks:
 ```bash
 python scripts/reinforcement_learning/skrl/train.py \
   --task TacEx-Alpha-GRU-Drawer-Occlusion-Cube \
+  --num_envs 4 \
+  --enable_cameras
+```
+
+GelFusion-style PPO with a frozen ViT-B/16 visual encoder:
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-GelFusion-ViT-Downsample-Drawer-Occlusion-Cuboid \
   --num_envs 4 \
   --enable_cameras
 ```
@@ -164,6 +174,21 @@ logs/skrl/ur10_robotiq_pick_place_direct/2026-04-08_15-44-54_ppo_torch/checkpoin
 
 ## Evaluate
 
+### Train the real-reference-aligned cube task
+
+`TacEx-Sim2Real-Cube-Real-Alignment-v0` is the vision-only Franka cube task aligned to `20260711_214450_real_alignment_reference`. It uses a measured 5x5x5 cm target cube, the captured Franka joint state and gripper width, the cropped D435 model-input intrinsics, a 30 Hz camera/policy cadence, an image-aligned table and cube start region, and reference-centred appearance randomization.
+
+```bash
+conda run -n isaaclab_2.1.1 --no-capture-output python \
+  scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-v0 \
+  --num_envs 4 \
+  --enable_cameras \
+  --headless
+```
+
+The D435-to-Franka extrinsics were not measured in the reference capture. The task therefore retains the existing approximate third-person pose; perform hand-eye calibration before treating the camera pose as physically calibrated.
+
 Run a checkpoint with the regular playback script:
 
 ```bash
@@ -172,6 +197,28 @@ python scripts/reinforcement_learning/skrl/play.py \
   --num_envs 128 \
   --enable_cameras \
   --checkpoint logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_downsample_box/checkpoints/best_agent.pt
+```
+
+### Export a sim-to-real cube policy
+
+Export the trained Cube vision-only actor as an end-to-end CPU TorchScript model:
+
+```bash
+conda run -n isaaclab_2.1.1 --no-capture-output python \
+  scripts/reinforcement_learning/skrl/export_sim2real_grasp_jit.py \
+  --task TacEx-Sim2Real-Cube-Grasp-v0 \
+  --checkpoint logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/best_agent.pt \
+  --num_envs 1 \
+  --headless
+```
+
+The default output is `checkpoints/exported/policy_actor_e2e_best_agent.pt`, accompanied by a JSON metadata file. The model inputs are batched `action_history` `[N, 4]`, `proprio_obs` `[N, 15]`, and `wrist_rgb` `[N, H, W, 3]` as uint8 RGB. Although the observation key remains `wrist_rgb`, this Cube task uses a fixed third-person camera. Its output is the raw four-dimensional actor mean `[dx, dy, dz, gripper]`; real-robot code must still reproduce the environment-side scaling, IK, limits, watchdog, and emergency-stop behavior.
+
+Run the Isaac-independent smoke test after exporting:
+
+```bash
+python scripts/reinforcement_learning/skrl/test_sim2real_grasp_policy_jit.py \
+  --model logs/skrl/sim2real_cube_grasp/2026-06-26_23-14-35_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.pt
 ```
 
 Record one environment's rollout actions and state traces during playback:

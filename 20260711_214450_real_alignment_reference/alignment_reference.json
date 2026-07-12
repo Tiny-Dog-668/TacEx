@@ -1,0 +1,417 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T21:44:50.735551+08:00",
+  "read_only": true,
+  "config_path": "/home/td/franka/configs/e2e_bundle_real_exported_0711.json",
+  "robot_ip": "172.16.0.2",
+  "realtime": "ignore",
+  "robot_state_before_capture": {
+    "joint_positions_rad": [
+      -0.3077768694457032,
+      -0.11490349419892411,
+      0.30181493015057165,
+      -2.2731998141397707,
+      0.040613268755509774,
+      2.162421075317457,
+      0.7543247225501507
+    ],
+    "joint_positions_deg": [
+      -17.634315650987734,
+      -6.5834852689042895,
+      17.292721691663495,
+      -130.24475534013203,
+      2.3269688919212435,
+      123.89760114583139,
+      43.21962298450043
+    ],
+    "joint_velocities_rad_s": [
+      -0.0005337551528372829,
+      0.0011233057125049296,
+      0.0007233838348229819,
+      -1.2987223874533227e-05,
+      0.0008438151280894037,
+      1.5397780950240567e-05,
+      -0.0011824287715994607
+    ],
+    "tcp_translation_m": [
+      0.49998982197469377,
+      4.579863911954694e-05,
+      0.29960897436378287
+    ],
+    "tcp_quaternion_xyzw": [
+      0.9999998917466458,
+      0.00028020726388140884,
+      -0.00032042434476837784,
+      0.00018793303331175488
+    ],
+    "external_wrench": [
+      -1.4716660038104807,
+      -0.1830344061427455,
+      0.5057934709080429,
+      0.27692903409951314,
+      -0.9919924276095964,
+      -0.1049018696622127
+    ],
+    "robot_mode": "Idle",
+    "has_errors": false,
+    "is_in_control": false,
+    "control_command_success_rate": 0.0,
+    "current_errors": [],
+    "last_motion_errors": [],
+    "gripper": {
+      "width_m": 0.040001507848501205,
+      "max_width_m": 0.08000498265028,
+      "is_grasped": false
+    }
+  },
+  "robot_state_after_capture": {
+    "joint_positions_rad": [
+      -0.3077769501145293,
+      -0.1149074494041184,
+      0.3018120132320026,
+      -2.2731993479404773,
+      0.040610189816458656,
+      2.1624223440707153,
+      0.7543268048764865
+    ],
+    "joint_positions_deg": [
+      -17.63432027297101,
+      -6.583711885469031,
+      17.292554564540303,
+      -130.2447286288801,
+      2.326792481708236,
+      123.89767384003835,
+      43.219742293011045
+    ],
+    "joint_velocities_rad_s": [
+      -0.0008352238204674291,
+      -0.0005986299199431087,
+      0.00024799369480994375,
+      0.0003211136601019645,
+      0.0007257518555873955,
+      0.00013081026764407138,
+      -0.00034251056911517163
+    ],
+    "tcp_translation_m": [
+      0.49998834305747947,
+      4.274461764703577e-05,
+      0.2996094942717822
+    ],
+    "tcp_quaternion_xyzw": [
+      0.9999998921358163,
+      0.0002778223331989186,
+      -0.0003208137560930385,
+      0.00018873696219271263
+    ],
+    "external_wrench": [
+      -1.412518100470421,
+      -0.1088203744852535,
+      0.401258400393942,
+      0.24280079790407919,
+      -0.9115922421533191,
+      -0.0678720606264457
+    ],
+    "robot_mode": "Idle",
+    "has_errors": false,
+    "is_in_control": false,
+    "control_command_success_rate": 0.0,
+    "current_errors": [],
+    "last_motion_errors": [],
+    "gripper": {
+      "width_m": 0.040001507848501205,
+      "max_width_m": 0.08000498265028,
+      "is_grasped": false
+    }
+  },
+  "robot_drift_during_capture": {
+    "max_abs_joint_delta_rad": 3.955205194292044e-06,
+    "tcp_translation_delta_m": 3.432862888185175e-06
+  },
+  "camera": {
+    "device": {
+      "name": "Intel RealSense D435",
+      "serial_number": "143422072019",
+      "firmware_version": "5.17.3.10",
+      "product_line": "D400",
+      "usb_type_descriptor": "3.2"
+    },
+    "stream": {
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "format": "rgb8"
+    },
+    "intrinsics_raw": {
+      "width": 640,
+      "height": 480,
+      "fx_px": 605.27197265625,
+      "fy_px": 604.8598022460938,
+      "cx_px": 322.5535583496094,
+      "cy_px": 249.21844482421875,
+      "camera_matrix_3x3": [
+        [
+          605.27197265625,
+          0.0,
+          322.5535583496094
+        ],
+        [
+          0.0,
+          604.8598022460938,
+          249.21844482421875
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "horizontal_fov_deg": 55.72973765514065,
+      "vertical_fov_deg": 43.284985998915765,
+      "distortion_model": "inverse_brown_conrady",
+      "distortion_coefficients": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "color_sensor_options": {
+      "enable_auto_exposure": {
+        "value": 1.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "step": 1.0,
+          "default": 1.0
+        }
+      },
+      "exposure": {
+        "value": 166.0,
+        "range": {
+          "minimum": 1.0,
+          "maximum": 10000.0,
+          "step": 1.0,
+          "default": 166.0
+        }
+      },
+      "gain": {
+        "value": 64.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 128.0,
+          "step": 1.0,
+          "default": 64.0
+        }
+      },
+      "enable_auto_white_balance": {
+        "value": 1.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "step": 1.0,
+          "default": 1.0
+        }
+      },
+      "white_balance": {
+        "value": 4600.0,
+        "range": {
+          "minimum": 2800.0,
+          "maximum": 6500.0,
+          "step": 10.0,
+          "default": 4600.0
+        }
+      },
+      "brightness": {
+        "value": 0.0,
+        "range": {
+          "minimum": -64.0,
+          "maximum": 64.0,
+          "step": 1.0,
+          "default": 0.0
+        }
+      },
+      "contrast": {
+        "value": 50.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "step": 1.0,
+          "default": 50.0
+        }
+      },
+      "saturation": {
+        "value": 64.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "step": 1.0,
+          "default": 64.0
+        }
+      },
+      "sharpness": {
+        "value": 50.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "step": 1.0,
+          "default": 50.0
+        }
+      },
+      "gamma": {
+        "value": 300.0,
+        "range": {
+          "minimum": 100.0,
+          "maximum": 500.0,
+          "step": 1.0,
+          "default": 300.0
+        }
+      },
+      "power_line_frequency": {
+        "value": 3.0,
+        "range": {
+          "minimum": 0.0,
+          "maximum": 3.0,
+          "step": 1.0,
+          "default": 3.0
+        }
+      }
+    },
+    "capture": {
+      "warmup_frames": 30,
+      "captured_frames": 10,
+      "frame_timestamps_ms": [
+        1783777489624.0674,
+        1783777489657.3386,
+        1783777489690.6057,
+        1783777489723.8684,
+        1783777489757.1267,
+        1783777489790.3806,
+        1783777489823.6304,
+        1783777489856.8757,
+        1783777489890.1165,
+        1783777489923.353
+      ],
+      "frame_rgb_mean_mean": [
+        84.46881608072917,
+        116.35569173177082,
+        86.0837578125
+      ],
+      "frame_rgb_mean_std": [
+        1.2141135229211497,
+        0.16495098243420395,
+        0.6650169685547573
+      ],
+      "mean_abs_difference_from_median": 1.003110647201538,
+      "max_abs_difference_from_median": 1.3711371421813965
+    },
+    "configured": {
+      "serial": null,
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "warmup_frames": 30
+    },
+    "crop": {
+      "enabled": true,
+      "left": 80,
+      "top": 0,
+      "right": 560,
+      "bottom": 480,
+      "width": 480,
+      "height": 480
+    },
+    "intrinsics_cropped": {
+      "width": 480,
+      "height": 480,
+      "fx_px": 605.27197265625,
+      "fy_px": 604.8598022460938,
+      "cx_px": 242.55355834960938,
+      "cy_px": 249.21844482421875,
+      "camera_matrix_3x3": [
+        [
+          605.27197265625,
+          0.0,
+          242.55355834960938
+        ],
+        [
+          0.0,
+          604.8598022460938,
+          249.21844482421875
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "horizontal_fov_deg": 43.25823269608666,
+      "vertical_fov_deg": 43.284985998915765,
+      "distortion_model": "inverse_brown_conrady",
+      "distortion_coefficients": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "intrinsics_model_input": {
+      "width": 224,
+      "height": 224,
+      "fx_px": 282.46025390625,
+      "fy_px": 282.2679077148438,
+      "cx_px": 113.19166056315105,
+      "cy_px": 116.30194091796875,
+      "camera_matrix_3x3": [
+        [
+          282.46025390625,
+          0.0,
+          113.19166056315105
+        ],
+        [
+          0.0,
+          282.2679077148438,
+          116.30194091796875
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "horizontal_fov_deg": 43.25823269608666,
+      "vertical_fov_deg": 43.284985998915765,
+      "distortion_model": "inverse_brown_conrady",
+      "distortion_coefficients": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "resize_scale_x": 0.4666666666666667,
+      "resize_scale_y": 0.4666666666666667
+    }
+  },
+  "model_input": {
+    "width": 224,
+    "height": 224,
+    "layout": "HWC",
+    "color_order": "RGB",
+    "dtype": "uint8"
+  },
+  "files": {
+    "raw_median": "rgb_raw_median.png",
+    "raw_last": "rgb_raw_last.png",
+    "crop_median": "rgb_crop_median.png",
+    "model_median": "rgb_model_median.png",
+    "model_last": "rgb_model_last.png",
+    "comparison": "comparison.png"
+  },
+  "notes": {
+    "tcp_quaternion_order": "x, y, z, w",
+    "camera_to_robot_extrinsics": "Not measured; requires hand-eye calibration.",
+    "median_frame": "Pixel-wise median of the captured RGB frames after warmup."
+  }
+}

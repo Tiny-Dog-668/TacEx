@@ -101,8 +101,14 @@ class Sim2RealCubeGraspEnvCfg(Sim2RealGraspEnvCfg):
     cube_rot_range = 0.0
     cube_half_xy_extent = 0.5 * max(cube_size[0], cube_size[1])
 
+    # Legacy absolute thresholds are retained for saved-config compatibility.
+    # Cube reward/done use the reset-relative delta fields below.
     lift_reward_start_lowest_height = 0.007
     success_lowest_height = 0.05
+    # Cube lift/success are measured relative to the lowest point at reset.
+    # This prevents a cube resting on a raised table from receiving lift reward.
+    lift_reward_start_delta = 0.005
+    success_lift_delta = 0.040
     success_hold_steps = 5
     lift_upright_tilt_threshold_deg = 20.0
 
@@ -214,6 +220,29 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         world_corners = rotated + cube_pos.unsqueeze(1)
         return torch.min(world_corners[:, :, 2], dim=1).values
 
+    def _compute_cube_lift_terms(
+        self,
+        current_lowest_height: torch.Tensor,
+        upright_cos: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute reset-relative lift delta, dense progress, and success mask."""
+        spawn_lowest_height = self._cylinder_spawn_height_per_env - 0.5 * float(self.cfg.cube_size[2])
+        lift_delta = current_lowest_height - spawn_lowest_height
+
+        lift_start_delta = max(0.0, float(self.cfg.lift_reward_start_delta))
+        success_lift_delta = max(float(self.cfg.success_lift_delta), lift_start_delta + 1e-6)
+        lift_span = success_lift_delta - lift_start_delta
+        lift_progress = torch.clamp(
+            (lift_delta - lift_start_delta) / lift_span,
+            min=0.0,
+            max=1.0,
+        )
+
+        upright = upright_cos >= self._lift_upright_cos_threshold
+        lift_reward = lift_progress * upright.float()
+        success = (lift_delta >= success_lift_delta) & upright
+        return lift_delta, lift_reward, success
+
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         """Return clean cube critic keys while reusing the sim2real visual/proprio path."""
         observations = super()._get_observations()
@@ -244,18 +273,11 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         upright_cos = self._compute_cube_upright_cos(self._cube.data.root_quat_w)
         upright_tilt_deg = torch.rad2deg(torch.acos(upright_cos))
-        upright_mask = (upright_cos >= self._lift_upright_cos_threshold).float()
 
         current_height = cube_pos[:, 2]
         current_lowest_height = self._compute_cube_lowest_height(cube_pos, self._cube.data.root_quat_w)
-        lift_start_height = float(self.cfg.lift_reward_start_lowest_height)
-        success_height = float(self.cfg.success_lowest_height)
-        lift_span = max(success_height - lift_start_height, 1e-6)
-        base_reward = (current_lowest_height > lift_start_height).float()
-        linear_reward = torch.clamp((current_lowest_height - lift_start_height) / lift_span, min=0.0, max=1.0)
-        lift_reward = (base_reward + linear_reward) * upright_mask
-
-        success_reward = (current_lowest_height > success_height).float() * upright_mask
+        lift_delta, lift_reward, success = self._compute_cube_lift_terms(current_lowest_height, upright_cos)
+        success_reward = success.float()
 
         rewards = (
             self.cfg.reach_weight * reach_reward
@@ -271,6 +293,7 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         log["info/reach_distance"] = reach_distance.mean().detach()
         log["info/cube_avg_height"] = current_height.mean().detach()
         log["info/cube_lowest_height"] = current_lowest_height.mean().detach()
+        log["info/cube_lift_delta"] = lift_delta.mean().detach()
         log["info/cube_upright_cos"] = upright_cos.mean().detach()
         log["info/cube_tilt_deg"] = upright_tilt_deg.mean().detach()
         log["info/success_hold_steps"] = self._success_hold_counter.to(torch.float32).mean().detach()
@@ -285,6 +308,7 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
                 f"hold={self._success_hold_counter.float().mean().item():.2f}/{self.cfg.success_hold_steps}, "
                 f"center_z={current_height.mean().item():.4f} m, "
                 f"lowest_z={current_lowest_height.mean().item():.4f} m, "
+                f"lift_delta={lift_delta.mean().item():.4f} m, "
                 f"total={rewards.mean().item():.3f}"
             )
 
@@ -307,9 +331,7 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
             self._cube.data.root_quat_w,
         )
         upright_cos = self._compute_cube_upright_cos(self._cube.data.root_quat_w)
-        above_success_height = (current_lowest_height > float(self.cfg.success_lowest_height)) & (
-            upright_cos >= self._lift_upright_cos_threshold
-        )
+        _, _, above_success_height = self._compute_cube_lift_terms(current_lowest_height, upright_cos)
         self._success_hold_counter = torch.where(
             above_success_height,
             self._success_hold_counter + 1,

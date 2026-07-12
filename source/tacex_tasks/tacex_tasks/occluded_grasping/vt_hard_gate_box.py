@@ -50,6 +50,14 @@ class OccludedGraspingVTHardGateBoxCfg(OccludedGraspingVisionFourTactileBoxCfg):
             setattr(self, attr_name, sensor_cfg)
 
 
+@configclass
+class OccludedGraspingVTHardGateDownsampleBoxCfg(OccludedGraspingVTHardGateBoxCfg):
+    """Hard tactile gate with downsampled third-person RGB."""
+
+    visual_degradation_mode = "downsample"
+    visual_downsample_size = 32
+
+
 class OccludedGraspingVTHardGateBoxEnv(OccludedGraspingVisionFourTactileBoxEnv):
     """Hard-gate each tactile branch by per-sensor depth-based contact detection."""
 

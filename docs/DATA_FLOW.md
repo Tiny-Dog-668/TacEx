@@ -35,6 +35,22 @@ policy action
 
 ## 3. 视觉数据流
 
+现实参考对齐 Cube 分支使用相同的 frozen ResNet18 编码路径，但传感器和时间契约为：
+
+```text
+D435 real: 640x480 RGB @ 30 Hz
+  -> crop x=[80, 560), y=[0, 480)
+  -> resize 480x480 to 224x224
+
+aligned simulation: direct 224x224 render with transformed crop intrinsics @ 30 Hz
+  -> reference-centred brightness/contrast/gamma/blur/noise
+  -> ImageNet normalization
+  -> frozen ResNet18
+  -> wrist_resnet [N, 512]
+```
+
+对应 task 为 `TacEx-Sim2Real-Cube-Real-Alignment-v0`；`proprio_obs [N,15]` 和 `action_history [N,4]` 保持不变，policy 输出仍是 `[dx,dy,dz,gripper]`。相机外参没有出现在现实参考文件中，当前仅为近似对齐。
+
 1. `vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera` 创建第三视角 `TiledCameraCfg`。
 2. `_get_observations` 读取 `self.third_person_camera.data.output["rgb"]`。
 3. RGB 被转为 float 并归一化到 `[0, 1]`。
@@ -160,6 +176,18 @@ Critic 使用 privileged keys。以 `ppo_vt_alpha_gru.yaml` 为例，value netwo
 - inner/down tactile contact reward 由触觉 RGB 差分 contact bits 给出
 
 触觉 contact 计算：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._compute_tactile_contact_rewards` 使用 reset-time tactile RGB baseline 与当前 tactile RGB 的像素差分。
+
+`Sim2RealCubeGraspEnv` 及其现实对齐子类使用 reset-relative Cube lift：
+
+```text
+spawn_lowest = reset_center_z - cube_height / 2
+lift_delta = current_lowest - spawn_lowest
+lift_progress = clamp((lift_delta - lift_start_delta) / (success_delta - lift_start_delta), 0, 1)
+lift_reward = lift_progress * upright_mask
+success = (lift_delta >= success_delta) and upright
+```
+
+方块静止在台面时 lift reward 为 0。基础 6 cm Cube task 使用 `lift_start_delta=5 mm`、`success_delta=40 mm`；现实对齐 5 cm Cube task 覆盖为 `lift_start_delta=5 mm`、`success_delta=35 mm`。旧的绝对高度字段为 saved cfg 兼容保留，但不再用于 Cube reward/done。
 
 ## 11. 终止与成功判定
 

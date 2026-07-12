@@ -33,6 +33,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 
 ## 4. 当前已实现功能
 
+- 现实参考对齐的 vision-only Cube task：`TacEx-Sim2Real-Cube-Real-Alignment-v0`。它使用实测 5x5x5 cm 方块，并从 `20260711_214450_real_alignment_reference/alignment_reference.json` 对齐 Franka 初态、夹爪宽度、D435 crop 后 224x224 内参和 30 Hz 图像/策略周期；台面后沿、背景颜色和方块 nominal 图像位置来自参考图估计。相机外参未测量，当前使用图像拟合近似位姿。
 - Franka Panda + GS Mini gripper 任务配置：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.robot` 使用 `source/tacex_assets/tacex_assets/robots/franka/franka_gsmini_gripper_rigid.py:FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG`。
 - 第三视角 RGB 相机：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera`。
 - 四路触觉输入：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.gsmini_left`、`gsmini_right`、`gsmini_left_down`、`gsmini_right_down`。
@@ -40,6 +41,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 - 观测字典：`proprio_obs`、`third_resnet`、四路 tactile feature、critic privileged keys：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.observation_space`、`_get_observations`。
 - 触觉 + 本体 baseline：`vt_tactile_box.py` 暴露 `proprio_obs` 和四路 tactile feature 给 actor，注册 task 包括 `TacEx-T-Drawer-Occlusion-Cube` 等矩阵组合。
 - GelFusion 风格 RL 分支：`vt_gelfusion_box.py` 额外提供 8 维 `tactile_dynamic_stats`，`vt_gelfusion_policy.py` 实现 vision-led cross attention actor；注册 task 包括 `TacEx-GelFusion-Drawer-Occlusion-Cube` 和 `TacEx-GelFusion-Downsample-Drawer-Occlusion-Cube` 等矩阵组合。
+- Hansen-style hard tactile gate 对比：`vt_hard_gate_box.py` 在环境层用 tactile depth baseline contact ratio 对四路 tactile feature 做硬门控；注册 task 包括 `TacEx-Hard-Gate-Drawer-Occlusion-Cube` 和 `TacEx-Hard-Gate-Downsample-Drawer-Occlusion-Cube` 等矩阵组合。
 - 奖励：reach、lift、success、drop-after-success、inner/down tactile contact：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._get_rewards`、`_compute_tactile_contact_rewards`。
 - done：timeout 或 robot body 低于 `ground_height`；success 只统计不终止：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._get_dones`。
 - skrl PPO 训练入口：`scripts/reinforcement_learning/skrl/train.py:main`。
@@ -123,6 +125,12 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 5. 对已存在 checkpoint 和 metrics 建立 `docs/EXPERIMENTS.md` 中的实验索引。
 
 ## 12. 快速开始
+
+现实参考对齐 Cube task：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py --task TacEx-Sim2Real-Cube-Real-Alignment-v0 --num_envs 4 --enable_cameras --headless
+```
 
 已确认训练命令示例：
 
