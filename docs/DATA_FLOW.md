@@ -38,32 +38,99 @@ policy action
 现实参考对齐 Cube 分支使用相同的 frozen ResNet18 编码路径，但传感器和时间契约为：
 
 ```text
-D435 real: 640x480 RGB @ 30 Hz
-  -> crop x=[80, 560), y=[0, 480)
-  -> resize 480x480 to 224x224
+aligned simulation camera: direct 224x224 RGB @ 30 Hz
+  -> centered 300 px-focal coverage render
+  -> fixed GPU warp to calibrated K=[338.742544,0,123.748857;
+                                     0,340.550811,120.393372;
+                                     0,0,1]
+  -> clean task: no image or scene appearance randomization
+  -> DR task, episode-fixed per env:
+       calibrated pose * delta XYZ/RPY
+       -> GPU focal/principal-point affine warp
+       -> brightness/contrast/saturation/gamma/hue/white balance/blur
+       -> frame-wise Gaussian pixel noise
+       -> per-env near-black plate/backdrop colors centered on Clean
+       -> batch-global DomeLight only on full-batch reset
+  -> DR range scale: 0.00 through step 100k (exact Clean visual path)
+                     linear 0.00 -> 1.00 from 100k to 220k
+                     full range from 220k to the 300k training end
 
-aligned simulation: direct 224x224 render with transformed crop intrinsics @ 30 Hz
-  -> reference-centred brightness/contrast/gamma/blur/noise
+Real-Alignment deployment camera: 640x480 RGB @ 30 Hz
+  -> crop x=[100,500), y=[34,432) to 400x398
+  -> bilinear resize to 224x224
+
+both paths:
   -> ImageNet normalization
   -> frozen ResNet18 in eval mode (BatchNorm running statistics never update)
   -> wrist_resnet [N, 512]
 ```
 
-对应 task 为 `TacEx-Sim2Real-Cube-Real-Alignment-v0`；`proprio_obs [N,15]` 和 `action_history [N,4]` 保持不变，policy 输出仍是 `[dx,dy,dz,gripper]`。Cube Actor 在 policy model 内执行 `tanh`，因此 deterministic mean 在训练、play 和 export 中统一位于 `[-1,1]`。相机外参没有出现在现实参考文件中，当前仅为近似对齐。
+Clean task 为 `TacEx-Sim2Real-Cube-Real-Alignment-v0`，DR task 为 `TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`。两者的 `proprio_obs [N,15]`、`action_history [N,4]`、policy 输出 `[dx,dy,dz,gripper_total_width_delta]` 及全部控制/奖励语义一致，只有随机化 profile 和日志目录不同。DR 参数不进入 Actor/Critic observation，课程阶段是全局训练进度而不是特权状态。Cube Actor 在 policy model 内执行 `tanh`，因此 deterministic mean 在训练、play 和 export 中统一位于 `[-1,1]`。
+
+Privileged reward/control diagnostic 使用另一条 Actor 数据流：
+
+```text
+cube root position world - env_origin       -> privileged_cube_pos [N,3]
+left/right fingertip world midpoint
+  - env_origin                              -> privileged_gripper_pos [N,3]
+cube position - gripper midpoint            -> privileged_target_pos [N,3]
+
+concat(proprio [N,15], history [N,4],
+       cube/gripper/target positions [N,9])  -> MLP Actor [N,28]
+                                             -> tanh action [N,4]
+```
+
+该路径不创建 RGB camera、不读取 pixel buffer、也不构造 ResNet18。后续 IK、奖励和 done 复用 Clean 实现，但显式保留旧的夹爪 `2 mm/step` 和物体 `x/y ±10 cm` reset 配置；位置真值不可在现实部署侧获得。
 
 动作历史时序为：
 
 ```text
 actor action a_t
-  -> finite check / action_scale / clamp / optional action noise
-  -> processed_action p_t
+  -> finite check / per-dimension scale / clamp
+  -> xyz processed command [0.025*x, 0.025*y, 0.025*z]
+  -> requested total-width delta 0.005*g
+  -> cached desired_width = clamp(previous_desired_width + 0.005*g, 0, 0.08)
   -> observation history for transition: action_history_{t+1} = detach(p_t)
-  -> privileged near-table/object-XY dz gate modifies the IK-only arm command
-  -> IK and gripper control during transition t -> t+1
+  -> IK plus symmetric finger targets desired_width/2 during transition t -> t+1
   -> observation o_{t+1}
 ```
 
-`action_history` 记录的是与该 transition 对应、privileged near-table `dz` gate 之前的 processed command；它不一定等于最终送入 IK 的 `dz`。sim2real Cube 配置的 action noise 为 0，因此范围为 `[-0.05,0.05]`。旧实现从 `prev_actions` 取值，会额外延迟一个决策周期。
+当前 Clean/DR Real-Alignment v9 的 `action_history` 逐维 scale 为 `[0.025,0.025,0.025,0.005] m`；保留的 v8/v7 contract 分别为 `[0.025,0.025,0.025,0.002]` 与 `[0.010,0.010,0.010,0.002] m`。第四维记录请求的总宽度增量，即使缓存目标已在 0/80 mm 边界而被 clamp，也保留请求值。缓存宽度每个 policy step 只更新一次，后续 `_apply_action()` 只重发同一目标。Sim2real Cube 禁用 privileged `dz` gate，因此前三维 history 与送入 IK 的请求 XYZ 一致；随后仍可能受 IK、关节限位和工作空间约束。Cylinder 保留 legacy gate 和 uniform `0.05` processed history。
+
+当前 `sim.dt=1/60 s`、`decimation=2`：physics 为 60 Hz，camera/render/policy/action/observation/reward/history 为 30 Hz。每个 policy step 内，`_apply_action()` 在两个 physics substep 重发同一缓存夹爪目标，但总宽度只在 `_pre_physics_step()` 累加一次。`episode_length_s=5.0`，所以 timeout horizon 为 150 个 policy steps。
+
+批量 rollout 诊断的数据流为：
+
+```text
+saved env.pkl + exported Actor metadata/hash
+  -> exact saved environment config
+  -> uint8 RGB + action_history + proprio_obs
+  -> CPU TorchScript Actor
+  -> normalized action [N,4]
+  -> environment processed action / IK / gripper target
+  -> pre/post transition snapshots
+  -> NPZ [T,N,...]
+  -> offline CSV + episode-step action/state plots
+```
+
+DirectRLEnv 在 `env.step()` 内自动 reset 已完成环境，因此 collector 的 `next_*` 对 done transition 表示 reset 后的新 episode 状态；离线 state plot 会排除这些 done transition，CSV 保留原始值并同时提供 `done` 字段。
+
+Real-Alignment 抓取中心数据流为：
+
+```text
+panda_leftfinger pose  + local [0,0,0.045] -> left fingertip world position
+panda_rightfinger pose + local [0,0,0.045] -> right fingertip world position
+                                                |
+                                                v
+                                    midpoint of both fingertips
+                                      -> reach reward distance
+                                      -> critic_gripper_pos
+                                      -> critic_target_pos/distance
+
+panda_hand pose + local [0,0,0.1034] -> fixed IK/Jacobian TCP
+```
+
+Actor 仍只读取 `wrist_resnet [N,512]`、`proprio_obs [N,15]` 和 `action_history [N,4]`，没有增加 privileged center 输入；critic 继续使用 privileged state，但 Actor 输出后的控制链不再读取方块真值。
 
 1. `vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera` 创建第三视角 `TiledCameraCfg`。
 2. `_get_observations` 读取 `self.third_person_camera.data.output["rgb"]`。
@@ -191,17 +258,60 @@ Critic 使用 privileged keys。以 `ppo_vt_alpha_gru.yaml` 为例，value netwo
 
 触觉 contact 计算：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._compute_tactile_contact_rewards` 使用 reset-time tactile RGB baseline 与当前 tactile RGB 的像素差分。
 
-`Sim2RealCubeGraspEnv` 及其现实对齐子类使用 reset-relative Cube lift：
+Real-Alignment 使用 settled-center-relative Cube lift，并额外计算桌面碰撞：
 
 ```text
-spawn_lowest = reset_center_z - cube_height / 2
-lift_delta = current_lowest - spawn_lowest
+settled_center = reset_center_z + cube_rest_offset + plate_rest_offset
+lift_delta = current_center_z - settled_center
 lift_progress = clamp((lift_delta - lift_start_delta) / (success_delta - lift_start_delta), 0, 1)
-lift_reward = lift_progress * upright_mask
-success = (lift_delta >= success_delta) and upright
+lift_reward = lift_progress
+success = lift_delta >= success_delta
+table_collision = max(filtered table/robot normal force over 2 physics substeps) > 1 N
+reward = 5*reach + 15*lift + 100*success - 10*table_collision
 ```
 
-方块静止在台面时 lift reward 为 0。基础 6 cm Cube task 使用 `lift_start_delta=5 mm`、`success_delta=40 mm`；现实对齐 5 cm Cube task 覆盖为 `lift_start_delta=5 mm`、`success_delta=35 mm`。旧的绝对高度字段为 saved cfg 兼容保留，但不再用于 Cube reward/done。
+RMA-style Student 的每步数据流为：
+
+```text
+calibrated wrist_rgb uint8 [N,224,224,3]
+  -> frozen ImageNet ResNet18 layer4 [N,512,7,7]
+  -> trainable 1x1 conv + 32-channel spatial softmax [N,64]
+  -> trainable shared MLP
+     -> normalized predicted cube XYZ [N,3]
+     -> predicted left/right contact logits [N,2] -> sigmoid probabilities
+  -> denormalized predicted cube XYZ in robot-root frame
+proprio joint positions [N,7] -> embedded Panda FK -> fingertip midpoint XYZ [N,3]
+predicted cube XYZ - fingertip XYZ -> relative target XYZ [N,3]
+  -> frozen shared RMAActorCore 30-D features including predicted contact[2]
+  -> student tanh action [N,4] -> env.step
+
+sim cube XYZ -> normalized target -> SmoothL1 position loss
+sim cube-finger filtered force >= 0.2 N -> contact target[2] -> BCE contact loss
+sim cube XYZ + true contact -> same frozen RMAActorCore -> teacher action -> action MSE
+```
+
+RMA Student DR task 在上述 `calibrated wrist_rgb` 与 Student adaptation head
+之间插入全强度视觉扰动；每个 episode 为每环境采样相机 `delta XYZ/RPY`、焦距/主点
+warp、brightness/contrast/saturation/gamma/hue/white-balance 和 blur 参数，pixel
+Gaussian noise 每帧重采样。板/背景颜色也按 episode 重采样，DomeLight 仅在全环境
+batch reset 时更新，因为它属于共享 USD stage。该 task 的 `dr_curriculum_enabled=false`，
+所以全部范围从第 1 个 policy update 起生效；RGB shape/dtype 仍为
+`uint8 [N,224,224,3]`，本体/history、特权 loss label、动作、奖励与 done 均不变。
+
+Actor Core 在两个动作分支中是同一份冻结参数；动作 loss 仍通过 Actor 对 cube
+位置、相对位置与连续接触概率的 Jacobian 回传到 adaptation head。末端 XYZ 由
+`proprio_obs[:7]` 在模型内计算，不读取仿真 link 真值；特权 cube XYZ 不进入
+Student `forward()`，真实接触标签也不进入部署前向。当前 Actor 不使用 cube
+quaternion 或 end-effector quaternion。Teacher/Student 使用相同的 RMA 接触
+reward contract：权重3.0、single-contact fraction 1.0；Clean/DR仍使用原公式。
+
+RMA 的策略动作尺度仍与 Clean 相同：第四维为 `0.010*g m` 的总夹爪宽度增量。
+只有 RMA copied robot cfg 的 finger actuator 被降低为 `effort_limit_sim=40`、
+`stiffness=400`、`damping=40`，用于减少强位置伺服导致的 cube/finger 嵌入。
+
+方块静止在台面时 lift reward 为 0；现实对齐 5 cm Cube 使用 `lift_start_delta=0 mm`、`success_delta=35 mm`，因此 17.5 mm 对应 lift 0.5。倾角仍计算并写日志，但不作用于 lift、success 或 done。RMA Teacher/Student 中 success 只用于奖励和 episode 统计，不触发 done；episode 仅因 timeout 或严重机器人穿地碰撞结束。木板 ContactSensor 是每环境单一 sensor body，过滤 `panda_link1–7`、`panda_hand` 和两侧 finger，因此方块落桌或 finger 接触方块不会单独触发撞桌惩罚。
+
+基础任务的奖励控制台每 `reward_print_interval=200` 个 policy steps 打印一次。RMA Teacher/Student 单独使用精简行：`reach/lift/success/contact/table` 均为打印时刻跨环境平均后的加权奖励贡献，`total` 为当前平均总奖励，`avg_reward_200` 为最近200步的平均总奖励，`success_window_200` 为该窗口内已终止 episode 中曾达到 success 的比例，`avg_lift` 为当前跨环境平均的质心抬升高度（mm）。TensorBoard `extras["log"]` 仍保留原有完整诊断字段。
 
 ## 11. 终止与成功判定
 

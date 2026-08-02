@@ -892,6 +892,8 @@ def main():
         env_cfg.robot_joint_pos_noise = 0.0
     if hasattr(env_cfg, "robot_joint_vel_noise"):
         env_cfg.robot_joint_vel_noise = 0.0
+    if hasattr(env_cfg, "cube_position_curriculum_force_full_range"):
+        env_cfg.cube_position_curriculum_force_full_range = True
     if hasattr(env_cfg, "reset_jitter_max_steps"):
         # vt_box.py samples torch.randint(0, reset_jitter_max_steps);
         # 1 disables jitter while keeping the upper bound valid.
@@ -919,6 +921,8 @@ def main():
         print(f"[INFO] Evaluation override: robot_joint_pos_noise={env_cfg.robot_joint_pos_noise}")
     if hasattr(env_cfg, "robot_joint_vel_noise"):
         print(f"[INFO] Evaluation override: robot_joint_vel_noise={env_cfg.robot_joint_vel_noise}")
+    if hasattr(env_cfg, "cube_position_curriculum_force_full_range"):
+        print("[INFO] Evaluation override: cube position sampling uses the full configured XY range")
     if hasattr(env_cfg, "reset_jitter_max_steps"):
         print(f"[INFO] Evaluation override: reset_jitter_max_steps={env_cfg.reset_jitter_max_steps}")
     if hasattr(env_cfg, "aux_alpha_use_bbox3d") and hasattr(env_cfg, "aux_alpha_fallback_occlusion"):

@@ -82,6 +82,10 @@ class CustomEnvWindow(BaseEnvWindow):
 class CylinderGraspingVisionOnlyCfg(DirectRLEnvCfg):
     """Configuration for the cylinder grasping environment with wrist-camera vision."""
 
+    # State-only descendants can disable encoder construction without changing
+    # the default behavior of any existing vision task.
+    vision_encoder_enabled = True
+
     # viewer settings
     viewer: ViewerCfg = ViewerCfg()
     viewer.eye = (1.9, 1.4, 0.3)
@@ -298,6 +302,10 @@ class CylinderGraspingVisionOnlyCfg(DirectRLEnvCfg):
     finger_tip_offset = 0.02
     # 板面相对板中心的 z 偏移（m）（block.usd 厚度 0.01 -> 顶面偏移 ~0.005）
     plate_top_offset = 0.005
+    # Legacy Cylinder tasks retain the ground-truth object-XY dz gate. Sim2real
+    # Cube configs disable it because the real deployment cannot observe object
+    # ground truth after the Actor has produced its command.
+    privileged_dz_gate_enabled = True
 
     # task specific parameters 
     cylinder_height = 0.06  # 匹配CylinderCfg中的高度
@@ -366,7 +374,7 @@ class CylinderGraspingVisionOnlyEnv(DirectRLEnv):
         self._wrist_offset_rot = wrist_offset_rot.unsqueeze(0).repeat(self.num_envs, 1)
 
         # Optional ResNet18 backbone for wrist RGB -> 512-d feature
-        self._use_resnet18 = _HAS_TORCHVISION
+        self._use_resnet18 = bool(getattr(self.cfg, "vision_encoder_enabled", True)) and _HAS_TORCHVISION
         if self._use_resnet18:
             backbone = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             # remove final fc; keep feature extractor
@@ -503,37 +511,59 @@ class CylinderGraspingVisionOnlyEnv(DirectRLEnv):
         arm_actions[:, 3] = 0.0  # roll = 0
         arm_actions[:, 4] = 0.0  # pitch = 0  
         arm_actions[:, 5] = 0.0  # yaw = 0
+        # Diagnostic buffers distinguish the Actor-requested Cartesian command
+        # from the command that is eventually sent to differential IK. They do
+        # not participate in control and are useful when replaying legacy
+        # sim2real policies that used the privileged dz gate.
+        self._last_requested_arm_command = arm_actions.detach().clone()
+        self._last_privileged_dz_gate_active = torch.zeros(
+            self.num_envs,
+            device=self.device,
+            dtype=torch.bool,
+        )
         
         # 获取当前末端执行器位姿（相对模式需要）
         ee_pos_curr_b, ee_quat_curr_b = self._compute_frame_pose()
 
-        # 设置IK命令（相对模式需要传递当前位姿）
-        # 动作门控（更宽松）：
-        # - 当指尖接近板面但不在物体附近时，阻止进一步下探；
-        # - 当接近物体时，允许小幅下探以促成接触与夹持；
-        finger_l = self._robot.data.body_link_pos_w[:, self._left_finger_body_idx]
-        finger_r = self._robot.data.body_link_pos_w[:, self._right_finger_body_idx]
-        min_finger_tip_z = torch.minimum(finger_l[:, 2], finger_r[:, 2]) - self.cfg.finger_tip_offset
-        plate_top_z = self._plate.data.root_pos_w[:, 2] + self.cfg.plate_top_offset
-        # 末端与圆柱在 XY 平面上的距离（用于判断是否已对准）
-        ee_xy = self._robot.data.body_link_pos_w[:, self._body_idx, :2]
-        obj_xy = self._cylinder.data.root_pos_w[:, :2]
-        near_obj_xy = torch.norm(obj_xy - ee_xy, dim=-1) < (2.0 * self.cfg.cylinder_radius)
-        near_plate = min_finger_tip_z < (plate_top_z + self.cfg.safety_plate_clearance)
-        if (near_plate & (~near_obj_xy)).any():
-            dz = arm_actions[:, 2]
-            dz = torch.where(near_plate & (~near_obj_xy), torch.clamp(dz, min=0.0), dz)
-            arm_actions[:, 2] = dz
-        # 若已在物体上方且接近板面，允许小幅负向 dz（避免“悬停学不会接触”）
-        if (near_plate & near_obj_xy).any():
-            dz = arm_actions[:, 2]
-            dz = torch.where(near_plate & near_obj_xy, torch.clamp(dz, min=-0.005), dz)
-            arm_actions[:, 2] = dz
+        # Optional legacy privileged gate. It reads ground-truth object XY and
+        # therefore must be disabled for policies intended for real deployment.
+        if bool(self.cfg.privileged_dz_gate_enabled):
+            min_finger_tip_z = self._compute_action_gate_finger_tip_z()
+            plate_top_z = self._plate.data.root_pos_w[:, 2] + self.cfg.plate_top_offset
+            ee_xy = self._compute_action_gate_center_xy()
+            obj_xy = self._cylinder.data.root_pos_w[:, :2]
+            near_obj_xy = torch.norm(obj_xy - ee_xy, dim=-1) < (2.0 * self.cfg.cylinder_radius)
+            near_plate = min_finger_tip_z < (plate_top_z + self.cfg.safety_plate_clearance)
+            if (near_plate & (~near_obj_xy)).any():
+                gate_mask = near_plate & (~near_obj_xy) & (arm_actions[:, 2] < 0.0)
+                dz = arm_actions[:, 2]
+                dz = torch.where(near_plate & (~near_obj_xy), torch.clamp(dz, min=0.0), dz)
+                arm_actions[:, 2] = dz
+                self._last_privileged_dz_gate_active |= gate_mask
+            if (near_plate & near_obj_xy).any():
+                gate_mask = near_plate & near_obj_xy & (arm_actions[:, 2] < -0.005)
+                dz = arm_actions[:, 2]
+                dz = torch.where(near_plate & near_obj_xy, torch.clamp(dz, min=-0.005), dz)
+                arm_actions[:, 2] = dz
+                self._last_privileged_dz_gate_active |= gate_mask
+        self._last_ik_arm_command = arm_actions.detach().clone()
         self._ik_controller.set_command(arm_actions, ee_pos_curr_b, ee_quat_curr_b)
         # obs(t+1) must contain the processed command associated with transition
         # t -> t+1. Using prev_actions here introduced one additional delay.
-        # This is the scaled/clamped/noisy action before the privileged dz gate.
+        # This is the scaled/clamped/noisy requested action. For sim2real Cube
+        # tasks the privileged dz gate is disabled, so xyz also matches the IK
+        # command before ordinary IK/joint/workspace limits.
         self.action_history = self.processed_actions.detach().clone()
+
+    def _compute_action_gate_finger_tip_z(self) -> torch.Tensor:
+        """Return the legacy finger-tip height estimate used by the dz safety gate."""
+        finger_l = self._robot.data.body_link_pos_w[:, self._left_finger_body_idx]
+        finger_r = self._robot.data.body_link_pos_w[:, self._right_finger_body_idx]
+        return torch.minimum(finger_l[:, 2], finger_r[:, 2]) - self.cfg.finger_tip_offset
+
+    def _compute_action_gate_center_xy(self) -> torch.Tensor:
+        """Return the legacy panda-hand XY point used by the dz safety gate."""
+        return self._robot.data.body_link_pos_w[:, self._body_idx, :2]
 
     def _apply_action(self):
         """Apply actions to the robot using IK controller."""

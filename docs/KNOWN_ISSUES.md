@@ -115,17 +115,19 @@
 - 严重性：低到中
 - 位置：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_*_cfg_resnet18.yaml`
 - 现象：`output: "tanh(ACTIONS)"` 将 Gaussian mean 约束在 `[-1,1]`，确定性 play/export 因此有界；训练采样仍会叠加 Gaussian noise，单次 sampled action 理论上可越界。
-- 当前处理：环境在乘以 `action_scale` 后将 processed action clamp 到 `[-0.05,0.05]`；sim2real 环境额外 action noise 为 0。
+- 当前处理：环境将 normalized action clamp 到 `[-1,1]` 后逐维缩放；通用 Cube 为 `0.05`，当前 Clean/DR Real-Alignment v9 为 XYZ `0.025 m/step`、夹爪总宽度 `0.005 m/step`；保留的 v8/v7 contract 分别为 25/2 mm 与 10/2 mm。Sim2real 环境额外 action noise 为 0。
 - 建议：若未来要求概率分布样本本身严格有界，应单独实现 squashed Gaussian 及其 log-prob/Jacobian 修正，并重新训练；不能只在采样后静默加 `tanh`。
 
-## ISSUE-013 — Sim2real Cube 仍有 privileged `dz` gate 与真机 history 配置差异
+## ISSUE-013 — Real-Alignment v8 真机 contract 已静态对齐，硬件时序待验证
 
-- 状态：未处理；本次只修改仿真/训练侧指定 contract
+- 状态：部分解决；代码和独立配置已对齐，硬件闭环待验证
 - 严重性：高
 - 位置：`cylinder_grasping_vision_only_resnet18.py:_pre_physics_step`、`franka/configs/e2e_bundle_real_exported_0712.json`
-- 现象：仿真在接近台面时使用 ground-truth object XY 决定是否允许负向 `dz`，真机没有该 privileged state；history 记录 gate 前 processed command，因此也不包含实际被阻止的 `dz`。当前真机 0712 配置仍是旧策略的 `history_scale=0.05, history_delay_steps=2`，arm adapter scale 约为新训练 contract 的十分之一，并使用阻塞 move，不能稳定等同 30 Hz 仿真控制。仿真夹爪则在每个 physics substep 重算增量 target，单个 policy step 的实际位移取决于 PD 跟踪，不能简化为固定宽度 delta。
-- 风险：即使视觉、history 单位和 Actor mean 已对齐，仿真控制 transition 仍可能与真机不同；直接复用旧真机配置会再次引入一拍 history 延迟、arm 约 10 倍尺度差异和不同的夹爪动态。
-- 建议：新策略部署配置至少使用 `history_source=clipped_action`、`history_scale=0.05`、`history_delay_steps=1`，并按 metadata 校验 XYZ 尺度、robot-root 坐标系、夹爪控制语义和实测周期；另行决定移除仿真 privileged gate，或在真机增加可验证的 object-pose safety gate 后重新训练。
+- 当前处理：Cube 配置设 `privileged_dz_gate_enabled=false`；Clean/DR v9 使用 400x398 crop、XYZ `25 mm/step`、夹爪总宽度 `5 mm/step`、一拍 history 和 `x/y ±5 cm` reset。历史 `franka/configs/e2e_bundle_real_alignment_v8_25mm.json` 仍严格对应旧 v8 的 25/2 mm 与 `x/y ±10 cm`，不能用于 v9。Runner 保留 v7/v8 严格读取能力。
+- 剩余现象：robot-root XYZ 符号、30 Hz 周期抖动、新 crop 边界和 GPU 有效 K 补偿仍需在真实硬件闭环验证；当前短训练策略没有稳定 lift/success。
+- 风险：同 shape 的 v7/v8/v9 checkpoint 不能交换配置；25 mm 最大单步平移和 v9 的 5 mm 夹爪总宽度增量均需在第一轮硬件测试前生成匹配 bundle，并预览、逐步确认。
+- 实测：该 v3 run 的 32-env、450-step exported-Actor rollout 共得到 98 个完成 episode，仅 7 个 success terminal（7.14%）；episode 第一步 Z/夹爪 action 近饱和比例分别为 93.08%/89.23%，夹爪目标有 76.51% transition 饱和在 80 mm。该批 rollout 中 legacy `dz` gate 实际触发率为 0%，所以本批失败不能归因于 gate 在执行时替 policy 兜底。
+- 建议：历史 v8 run 只使用独立 v8 配置；当前 v9 必须从头训练并另行生成 v9 bundle。首次连接真机先执行 preview，再用 `--confirm-step --steps 1` 单步观察。
 
 ## ISSUE-014 — Run hashes 是一致性校验，不是签名认证
 
@@ -145,3 +147,40 @@
 - 现象：Isaac warm start 成功后抛出 `ValueError: Test to skip 'test_argparser_launch.py' not found in tests.`。
 - 风险：标准 discovery 命令退出码为 1，不能作为 CI 发现阶段的成功信号。
 - 建议：从 skip 列表移除已不存在的测试，或把缺失 skip target 降级为 warning；修改前确认该测试是否应恢复。
+
+## ISSUE-016 — DR task 的 DomeLight 仍是跨环境全局状态
+
+- 状态：已缓解，保留批次级限制
+- 严重性：中
+- 位置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentDREnv._randomize_scene_visuals`
+- 当前处理：Real-Alignment DR 和 RMA Student DR 都固定 global ground；plate/backdrop、相机和 GPU 后处理均为 per-env episode state；部分 reset 不再更新 DomeLight，只有 full-batch reset 才采样共享光照。
+- 剩余限制：同一批并行环境不能同时拥有不同的真实 RTX DomeLight intensity/temperature；per-env brightness/white balance 只能在图像空间补充覆盖。
+- 建议：若必须研究独立三维光照方向/阴影，应建立每环境局部 light prim 并验证 tiled rendering 隔离与性能，不能把图像曝光等同于物理光照。
+
+## ISSUE-017 — Real-Alignment policy 与相机更新频率当前不一致
+
+- 状态：已解决
+- 严重性：高
+- 位置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentEnvCfg`
+- 原现象：`sim.dt=1/60`、`decimation=1` 曾使 physics/policy 为 60 Hz，但 camera 为 30 Hz；相邻 policy step 可能读取同一 RGB 帧。
+- 当前处理：用户确认保留 60 Hz physics，并将 `decimation=2`、camera update period 和 render interval 对齐，使 camera/render/policy/action/observation/reward/history 均为 30 Hz；episode 改为 5 秒/150 policy steps。
+- 剩余要求：真机部署必须同样按 30 Hz 更新 policy action 和 history；旧 60 Hz checkpoint 只能按其原配置复现，不得混用当前时间语义。
+
+## ISSUE-018 — DR 与物体位置 curriculum resume offset 尚未自动恢复
+
+- 状态：待处理
+- 严重性：中
+- 位置：`sim2real_cube_real_alignment_env.py` 的 `dr_curriculum_step_offset` 与 `cube_position_curriculum_step_offset`
+- 现象：两类课程进度都使用环境进程内的 `common_step_counter`；重新启动进程 resume checkpoint 时该计数从 0 开始。配置提供显式 offset，但训练入口尚未从 checkpoint trainer timestep 自动写入。
+- 风险：中断续训时未设置 offset 会把 DR 拉回零扰动 Clean 视觉场景，并把物体位置拉回中央 `±2 cm`；视觉与几何分布都不再对应预期训练阶段。
+- 建议：当前 resume 前同步设置两个 offset；后续在明确 skrl checkpoint timestep 来源后，由训练入口自动恢复并写入 run metadata。play、bucket 与 rollout 已强制完整物体范围，不受该问题影响。
+
+## ISSUE-019 — RMA Student 的单帧视觉接触标签可能部分不可观
+
+- 状态：待实验确认
+- 严重性：中
+- 位置：`rma_models.py:SpatialSoftmaxAdaptationHead`、`train_rma_student.py`
+- 现象：Teacher 的左右指接触来自0.2 N物理力阈值，但 Student 只读取单帧腕部 RGB。遮挡、刚体无可见形变以及接触刚发生或刚消失的时序状态可能产生外观近似而标签不同的样本。
+- 风险：接触 BCE 可能主要学到夹爪与方块几何接近，而不能可靠判断真实受力；高总体 accuracy 也可能来自无接触负样本占比高。
+- 当前处理：训练使用正样本权重5.0；评估单独报告 precision、recall、F1、真实和预测双侧接触占比，不以总体 accuracy 单独判断效果。
+- 建议：先用固定网格评估确认；若 recall 仍低，应增加短时图像/动作历史或触觉输入，而不是继续放大接触奖励。

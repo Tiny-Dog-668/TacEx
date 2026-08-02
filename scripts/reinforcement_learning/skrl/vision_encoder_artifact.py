@@ -15,12 +15,23 @@ import torch
 ENCODER_ARTIFACT_FILENAME = "vision_encoder_resnet18.pt"
 ENCODER_MANIFEST_FILENAME = "vision_encoder_resnet18.json"
 STATE_DICT_HASH_ALGORITHM = "sorted_key_dtype_shape_raw_bytes_v1"
-POLICY_CONTRACT_VERSION = 1
-ACTION_HISTORY_CONTRACT = "processed_action_pre_privileged_dz_gate_v1"
+POLICY_CONTRACT_VERSION = 9
+SUPPORTED_POLICY_CONTRACT_VERSIONS = frozenset(
+    {1, 2, 3, 4, 5, 6, 7, 8, POLICY_CONTRACT_VERSION}
+)
+REAL_ALIGNMENT_V7_ACTION_SCALES = [0.01, 0.01, 0.01, 0.002]
+REAL_ALIGNMENT_V8_ACTION_SCALES = [0.025, 0.025, 0.025, 0.002]
+REAL_ALIGNMENT_V9_ACTION_SCALES = [0.025, 0.025, 0.025, 0.005]
+ACTION_HISTORY_CONTRACT_V1 = "processed_action_pre_privileged_dz_gate_v1"
+ACTION_HISTORY_CONTRACT_V2 = "per_dimension_processed_action_pre_privileged_dz_gate_v2"
+ACTION_HISTORY_CONTRACT_V3 = "per_dimension_processed_action_no_privileged_gate_v3"
+REAL_ALIGNMENT_CUBE_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-v0"
+REAL_ALIGNMENT_CUBE_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-DR-v0"
+REAL_ALIGNMENT_CUBE_TASKS = frozenset({REAL_ALIGNMENT_CUBE_TASK, REAL_ALIGNMENT_CUBE_DR_TASK})
 STRICT_SIM2REAL_CUBE_TASKS = frozenset(
     {
         "TacEx-Sim2Real-Cube-Grasp-v0",
-        "TacEx-Sim2Real-Cube-Real-Alignment-v0",
+        *REAL_ALIGNMENT_CUBE_TASKS,
     }
 )
 _RUN_CONFIG_FILENAMES = ("agent.yaml", "agent.pkl", "env.yaml", "env.pkl")
@@ -211,6 +222,22 @@ def _observation_dim(base_env: Any, key: str) -> int | None:
     return None
 
 
+def _gripper_control_mode(cfg: Any) -> str:
+    return str(getattr(cfg, "gripper_control_mode", "legacy_per_finger_delta_per_physics_application"))
+
+
+def _action_scales(cfg: Any) -> list[float]:
+    action_scale = float(cfg.action_scale)
+    if _gripper_control_mode(cfg) == "total_width_delta_cached_target":
+        return [action_scale, action_scale, action_scale, float(cfg.gripper_width_delta_scale)]
+    return [action_scale] * int(cfg.action_space)
+
+
+def _float_vector(value: Any) -> list[float]:
+    """Convert a configuration vector to a JSON-stable list of floats."""
+    return [float(component) for component in value]
+
+
 def _build_policy_contract(
     base_env: Any,
     params_dir: Path,
@@ -225,8 +252,16 @@ def _build_policy_contract(
     cfg = base_env.cfg
     camera_cfg = getattr(cfg, "wrist_camera", None)
     action_scale = float(cfg.action_scale)
+    action_scales = _action_scales(cfg)
+    gripper_control_mode = _gripper_control_mode(cfg)
+    total_width_delta_control = gripper_control_mode == "total_width_delta_cached_target"
+    gripper_width_delta_scale = (
+        float(cfg.gripper_width_delta_scale) if total_width_delta_control else None
+    )
+    max_gripper_opening_width = float(getattr(cfg, "max_gripper_opening_width", 0.08))
     sim_dt = float(cfg.sim.dt)
     decimation = int(cfg.decimation)
+    privileged_dz_gate_enabled = bool(getattr(cfg, "privileged_dz_gate_enabled", True))
     config_hashes = {}
     for filename in _RUN_CONFIG_FILENAMES:
         path = params_dir / filename
@@ -234,24 +269,52 @@ def _build_policy_contract(
             raise FileNotFoundError(f"Required run config artifact is missing: {path}")
         config_hashes[filename] = sha256_file(path)
 
-    return {
+    contract = {
         "version": POLICY_CONTRACT_VERSION,
         "task": task,
         "actor_mean_transform": actor_mean_transform,
         "policy_output_expression": output_expression,
-        "action_history": ACTION_HISTORY_CONTRACT,
-        "action_history_units": "environment_processed_action",
+        "action_history": (
+            ACTION_HISTORY_CONTRACT_V2
+            if privileged_dz_gate_enabled
+            else ACTION_HISTORY_CONTRACT_V3
+        ),
+        "action_history_units": (
+            ["m_relative_x", "m_relative_y", "m_relative_z", "m_total_width_delta"]
+            if total_width_delta_control
+            else ["environment_processed_action"] * int(cfg.action_space)
+        ),
         "deployment_history_source": "clipped_action",
-        "deployment_history_scale": action_scale,
+        "deployment_history_scales": action_scales,
         "deployment_history_delay_steps": 1,
         "action_dim": int(cfg.action_space),
         "action_scale": action_scale,
+        "action_scales": action_scales,
         "action_noise_scale": float(getattr(cfg, "action_noise_scale", 0.0)),
         "xyz_command_frame": "robot_root",
-        "privileged_dz_gate": "applied_after_action_history_and_not_available_on_the_real_robot",
-        "gripper_finger_target_increment_per_physics_application_per_processed_unit": 0.2,
+        "privileged_dz_gate": (
+            "ground_truth_object_xy_applied_after_action_history"
+            if privileged_dz_gate_enabled
+            else "disabled"
+        ),
+        "gripper_control_mode": gripper_control_mode,
+        "gripper_width_delta_scale": gripper_width_delta_scale,
+        "gripper_width_bounds": [0.0, max_gripper_opening_width],
+        "gripper_width_delta_updates_per_policy_step": 1 if total_width_delta_control else None,
+        "gripper_joint_target_mapping": (
+            "symmetric_half_total_width"
+            if total_width_delta_control
+            else "legacy_per_finger_increment_from_measured_joint_position"
+        ),
+        "gripper_finger_target_increment_per_physics_application_per_processed_unit": (
+            None if total_width_delta_control else 0.2
+        ),
         "gripper_target_reapplications_per_policy_step": decimation,
-        "gripper_realized_motion": "depends_on_PD_tracking_and_is_not_a_fixed_per_policy_step_delta",
+        "gripper_realized_motion": (
+            "cached_total_width_target_is_updated_once_per_policy_step_and_reapplied_each_physics_step"
+            if total_width_delta_control
+            else "depends_on_PD_tracking_and_is_not_a_fixed_per_policy_step_delta"
+        ),
         "sim_dt": sim_dt,
         "decimation": decimation,
         "nominal_policy_frequency_hz": 1.0 / (sim_dt * decimation),
@@ -264,6 +327,101 @@ def _build_policy_contract(
         },
         "run_config_sha256": config_hashes,
     }
+    if task in STRICT_SIM2REAL_CUBE_TASKS:
+        contract.update(
+            {
+                "lift_reference_mode": str(cfg.lift_reference_mode),
+                "lift_reward_start_delta_m": float(cfg.lift_reward_start_delta),
+                "success_lift_delta_m": float(cfg.success_lift_delta),
+                "lift_reward_requires_upright": bool(cfg.lift_reward_requires_upright),
+                "success_requires_upright": bool(
+                    getattr(cfg, "success_requires_upright", True)
+                ),
+                "lift_tilt_curriculum_enabled": bool(cfg.lift_tilt_curriculum_enabled),
+                "lift_tilt_curriculum_start_deg": float(cfg.lift_tilt_curriculum_start_deg),
+                "lift_tilt_curriculum_end_deg": float(cfg.lift_tilt_curriculum_end_deg),
+                "lift_tilt_curriculum_start_step": int(cfg.lift_tilt_curriculum_start_step),
+                "lift_tilt_curriculum_end_step": int(cfg.lift_tilt_curriculum_end_step),
+                "lift_tilt_curriculum_step_offset": int(cfg.lift_tilt_curriculum_step_offset),
+            }
+        )
+    if task in REAL_ALIGNMENT_CUBE_TASKS:
+        contract.update(
+            {
+                "arm_ik_tcp_source": str(cfg.arm_ik_tcp_source),
+                "arm_ik_tcp_offset_m": _float_vector(cfg.arm_ik_tcp_offset_m),
+                "reach_center_source": str(cfg.reach_center_source),
+                "fingertip_local_offset_m": _float_vector(cfg.fingertip_local_offset_m),
+                "critic_gripper_position_source": str(cfg.reach_center_source),
+                "action_gate_center_source": str(cfg.reach_center_source),
+                "camera_update_period_s": float(camera_cfg.update_period),
+                "nominal_camera_frequency_hz": 1.0 / float(camera_cfg.update_period),
+                "camera_pose_position_m": _float_vector(camera_cfg.offset.pos),
+                "camera_pose_quaternion_wxyz": _float_vector(camera_cfg.offset.rot),
+                "camera_pose_convention": str(camera_cfg.offset.convention),
+                "camera_raw_resolution_wh": [
+                    int(value) for value in cfg.camera_raw_resolution
+                ],
+                "camera_raw_intrinsic_matrix": _float_vector(
+                    cfg.camera_raw_intrinsic_matrix
+                ),
+                "camera_crop_roi_xywh": [
+                    int(value) for value in cfg.camera_crop_roi_xywh
+                ],
+                "camera_model_intrinsic_matrix": _float_vector(
+                    cfg.camera_model_intrinsic_matrix
+                ),
+                "camera_native_render_intrinsic_matrix": _float_vector(
+                    cfg.camera_native_render_intrinsic_matrix
+                ),
+                "camera_nominal_intrinsic_compensation_enabled": bool(
+                    cfg.camera_nominal_intrinsic_compensation_enabled
+                ),
+                "camera_nominal_intrinsic_compensation_mode": str(
+                    cfg.camera_nominal_intrinsic_compensation_mode
+                ),
+                "camera_resize_interpolation": str(cfg.camera_resize_interpolation),
+                "deployment_camera_serial": str(cfg.deployment_camera_serial),
+                "cube_nominal_xy_m": _float_vector(cfg.cube.init_state.pos[:2]),
+                "cube_full_xy_bounds_m": [
+                    float(cfg.cube.init_state.pos[0]) - float(cfg.cube_x_pos_range),
+                    float(cfg.cube.init_state.pos[0]) + float(cfg.cube_x_pos_range),
+                    float(cfg.cube.init_state.pos[1]) - float(cfg.cube_y_pos_range),
+                    float(cfg.cube.init_state.pos[1]) + float(cfg.cube_y_pos_range),
+                ],
+                "cube_position_curriculum_enabled": bool(
+                    cfg.cube_position_curriculum_enabled
+                ),
+                "cube_position_curriculum_initial_xy_range_m": [
+                    float(cfg.cube_position_curriculum_initial_x_range),
+                    float(cfg.cube_position_curriculum_initial_y_range),
+                ],
+                "cube_position_curriculum_start_step": int(
+                    cfg.cube_position_curriculum_start_step
+                ),
+                "cube_position_curriculum_end_step": int(
+                    cfg.cube_position_curriculum_end_step
+                ),
+                "cube_position_curriculum_step_offset": int(
+                    cfg.cube_position_curriculum_step_offset
+                ),
+                "plate_thickness_m": float(cfg.plate_thickness_m),
+                "plate_top_height_m": float(cfg.plate_top_height_m),
+                "table_collision_force_threshold_n": float(
+                    cfg.table_collision_force_threshold_n
+                ),
+                "table_collision_penalty": float(cfg.table_collision_penalty),
+                "table_collision_robot_body_names": list(
+                    cfg.table_collision_robot_body_names
+                ),
+                "table_contact_sensor_history_length": int(
+                    cfg.table_contact_sensor.history_length
+                ),
+                "episode_length_s": float(cfg.episode_length_s),
+                "max_episode_length_steps": int(base_env.max_episode_length),
+            }
+        )
+    return contract
 
 
 def validate_sim2real_policy_contract(
@@ -280,19 +438,83 @@ def validate_sim2real_policy_contract(
     contract = manifest.get("policy_contract")
     if not isinstance(contract, dict):
         raise RuntimeError("Vision encoder manifest has no sim2real policy_contract.")
-    if contract.get("version") != POLICY_CONTRACT_VERSION:
+    contract_version = contract.get("version")
+    if contract_version not in SUPPORTED_POLICY_CONTRACT_VERSIONS:
         raise RuntimeError(f"Unsupported sim2real policy contract version: {contract.get('version')!r}")
     if contract.get("task") != task:
         raise RuntimeError(
             f"Checkpoint task mismatch: requested {task!r}, run contract declares {contract.get('task')!r}."
         )
-    if contract.get("action_history") != ACTION_HISTORY_CONTRACT:
-        raise RuntimeError(f"Unsupported action-history contract: {contract.get('action_history')!r}")
-    expected_history_deployment = {
-        "deployment_history_source": "clipped_action",
-        "deployment_history_scale": contract.get("action_scale"),
-        "deployment_history_delay_steps": 1,
-    }
+    if contract_version == 1:
+        if task in REAL_ALIGNMENT_CUBE_TASKS:
+            raise RuntimeError(
+                "Real-Alignment Cube contract v1 uses the obsolete per-finger gripper increment semantics. "
+                "Retrain with the total-width gripper contract."
+            )
+        if contract.get("action_history") != ACTION_HISTORY_CONTRACT_V1:
+            raise RuntimeError(f"Unsupported action-history contract: {contract.get('action_history')!r}")
+        expected_history_deployment = {
+            "deployment_history_source": "clipped_action",
+            "deployment_history_scale": contract.get("action_scale"),
+            "deployment_history_delay_steps": 1,
+        }
+    elif contract_version in {2, 3}:
+        if contract.get("action_history") != ACTION_HISTORY_CONTRACT_V2:
+            raise RuntimeError(f"Unsupported action-history contract: {contract.get('action_history')!r}")
+        expected_history_deployment = {
+            "deployment_history_source": "clipped_action",
+            "deployment_history_scales": contract.get("action_scales"),
+            "deployment_history_delay_steps": 1,
+        }
+    else:
+        privileged_dz_gate = contract.get("privileged_dz_gate")
+        expected_action_history = (
+            ACTION_HISTORY_CONTRACT_V3
+            if privileged_dz_gate == "disabled"
+            else ACTION_HISTORY_CONTRACT_V2
+        )
+        if contract.get("action_history") != expected_action_history:
+            raise RuntimeError(
+                "Unsupported action-history/dz-gate contract: "
+                f"expected {expected_action_history!r}, got {contract.get('action_history')!r}."
+            )
+        expected_history_deployment = {
+            "deployment_history_source": "clipped_action",
+            "deployment_history_scales": contract.get("action_scales"),
+            "deployment_history_delay_steps": 1,
+        }
+    if task in STRICT_SIM2REAL_CUBE_TASKS and contract_version == 1:
+        raise RuntimeError(
+            "Strict Cube contract v1 uses obsolete action-history and privileged dz-gate semantics. "
+            "Retrain without the ground-truth object-XY dz gate."
+        )
+    if task in STRICT_SIM2REAL_CUBE_TASKS and contract_version == 2:
+        raise RuntimeError(
+            "Strict Cube contract v2 uses obsolete lowest-corner/non-curriculum lift semantics. "
+            "Retrain with the center-of-mass lift curriculum contract."
+        )
+    if task in STRICT_SIM2REAL_CUBE_TASKS and contract_version == 3:
+        raise RuntimeError(
+            "Strict Cube contract v3 uses the obsolete ground-truth object-XY dz gate. "
+            "Retrain with privileged_dz_gate_enabled=false."
+        )
+    if task in REAL_ALIGNMENT_CUBE_TASKS and contract_version == 4:
+        raise RuntimeError(
+            "Real-Alignment Cube contract v4 predates the 5/2 mm action scales, "
+            "new calibrated camera pose, full-range object curriculum, table-collision "
+            "penalty, and tilt-independent success. Retrain from scratch with the current contract."
+        )
+    if task in REAL_ALIGNMENT_CUBE_TASKS and contract_version == 5:
+        raise RuntimeError(
+            "Real-Alignment Cube contract v5 uses the obsolete 5 mm XYZ action scale. "
+            "Retrain from scratch with the 10 mm XYZ / 2 mm total-width contract v6."
+        )
+    if task in REAL_ALIGNMENT_CUBE_TASKS and contract_version == 6:
+        raise RuntimeError(
+            "Real-Alignment Cube contract v6 uses the obsolete 480x480 center crop. "
+            "Retrain from scratch with the calibrated 400x398 crop and intrinsic "
+            "compensation contract v7."
+        )
     for key, expected_value in expected_history_deployment.items():
         if contract.get(key) != expected_value:
             raise RuntimeError(
@@ -304,6 +526,151 @@ def validate_sim2real_policy_contract(
         or contract.get("policy_output_expression") != "tanh(actions)"
     ):
         raise RuntimeError("Strict Cube checkpoint was not trained with the tanh Actor-mean contract.")
+    if task in STRICT_SIM2REAL_CUBE_TASKS and contract_version in {7, 8, POLICY_CONTRACT_VERSION}:
+        expected_lift_contract = {
+            "privileged_dz_gate": "disabled",
+            "lift_reference_mode": "center_of_mass",
+            "lift_reward_start_delta_m": 0.0,
+            "success_lift_delta_m": 0.035,
+            "lift_reward_requires_upright": False,
+            "success_requires_upright": task not in REAL_ALIGNMENT_CUBE_TASKS,
+            "lift_tilt_curriculum_enabled": task not in REAL_ALIGNMENT_CUBE_TASKS,
+        }
+        if task not in REAL_ALIGNMENT_CUBE_TASKS:
+            expected_lift_contract.update(
+                {
+                    "lift_tilt_curriculum_start_deg": 40.0,
+                    "lift_tilt_curriculum_end_deg": 10.0,
+                    "lift_tilt_curriculum_start_step": 0,
+                    "lift_tilt_curriculum_end_step": 120_000,
+                    "lift_tilt_curriculum_step_offset": 0,
+                }
+            )
+        for key, expected_value in expected_lift_contract.items():
+            if contract.get(key) != expected_value:
+                raise RuntimeError(
+                    f"Strict Cube checkpoint has obsolete lift-reward semantics for {key}: "
+                    f"expected {expected_value!r}, got {contract.get(key)!r}."
+                )
+    if task in REAL_ALIGNMENT_CUBE_TASKS:
+        expected_action_scales = {
+            7: REAL_ALIGNMENT_V7_ACTION_SCALES,
+            8: REAL_ALIGNMENT_V8_ACTION_SCALES,
+            POLICY_CONTRACT_VERSION: REAL_ALIGNMENT_V9_ACTION_SCALES,
+        }[contract_version]
+        expected_cube_full_xy_bounds = (
+            [0.45, 0.55, -0.05, 0.05]
+            if contract_version == POLICY_CONTRACT_VERSION
+            else [0.4, 0.6, -0.1, 0.1]
+        )
+        expected_center_contract = {
+            "arm_ik_tcp_source": "panda_hand_fixed_offset",
+            "arm_ik_tcp_offset_m": [0.0, 0.0, 0.1034],
+            "reach_center_source": "mean_of_left_and_right_fingertip_centers",
+            "fingertip_local_offset_m": [0.0, 0.0, 0.045],
+            "critic_gripper_position_source": "mean_of_left_and_right_fingertip_centers",
+            "action_gate_center_source": "mean_of_left_and_right_fingertip_centers",
+            "action_scales": expected_action_scales,
+            "deployment_history_scales": expected_action_scales,
+            "camera_pose_position_m": [
+                1.172904219177,
+                0.031653013416,
+                0.512212537004,
+            ],
+            "camera_pose_quaternion_wxyz": [
+                -0.375287920087,
+                0.607013774710,
+                0.582420741286,
+                -0.389203461533,
+            ],
+            "camera_pose_convention": "ros",
+            "camera_raw_resolution_wh": [640, 480],
+            "camera_raw_intrinsic_matrix": [
+                604.8974,
+                0.0,
+                320.980103,
+                0.0,
+                605.085815,
+                247.913223,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            "camera_crop_roi_xywh": [100, 34, 400, 398],
+            "camera_model_intrinsic_matrix": [
+                338.742544,
+                0.0,
+                123.748857,
+                0.0,
+                340.550811,
+                120.393372,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            "camera_native_render_intrinsic_matrix": [
+                300.0,
+                0.0,
+                112.0,
+                0.0,
+                300.0,
+                112.0,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            "camera_nominal_intrinsic_compensation_enabled": True,
+            "camera_nominal_intrinsic_compensation_mode": (
+                "gpu_affine_grid_centered_square_pixel_render_to_calibrated_k"
+            ),
+            "camera_resize_interpolation": "bilinear",
+            "deployment_camera_serial": "215322076207",
+            "cube_nominal_xy_m": [0.5, 0.0],
+            "cube_full_xy_bounds_m": expected_cube_full_xy_bounds,
+            "cube_position_curriculum_enabled": True,
+            "cube_position_curriculum_initial_xy_range_m": [0.02, 0.02],
+            "cube_position_curriculum_start_step": 20_000,
+            "cube_position_curriculum_end_step": 100_000,
+            "cube_position_curriculum_step_offset": 0,
+            "plate_thickness_m": 0.001,
+            "plate_top_height_m": 0.001,
+            "table_collision_force_threshold_n": 1.0,
+            "table_collision_penalty": -10.0,
+            "table_collision_robot_body_names": [
+                "panda_link1",
+                "panda_link2",
+                "panda_link3",
+                "panda_link4",
+                "panda_link5",
+                "panda_link6",
+                "panda_link7",
+                "panda_hand",
+                "panda_leftfinger",
+                "panda_rightfinger",
+            ],
+            "table_contact_sensor_history_length": 2,
+        }
+        for key, expected_value in expected_center_contract.items():
+            if contract.get(key) != expected_value:
+                raise RuntimeError(
+                    f"Real-Alignment checkpoint has obsolete grasp-center semantics for {key}: "
+                    f"expected {expected_value!r}, got {contract.get(key)!r}."
+                )
+        expected_timing_contract = {
+            "sim_dt": 1.0 / 60.0,
+            "decimation": 2,
+            "nominal_policy_frequency_hz": 30.0,
+            "camera_update_period_s": 1.0 / 30.0,
+            "nominal_camera_frequency_hz": 30.0,
+            "episode_length_s": 5.0,
+            "max_episode_length_steps": 150,
+        }
+        for key, expected_value in expected_timing_contract.items():
+            if contract.get(key) != expected_value:
+                raise RuntimeError(
+                    f"Real-Alignment checkpoint has obsolete timing semantics for {key}: "
+                    f"expected {expected_value!r}, got {contract.get(key)!r}."
+                )
 
     expected_hashes = contract.get("run_config_sha256")
     if not isinstance(expected_hashes, dict):
@@ -340,6 +707,131 @@ def validate_live_env_against_policy_contract(base_env: Any, contract: Mapping[s
             "wrist_resnet": _observation_dim(base_env, "wrist_resnet"),
         },
     }
+    if contract.get("version") in {7, 8, POLICY_CONTRACT_VERSION}:
+        gripper_control_mode = _gripper_control_mode(cfg)
+        total_width_delta_control = gripper_control_mode == "total_width_delta_cached_target"
+        actual.update(
+            {
+                "action_scales": _action_scales(cfg),
+                "privileged_dz_gate": (
+                    "ground_truth_object_xy_applied_after_action_history"
+                    if bool(getattr(cfg, "privileged_dz_gate_enabled", True))
+                    else "disabled"
+                ),
+                "gripper_control_mode": gripper_control_mode,
+                "gripper_width_delta_scale": (
+                    float(cfg.gripper_width_delta_scale) if total_width_delta_control else None
+                ),
+                "gripper_width_bounds": [
+                    0.0,
+                    float(getattr(cfg, "max_gripper_opening_width", 0.08)),
+                ],
+                "gripper_width_delta_updates_per_policy_step": (
+                    1 if total_width_delta_control else None
+                ),
+                "gripper_joint_target_mapping": (
+                    "symmetric_half_total_width"
+                    if total_width_delta_control
+                    else "legacy_per_finger_increment_from_measured_joint_position"
+                ),
+            }
+        )
+        if contract.get("task") in STRICT_SIM2REAL_CUBE_TASKS:
+            actual.update(
+                {
+                    "lift_reference_mode": str(cfg.lift_reference_mode),
+                    "lift_reward_start_delta_m": float(cfg.lift_reward_start_delta),
+                    "success_lift_delta_m": float(cfg.success_lift_delta),
+                    "lift_reward_requires_upright": bool(cfg.lift_reward_requires_upright),
+                    "success_requires_upright": bool(
+                        getattr(cfg, "success_requires_upright", True)
+                    ),
+                    "lift_tilt_curriculum_enabled": bool(cfg.lift_tilt_curriculum_enabled),
+                    "lift_tilt_curriculum_start_deg": float(cfg.lift_tilt_curriculum_start_deg),
+                    "lift_tilt_curriculum_end_deg": float(cfg.lift_tilt_curriculum_end_deg),
+                    "lift_tilt_curriculum_start_step": int(cfg.lift_tilt_curriculum_start_step),
+                    "lift_tilt_curriculum_end_step": int(cfg.lift_tilt_curriculum_end_step),
+                    "lift_tilt_curriculum_step_offset": int(cfg.lift_tilt_curriculum_step_offset),
+                }
+            )
+        if contract.get("task") in REAL_ALIGNMENT_CUBE_TASKS:
+            actual.update(
+                {
+                    "arm_ik_tcp_source": str(cfg.arm_ik_tcp_source),
+                    "arm_ik_tcp_offset_m": _float_vector(cfg.arm_ik_tcp_offset_m),
+                    "reach_center_source": str(cfg.reach_center_source),
+                    "fingertip_local_offset_m": _float_vector(cfg.fingertip_local_offset_m),
+                    "critic_gripper_position_source": str(cfg.reach_center_source),
+                    "action_gate_center_source": str(cfg.reach_center_source),
+                    "camera_update_period_s": float(camera_cfg.update_period),
+                    "nominal_camera_frequency_hz": 1.0 / float(camera_cfg.update_period),
+                    "camera_pose_position_m": _float_vector(camera_cfg.offset.pos),
+                    "camera_pose_quaternion_wxyz": _float_vector(camera_cfg.offset.rot),
+                    "camera_pose_convention": str(camera_cfg.offset.convention),
+                    "camera_raw_resolution_wh": [
+                        int(value) for value in cfg.camera_raw_resolution
+                    ],
+                    "camera_raw_intrinsic_matrix": _float_vector(
+                        cfg.camera_raw_intrinsic_matrix
+                    ),
+                    "camera_crop_roi_xywh": [
+                        int(value) for value in cfg.camera_crop_roi_xywh
+                    ],
+                    "camera_model_intrinsic_matrix": _float_vector(
+                        cfg.camera_model_intrinsic_matrix
+                    ),
+                    "camera_native_render_intrinsic_matrix": _float_vector(
+                        cfg.camera_native_render_intrinsic_matrix
+                    ),
+                    "camera_nominal_intrinsic_compensation_enabled": bool(
+                        cfg.camera_nominal_intrinsic_compensation_enabled
+                    ),
+                    "camera_nominal_intrinsic_compensation_mode": str(
+                        cfg.camera_nominal_intrinsic_compensation_mode
+                    ),
+                    "camera_resize_interpolation": str(
+                        cfg.camera_resize_interpolation
+                    ),
+                    "deployment_camera_serial": str(cfg.deployment_camera_serial),
+                    "cube_nominal_xy_m": _float_vector(cfg.cube.init_state.pos[:2]),
+                    "cube_full_xy_bounds_m": [
+                        float(cfg.cube.init_state.pos[0]) - float(cfg.cube_x_pos_range),
+                        float(cfg.cube.init_state.pos[0]) + float(cfg.cube_x_pos_range),
+                        float(cfg.cube.init_state.pos[1]) - float(cfg.cube_y_pos_range),
+                        float(cfg.cube.init_state.pos[1]) + float(cfg.cube_y_pos_range),
+                    ],
+                    "cube_position_curriculum_enabled": bool(
+                        cfg.cube_position_curriculum_enabled
+                    ),
+                    "cube_position_curriculum_initial_xy_range_m": [
+                        float(cfg.cube_position_curriculum_initial_x_range),
+                        float(cfg.cube_position_curriculum_initial_y_range),
+                    ],
+                    "cube_position_curriculum_start_step": int(
+                        cfg.cube_position_curriculum_start_step
+                    ),
+                    "cube_position_curriculum_end_step": int(
+                        cfg.cube_position_curriculum_end_step
+                    ),
+                    "cube_position_curriculum_step_offset": int(
+                        cfg.cube_position_curriculum_step_offset
+                    ),
+                    "plate_thickness_m": float(cfg.plate_thickness_m),
+                    "plate_top_height_m": float(cfg.plate_top_height_m),
+                    "table_collision_force_threshold_n": float(
+                        cfg.table_collision_force_threshold_n
+                    ),
+                    "table_collision_penalty": float(cfg.table_collision_penalty),
+                    "table_collision_robot_body_names": list(
+                        cfg.table_collision_robot_body_names
+                    ),
+                    "table_contact_sensor_history_length": int(
+                        cfg.table_contact_sensor.history_length
+                    ),
+                    "episode_length_s": float(cfg.episode_length_s),
+                    "max_episode_length_steps": int(base_env.max_episode_length),
+                }
+            )
     for key, actual_value in actual.items():
         expected_value = contract.get(key)
         if actual_value != expected_value:

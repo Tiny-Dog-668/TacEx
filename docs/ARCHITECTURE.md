@@ -19,7 +19,7 @@ TacEx 采用 Isaac Lab extension 结构组织代码：
 | `source/tacex_assets/tacex_assets` | 资产配置 | `sensors/gelsight_mini/gsmini_cfg.py`、`robots/franka/franka_gsmini_gripper_rigid.py` |
 | `source/tacex_tasks/tacex_tasks` | RL task 包 | `__init__.py`、`occluded_grasping/*` |
 | `source/tacex_tasks/tacex_tasks/occluded_grasping` | 遮挡抓取环境、策略、agent YAML | `vt_box.py`、`vision_box.py`、`agents/ppo_vt_alpha_gru.yaml` |
-| `source/tacex_tasks/tacex_tasks/sim2real_grasp` | Franka vision-only sim2real Cube/Bottle 和现实参考对齐变体 | `sim2real_cube_grasp_env.py`、`sim2real_cube_real_alignment_env.py`、`agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml` |
+| `source/tacex_tasks/tacex_tasks/sim2real_grasp` | Franka vision-only sim2real Cube/Bottle、现实参考对齐和 privileged diagnostic 变体 | `sim2real_cube_grasp_env.py`、`sim2real_cube_real_alignment_env.py`、`sim2real_cube_real_alignment_privileged_env.py`、`agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml` |
 | `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_pickplace` | UR10 + Robotiq pick-place/grasp direct RL 环境 | `ur10_robotiq_pick_place_env.py`、`ur10_robotiq_2f85_pick_place_env_cfg.py`、`ur10_robotiq_2f85_third_person_pick_place_env.py`、`agents/skrl_ppo_cfg.yaml` |
 | `source/tacex_tasks/tacex_tasks/direct/ur10_robotiq_gripper_close` | UR10 + Robotiq 夹爪关闭 direct RL 环境 | `ur10_robotiq_gripper_close_env.py`、`agents/rsl_rl_ppo_cfg.py` |
 | `source/tacex_assets/tacex_assets/data/Robots/URRobotiq` | 迁移的 UR10 + Robotiq USD 资产 | `ur10_robotiq_2f85.usda`、`ur10_robotiq_140.usda`、`ur10_robotiq_f140.usda` |
@@ -109,13 +109,27 @@ UR10 + Robotiq 2F85 direct task 的控制方式：
 - 2F85 pick-place 默认 USD 路径为 `source/tacex_assets/tacex_assets/data/Robots/URRobotiq/ur10_robotiq_2f85.usda`，可用 `UR10_ROBOTIQ_2F85_USD_PATH` 覆盖。
 - `UR10Robotiq2F85ThirdPersonPickPlaceEnv` 是独立 `DirectRLEnv` 实现，不继承 `UR10RobotiqPickPlaceEnv` 或 `UR10Robotiq2F85PickPlaceEnvCfg`，便于后续单独改环境参数。
 
+Clean/DR Real-Alignment Cube 的第四维使用总夹爪宽度增量控制。每个 30 Hz policy step 将 clipped action `g` 映射为 `delta_width=0.005*g m`，在上一缓存目标上累加并 clamp 到 `[0,0.08] m`；两个 60 Hz physics substep 都发送相同的 `left_target=right_target=desired_width/2`，不会在 `_apply_action()` 中重复累加。`action_history[3]` 保存请求的总宽度增量；当前 v9 的前三维为最大 `0.025 m` 的 XYZ processed command。Privileged 诊断变体显式保留旧 `0.002 m` 夹爪尺度，基础 Cube/Cylinder 保留 legacy per-finger 行为。
+
+Real-Alignment 的控制 TCP 与奖励中心使用两个明确不同但几何一致的来源。Differential IK/Jacobian 使用 `panda_hand` 沿本地 z 轴固定偏移 `0.1034 m`；reach reward、critic 的 gripper position/target distance 以及近台面 `dz` gate，使用左右 `panda_*finger` link 各沿本地 z 轴偏移 `0.045 m` 后的世界坐标中点。这样 reward 会跟随两侧夹指真实位姿，而不再把固定 `panda_hand+0.107 m` 当作抓取中心。基础 Cube/Cylinder 通过默认 hook 保留原中心语义。
+
+`sim2real_cube_real_alignment_privileged_env.py` 提供独立的无相机上界任务。其 `_setup_scene()` 不创建 `TiledCamera`，配置关闭继承链中的 ResNet18 构造；Actor 使用 28-D 向量：`proprio 15 + history 4 + cube position 3 + fingertip-midpoint position 3 + relative target 3`。位置从 world position 减去 `scene.env_origins`，因此多环境共享 robot-root-aligned 数值范围。Critic 保持 49-D privileged contract。这个任务不进入 strict vision encoder/export allowlist，checkpoint 只用于仿真诊断。
+
 ## 7. 视觉模块
 
 第三视角相机配置：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera`。
 
-现实参考对齐相机配置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentEnvCfg.wrist_camera`。该配置把 D435 原始 640x480 图像的中央 480x480 crop 等效为直接 224x224 渲染，使用变换后的内参 `fx=282.4603, fy=282.2679, cx=113.1917, cy=116.3019`，并将 camera/policy 周期设为 30 Hz。当前图像拟合位姿为 world `pos=(1.90,0.0,0.468)`、光轴向下约 15°；Omniverse 4.5 不支持非方形像素和 aperture offset，会使用平均焦距和图像中心主点。该位姿仍是图像推算值，待 hand-eye calibration。
+现实参考对齐相机配置：`sim2real_cube_real_alignment_env.py:Sim2RealCubeRealAlignmentEnvCfg.wrist_camera`。现实 D435 原始内参为 `fx=604.897400, fy=605.085815, cx=320.980103, cy=247.913223 @ 640x480`；部署侧裁剪 `x=[100,500), y=[34,432)` 后将 400x398 双线性缩放到 224x224，得到策略有效内参 `fx=338.742544, fy=340.550811, cx=123.748857, cy=120.393372`。Omniverse 4.5 不支持非方形像素和 aperture offset，因此仿真先用 centered `K_native=[300,0,112;0,300,112;0,0,1]` 直接渲染 224x224 coverage view，再以固定 batched GPU affine warp 映射到目标 K；300 px native focal 能覆盖全部目标光线而不依赖 padding。当前 `base_T_camera_color_optical` 为 `pos=(1.172904219177,0.031653013416,0.512212537004)`、ROS optical `rot(wxyz)=(-0.375287920087,0.607013774710,0.582420741286,-0.389203461533)`。物理保持 60 Hz；`decimation=2`、camera `update_period=1/30 s` 和 render interval 共同使 camera/render/policy/action/observation/reward/history 对齐为 30 Hz。episode 为 5 秒，即 150 个 policy steps。
 
-Sim2real Cube 的 ResNet18 使用 `ResNet18_Weights.IMAGENET1K_V1`，参数冻结且模块始终处于 `eval()`。训练入口在每个 run 的 `params/` 下保存一次完整 encoder state artifact 和 manifest；encoder 不重复写入每个 PPO checkpoint。Manifest 同时保存 policy contract version、task id、history 语义、agent/env config hash、观测维度、相机尺寸、控制频率、action scale 和夹爪 target 重发语义。训练 resume、普通 play、bucket play 和 exporter 都验证该 contract、encoder identity 与 normalization；RGB 路径 strict-load 同一 encoder state。Exporter 还恢复 saved env cfg，并在保存后重新加载 TorchScript，校验 eager/traced/reloaded output 的有限性、一致性和 embedded encoder hash。
+随机化 profile 在同一模块内通过配置继承分离：`Sim2RealCubeRealAlignmentEnvCfg` 是 clean 基线，关闭所有视觉、光照和场景颜色随机化，只保留 cube XY reset；`Sim2RealCubeRealAlignmentDREnvCfg` 继承 clean 配置并开启 curriculum DR。DR 的 plate/backdrop/DomeLight 中心值直接复用 Clean 常量，scale=0 时 camera `delta XYZ/RPY=0`、GPU focal/principal-point warp 为 identity、后处理为 identity、材质和光照与 Clean 完全一致。DR 每环境每 episode 缓存各扰动参数；Gaussian pixel noise 每帧重采样。`TiledCamera.set_world_poses(env_ids=...)` 支持多环境外参，图像后处理在 `[N,3,224,224]` 上批处理。stage-global DomeLight 只在 full-batch reset 更新，global ground 固定。对应 task id 分别为 `TacEx-Sim2Real-Cube-Real-Alignment-v0` 和 `TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`，DR 使用独立 Agent YAML 和 `sim2real_cube_real_alignment_dr` 日志目录。
+
+DR curriculum 使用 `DirectRLEnv.common_step_counter`（每个 30 Hz outer/policy step 加一，与 `num_envs` 无关）：0–100k step 的范围系数为 0，使物体位置课程先扩展完成；100k–220k 从 0 线性增到 1.0，220k–300k 保持 full range。当前 scale 同时写入 `info/dr_curriculum_scale`。`dr_curriculum_step_offset` 是显式 resume hook；当前训练入口不会自动从 checkpoint 推导该值。
+
+Sim2real Cube 的 ResNet18 使用 `ResNet18_Weights.IMAGENET1K_V1`，参数冻结且模块始终处于 `eval()`。训练入口在每个 run 的 `params/` 下保存一次完整 encoder state artifact 和 manifest；encoder 不重复写入每个 PPO checkpoint。当前 v9 manifest 额外绑定 Real-Alignment 的逐维 action/history scale、ROS optical 相机位姿、原始内参/裁剪、D435 serial、物体完整范围与位置课程、1 mm 木板、桌面碰撞过滤和无倾角 success。训练 resume、普通 play、bucket play、rollout 和 exporter 都验证该 contract；v7、v8、v9 分别严格接受 10/2 mm、25/2 mm、25/5 mm 及各自保存的 reset bounds，防止同 shape checkpoint 被错误部署。
+
+Real-Alignment 木板以一个 kinematic 1 mm Cuboid 表示，顶面为 `z=0.001 m`。每环境木板附加一个 ContactSensor，filter 对象为 `panda_link1–7`、`panda_hand`、`panda_leftfinger` 和 `panda_rightfinger`；其历史长度为 2，对应一个 policy step 内的两个 physics substeps。奖励读取 `[N,2,1,10,3]` filtered force matrix 的最大法向力，超过 1 N 时返回固定 `-10`，但不修改 observation 或 done。
+
+Real-Alignment 在 `_get_dones()` 后按 policy step 记录该步并行环境中完成和成功的 episode 数。两个长度为 200 的环形缓冲保存最近 200 个 policy steps 的计数，窗口成功率为 `sum(successes)/sum(completed)`；无完成 episode 时为 0。日志同时发布 `recent_success_rate`、`episode_success_rate_window`、累计成功率和窗口/累计计数，并在每 200 步的奖励行中一起打印。统计不进入 observation、reward 或 policy contract。
 
 视觉数据生成：`vt_box.py:OccludedGraspingVisionFourTactileBoxEnv._get_observations` 从 `self.third_person_camera.data.output["rgb"]` 读取 RGB。
 
@@ -262,6 +276,12 @@ logs/skrl/occluded_grasping/downsample/cube/2026-05-30_21-33-24_ppo_torch_vt_dow
 
 Bucket 评估加载路径：`scripts/reinforcement_learning/skrl/play_bucket.py:main`。
 
+Sim2real Cube 批量诊断入口：
+
+- `scripts/reinforcement_learning/skrl/collect_sim2real_cube_rollouts.py`：从 export metadata 找到并恢复 run 自己的 `env.pkl`，校验 TorchScript SHA-256，在 CPU 执行部署 Actor，并保存全部并行环境的 `T x N` action/state transition。正常路径继续拒绝旧 contract；仅显式 `--allow_legacy_contract` 可复现旧 run 用于离线诊断。
+- `scripts/reinforcement_learning/skrl/analyze_sim2real_cube_rollouts.py`：不启动 Isaac Sim，读取 collector NPZ，生成逐 transition CSV、分 episode step 的 action/state PNG 和 analysis JSON。
+- `cylinder_grasping_vision_only_resnet18.py` 中 `_last_requested_arm_command`、`_last_ik_arm_command`、`_last_privileged_dz_gate_active` 是只读诊断缓存，不改变控制输出。
+
 ## 16. 关键调用关系
 
 ```text
@@ -284,3 +304,18 @@ train.py / play.py / play_bucket.py
   -> SkrlVecEnvWrapper
   -> skrl Runner / custom PPO agent
 ```
+
+## 17. Real-Alignment RMA 路线
+
+RMA Teacher/Student 使用新增 task，不修改 Clean、DR 或旧 Privileged：
+
+- Teacher：无相机，外部输入为15维本体、4维 history、3维 cube XYZ 和2维真实左右指接触；`RMAActorCore` 从关节角执行 Panda FK，追加3维指尖中点位置与3维 cube-to-gripper 相对向量，形成30维特征并输出4维 tanh action；现有 `train.py` 运行 PPO 200k。
+- Student：环境输出 `wrist_rgb[224,224,3] uint8`、15维本体、4维 history，以及仅用于 loss 的 cube XYZ 和左右指接触标签。
+- `train_rma_student.py` 冻结 ResNet18 layer4 与 Teacher Actor，只训练共享 spatial-softmax adaptation head 的位置与接触分支，共100k步；学生向 Actor 输入 sigmoid 接触概率以保留动作 loss 梯度。
+- `TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0` 是独立的 Student-only profile：复用通用 DR 的相机外参、GPU 内参 warp、颜色/模糊/噪声、板/背景和 DomeLight 扰动，但 `dr_curriculum_enabled=false`，因此从第一个 update 起始终为 full scale。它不改变 Teacher、接触标签、物理、奖励、动作或部署 TorchScript 输入；Student artifact 会记录 Clean 或 DR task，resume 只能在同一 profile 内进行。
+- `evaluate_rma.py` 使用固定10x10 XY 网格；`export_rma_student_jit.py` 导出不含 privileged 输入的端到端 Actor。
+- `play_rma_student.py` 专门读取蒸馏 Student artifact，而不实例化 skrl Agent；它根据 checkpoint 的 task 选择 Clean 或全强度 DR 环境，校验 Teacher 环境 contract 与 encoder/Actor 哈希，在完整随机 XY 范围回放确定性 Student 动作，并写 CSV/JSON 成功率摘要。
+- 两个 RMA task 单独注册 cube ContactSensor，以0.2 N阈值生成左右二值接触；Teacher 与 Student 共用 `contact_reward_weight=3.0` 和 `single_contact_reward_fraction=1.0`，保证 Student rollout 与 Teacher 环境 contract 一致，不修改 Clean/DR/旧 Privileged reward。
+- RMA 的 success 只作为奖励和统计条件，不触发 done；episode 只因 timeout 或严重机器人穿地碰撞结束，窗口成功率按 episode 内是否曾达到 success 统计。
+- RMA 保持 Clean 的 `10 mm/step` 夹爪总宽度动作尺度，但单独降低 Panda finger actuator 到 `effort_limit_sim=40`、`stiffness=400`、`damping=40`。
+- Teacher `params/rma_manifest.json` 绑定动作、位置/接触坐标语义、30维 feature order、Panda FK、归一化、RMA finger actuator 和配置哈希；Student checkpoint 绑定 Teacher/encoder/Actor 哈希。物体与末端姿态不进入 Actor；RMA v4 及更早 checkpoint 与当前 v5 控制/终止语义不兼容。

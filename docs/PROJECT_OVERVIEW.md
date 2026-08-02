@@ -33,8 +33,11 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 
 ## 4. 当前已实现功能
 
-- 现实参考对齐的 vision-only Cube task：`TacEx-Sim2Real-Cube-Real-Alignment-v0`。它使用实测 5x5x5 cm 方块，并从 `20260711_214450_real_alignment_reference/alignment_reference.json` 对齐 Franka 初态、夹爪宽度、D435 crop 后 224x224 内参和 30 Hz 图像/策略周期；台面后沿、背景颜色和方块 nominal 图像位置来自参考图估计。相机外参未测量，当前使用图像拟合近似位姿。
-- Sim2real Cube strict policy contract：ResNet18 参数冻结且始终 `eval()`，`action_history [N,4]` 表示上一拍、privileged `dz` gate 前的 scaled/clamped processed command，Actor deterministic mean 在模型内通过 `tanh` 约束到 `[-1,1]`。训练 run manifest 绑定 task、agent/env config、控制参数和 encoder；resume/play/play_bucket/export 严格校验，旧 checkpoint 需要重新训练。
+- 现实参考对齐的 vision-only Cube clean task：`TacEx-Sim2Real-Cube-Real-Alignment-v0`。它使用 5x5x5 cm 白色方块、1 mm 近黑色木板和近黑色背景；方块在 robot-root frame 的完整范围为 `x=[0.45,0.55] m, y=[-0.05,0.05] m`，20k 前使用 `x=[0.48,0.52] m, y=[-0.02,0.02] m`，并在 100k 扩至完整范围。物理保持 60 Hz，camera/render/policy/action/observation/reward/history 对齐为 30 Hz；5 秒 episode 对应 150 个 policy steps。
+- 对应的 curriculum DR task：`TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`。它严格以 Clean 为零扰动基线，继承完全相同的机器人、224x224 有效 K 相机、方块、动作、观测、奖励和 done；plate/backdrop/DomeLight 中心值也与 Clean 相同。固定 GPU warp 先将 centered coverage render 映射到 400x398 crop 对应的目标 K，之后每环境每 episode 再随机相机外参、GPU 等效内参、图像后处理和近黑材质。DomeLight 只在整批 reset 时更新，global ground 固定。DR scale 在 100k policy step 前为 0，100k–220k 线性增至 100%，220k–300k 保持 full range，并记录 `info/dr_curriculum_scale`。两个 profile 使用独立日志目录，旧 DR checkpoint 不作为新视觉分布的续训起点。
+- 奖励/控制上界诊断 task：`TacEx-Sim2Real-Cube-Real-Alignment-Privileged-v0`。它继承 clean task 的场景、奖励、success 和 150-step horizon，但显式保留旧的夹爪 `2 mm/step` 与 `x/y ±10 cm` reset 配置；它不创建 RGB camera 或 ResNet18。Actor 输入为 `proprio [N,15] + history [N,4] + cube/gripper/relative-target position [N,9]`。三个位置均去除并行环境 origin，使用 robot-root-aligned frame。该策略含仿真真值，只用于判断视觉之外的抓取可学习性，不能部署到真机。
+- Sim2real Cube strict policy contract：ResNet18 参数冻结且始终 `eval()`，Actor deterministic mean 在模型内通过 `tanh` 约束到 `[-1,1]`。当前 Clean/DR 的逐维 action/history scale 为 `[0.025,0.025,0.025,0.005] m`；第四维是每个 policy step 请求的总夹爪宽度增量，缓存总宽度目标后对称映射到两个 finger joints。IK TCP 为 `panda_hand+0.1034 m`，reward/critic 中心为两侧 `finger link+0.045 m` 指尖的世界坐标中点。Real-Alignment contract v9 绑定 25/5 mm 尺度与 `x/y ±5 cm` 范围；v8 和 v7 继续严格读取各自的旧 25/2 mm 与 10/2 mm contract，不能混用。
+- Real-Alignment 以考虑 cube/plate rest offset 的稳定落桌质心高度为零点，`0–35 mm` 线性映射到 lift `[0,1]`；success 只要求达到 35 mm 并连续保持 5 个 policy steps，倾角仅记录日志。任一活动 Panda arm/hand/finger link 对木板的过滤接触力超过 1 N 时，该 policy step 加 `-10`，但不直接终止。控制台同时打印碰撞统计、当前 env mean total 和最近打印窗口平均奖励。
 - Franka Panda + GS Mini gripper 任务配置：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.robot` 使用 `source/tacex_assets/tacex_assets/robots/franka/franka_gsmini_gripper_rigid.py:FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG`。
 - 第三视角 RGB 相机：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.third_person_camera`。
 - 四路触觉输入：`vt_box.py:OccludedGraspingVisionFourTactileBoxCfg.gsmini_left`、`gsmini_right`、`gsmini_left_down`、`gsmini_right_down`。
@@ -95,6 +98,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 - Cross attention 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_cross_policy.py:OccludedGraspingVisionTactileCrossAttentionPolicy`。
 - Aux heads 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_cross_alpha_aux_policy.py:OccludedGraspingVTTactileCrossAlphaAuxPolicy`。
 - GelFusion-style 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py:OccludedGraspingVTGelFusionPolicy`。
+- Real-Alignment RMA-style：独立 privileged Teacher 与单帧视觉 Student；RMA-only cube ContactSensor 以0.5N阈值生成左右指接触，单侧/双侧接触每步分别奖励0.1/2.0。Teacher 接收 cube XYZ 与真实双指接触；Student 的 adaptation head 从同一 RGB 同时预测 XYZ 和两路接触概率，并通过位置 SmoothL1、接触 BCE 和动作 MSE 蒸馏冻结 Actor。当前 v3 Actor 内嵌 Panda FK，30维网络特征为原28维加左右接触2维；v5 RMA artifact 将 success 设为非终止统计条件，并只在 RMA 中降低 finger actuator 到 `40N/400/40`，但夹爪动作尺度仍为5mm/step。部署接口仍只需要 RGB、本体15维和 history4维，不使用物体或末端 quaternion。
 
 ## 9. 当前主要实验变量
 
@@ -131,6 +135,13 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 
 ```bash
 python scripts/reinforcement_learning/skrl/train.py --task TacEx-Sim2Real-Cube-Real-Alignment-v0 --num_envs 4 --enable_cameras --headless
+```
+
+RMA Teacher 与 Student：
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0 --num_envs 256 --headless
+python scripts/reinforcement_learning/skrl/train_rma_student.py --teacher_checkpoint <teacher.pt> --num_envs 4 --timesteps 100000 --enable_cameras --headless
 ```
 
 已确认训练命令示例：

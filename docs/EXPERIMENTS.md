@@ -17,12 +17,18 @@
 - 现实依据：`20260711_214450_real_alignment_reference/alignment_reference.json` 和同目录 RGB reference images
 - 环境：`source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
 - 当前 Agent：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_cfg_resnet18.yaml`，Actor mean 已改为 `tanh(ACTIONS)`
+- 随机化 profile：Clean；只随机 cube XY reset，关闭图像、光照、地面和台面颜色随机化
 - Seed：42
 - Actor observation：`wrist_resnet:512`、`proprio_obs:15`、`action_history:4`
-- Action：4 维 `[dx, dy, dz, gripper]`
+- Action：4 维 `[dx, dy, dz, gripper_total_width_delta]`；当前 Clean/DR v9 逐维 scale 为 `[0.025,0.025,0.025,0.005] m/policy step`；历史 v8/v7 分别为 25/2 mm 与 10/2 mm
 - Object：实测尺寸 `0.05x0.05x0.05 m`
-- Reward：reset-relative lift；5 mm 开始线性 lift reward，35 mm 触发 success hold，静止台面 lift reward 为 0
-- Camera/policy frequency：30 Hz
+- Object reset：Franka base/world 对齐坐标以 `(0.50,0.00,0.026) m` 为中心；前 20k policy steps 使用 `x=[0.48,0.52], y=[-0.02,0.02] m`，20k–100k 线性扩展，之后为完整 `x=[0.45,0.55], y=[-0.05,0.05] m`。play、bucket 和 rollout 强制完整范围
+- Geometry：台面厚度 `1 mm`、顶面 `z=0.001 m`，5 cm 方块初始质心 `z=0.026 m`
+- Reward：`5*reach + 15*lift + 100*success + table_collision_penalty`；质心抬升 0–35 mm 线性映射到 lift `[0,1]`，35 mm 连续保持 5 个 policy steps 触发 success；倾角只用于诊断，不参与 reward、success 或 done。目标机械臂 link 对台面最大接触力 `>1 N` 时该 step 加 `-10`
+- Frequency：physics 60 Hz；camera/render/policy/action/observation/reward/history 30 Hz（`sim.dt=1/60, decimation=2`）
+- Episode：5 秒，150 个 policy steps
+- 当前策略 camera resolution/intrinsics：`224x224`，有效 `K=[338.742544,0,123.748857; 0,340.550811,120.393372; 0,0,1]`。它对应现实 `640x480` 裁剪 `x=[100,500), y=[34,432)` 后将 400x398 双线性缩放到 224x224；仿真用 centered 300 px-focal coverage render 加固定 GPU warp 实现该有效 K
+- 当前 camera pose：`base_T_camera_color_optical` 的 `pos=(1.172904219177,0.031653013416,0.512212537004)`、Isaac `rot(wxyz)=(-0.375287920087,0.607013774710,0.582420741286,-0.389203461533)`、`convention=ros`；部署相机序列号锁定为 `215322076207`
 - Num envs：256，依据 `training_summary.txt`
 - 日志目录：`logs/skrl/sim2real_cube_real_alignment/2026-07-11_23-15-23_ppo_torch_vision_only_resnet18/`
 - Checkpoint：`checkpoints/best_agent.pt`；同目录存在 `agent_200000.pt`
@@ -30,23 +36,78 @@
 - 历史 Export contract：raw uint8 RGB `[N,224,224,3]`、`proprio_obs [N,15]`、`action_history [N,4]` -> unbounded raw mean action `[N,4]`，nominal frequency 30 Hz
 - Export validation：trace max abs error 0；synthetic/sim start/real median RGB 均输出 finite `(1,4)`，同输入重复误差 0；本机 CPU 平均推理约 8.4-9.3 ms
 - 普通 play metrics：`metrics/play/play_metrics_20260712_120929.csv` 当前记录的 success rate 为 `nan`，不能据此报告成功率
+- Gate-removal 前最后一轮训练：`logs/skrl/sim2real_cube_real_alignment/2026-07-25_22-01-32_ppo_torch_vision_only_resnet18/` 完成 200k steps，manifest 为 contract v3、40°→10° success curriculum，但仍声明 `privileged_dz_gate=applied_after_action_history_and_not_available_on_the_real_robot`；其 `best_agent.pt`、`agent_200000.pt` 不兼容当前 v9，无论训练标量如何都不得续训、导出或部署。对应 play CSV 的 success rate仍为 `nan`。
 - 已确认 smoke：环境可创建、reset、执行零动作；观测 shape 和动作空间正确。
-- 奖励 smoke：reset 后连续 4 个零动作得到 `lift_delta≈0.001 m`、`lift=0`、`success=0`、`total≈0.022`，未 terminated/truncated。
-- 5 cm 尺寸/阈值 smoke：实际 spawn size 为 `(0.05,0.05,0.05) m`；delta `[0,0.020,0.035] m` 得到 lift `[0,0.5,1]` 和 success `[False,False,True]`。
-- 图像对齐 smoke：按现实较平视的构图将相机拟合为 world `pos=(1.90,0.0,0.468)`、向下约 15°。seed 42 仿真帧 RGB mean `[70.6,113.0,70.1]`，现实 model median 为 `[80.1,113.0,81.9]`；方块中心分别为 `(86.6,128.6)` 和 `(85.6,128.5)` pixel。这是单帧外观检查，不是策略结果。
-- 修复后训练 contract：ResNet18 始终 `eval()` 且参数冻结；`action_history` 为上一拍 scaled/clamped processed action；Actor deterministic mean 为 `tanh(raw_mean)`；每个 run 保存可校验的 encoder artifact/manifest。
-- Checkpoint 兼容性：上述历史 checkpoint 虽然张量 shape 不变，但已经适应旧 BatchNorm、两拍延迟 history 和 unbounded mean 语义，不能 resume 后继续训练，也不能由 exporter 临时补 `tanh`；需要从头重新训练。
-- 修复后 checkpoint、部署 export、训练成功率和真机成功率：待确认，尚未执行新训练。
+- 旧奖励 smoke（已被当前质心语义替代）：reset 后最低角点日志曾为 `lift_delta≈0.001 m`。当前边界测试要求质心 delta `[0,0.0175,0.035] m` 得到 lift `[0,0.5,1]` 和 success `[False,False,True]`。
+- 物理可抓取证据（不是当前 v9 策略效果）：`logs/skrl/sim2real_cube_real_alignment/2026-07-25_20-43-05_ppo_torch_vision_only_resnet18/` 的 512-env 旧奖励训练日志在 step 4000 记录 `Instantaneous reward (max)=119.78437`，并在 step 4500 记录非零 `reward/success=0.000148437495`。这确认旧场景至少出现过完整 lift+success 的物理轨迹，但不能据此给出当前策略成功率。
+- Reach 几何隔离测试（2026-07-30，4-env Isaac）：reset 时左右指尖中心分别约为 `(0.4999,-0.0200,0.2995)` 与 `(0.4998,0.0200,0.2995) m`，中点约为 `(0.49984,0.000043,0.29952) m`；该中点与 `panda_hand+0.1034 m` IK TCP 的误差最大约 `1.37e-7 m`。使用生产 `_get_rewards()` 且隔离其他奖励后，方块质心位于中点、偏移 25 mm、偏移 50 mm、位于 `panda_hand` origin 时，reach 分别为 `1.0000/0.7551/0.5379/0.2245`，确认峰值位于实际指尖中点而非 hand origin。当前 reset 距离约 `0.274 m`，在 `reach_sigma=0.1 m` 下 raw reach 仅约 `0.0083`，因此早期 reach 数值小主要来自长距离 tanh 饱和，不是中心坐标错误。
+- 当前训练监控：`episode_success_rate_window` 是最近 200 个 policy steps 内成功结束 episode 数 / 所有结束 episode 数；一个并行 step 可贡献多个完成 episode，无完成 episode 的 step 仍推进窗口。日志同时记录窗口成功/完成数、累计成功/完成数和累计成功率；它与单步 `reward/success` 分开，后者仍是当前达到 35 mm 的环境比例。
+- 历史图像对齐 smoke：旧相机 world `pos=(1.90,0.0,0.468)`、向下约 15° 时，seed 42 仿真帧 RGB mean `[70.6,113.0,70.1]`，现实 model median 为 `[80.1,113.0,81.9]`；方块中心分别为 `(86.6,128.6)` 和 `(85.6,128.5)` pixel。这是旧位姿下的单帧外观检查，不适用于当前相机位姿，也不是策略结果。
+- 当前训练 contract v9：ResNet18 始终 `eval()` 且参数冻结；Clean/DR `action_history` 为上一拍逐维 scaled/clipped requested command `[0.025*u_x,0.025*u_y,0.025*u_z,0.005*g]`。夹爪目标宽度每个 policy step 只累加一次，physics application 只重发缓存目标；IK TCP 为固定 `panda_hand+0.1034 m`，reach/critic 使用左右指尖世界坐标中点；Actor 后控制链不读取 ground-truth object XY；Actor deterministic mean 为 `tanh(raw_mean)`。Contract 同时记录新 crop/有效 K/GPU 补偿、相机序列号、`x/y ±5 cm` 物体课程、台面、无倾角 success 和碰撞奖励语义。
+- Checkpoint 兼容性：上述历史 checkpoint 虽然张量 shape 不变，但已经适应旧 BatchNorm、两拍延迟 history、unbounded mean、per-finger/substep 夹爪语义、旧抓取中心或不同 policy frequency，不能在当前环境中 resume 后继续训练；旧 artifact 只能按其保存的环境配置复现，需要按当前 30 Hz/5 秒配置从头重新训练。
+- 当前短训练 run：`logs/skrl/sim2real_cube_real_alignment/2026-07-26_20-51-57_ppo_torch_vision_only_resnet18/`；`best_agent.pt` SHA-256 为 `92c930d2605b8abf58466cbb4717f2004bd92a96629937f62c05efae7fc341d3`。截至约 11.5k steps，TensorBoard 的 reach reward 从约 `0.023` 上升、最好约 `0.331`，reach distance 从约 `0.234 m` 降至约 `0.120 m`；lift 仅短暂约 `0.014`，success 近似为 0。因此它只能用于受控真机链路诊断，不能视为已学会抓取。
+- 当前 v8 export：`checkpoints/exported/policy_actor_e2e_best_agent.pt`，SHA-256 `b888e7321c0481f80623ffa84837f32bc8f426eefbd1af33937764d787744c24`；复制到 `franka/checkpoint/real_alignment_v8_25mm/exported/`，独立 JIT 测试确认输出 finite、bounded、repeat diff 为 0。真机成功率：待确认。
 - 修复后链路 smoke：`logs/skrl/sim2real_cube_real_alignment/2026-07-12_14-29-22_ppo_torch_vision_only_resnet18/` 以 1 env 完成 128 steps/一次 PPO update，并用测试 `agent_128.pt` 跑通 RGB/feature export、独立 JIT tester 和 2-step deterministic play。该 checkpoint 只验证代码链路，不计作策略效果实验。
-- 待确认：D435-to-Franka 外参、真实方块世界坐标/尺寸/质量/摩擦、真机成功率。
+- 待确认：新 D435 外参的标定误差、新 crop 下当前 `x=[0.45,0.55] m` 全范围方块的完整可见性、真实方块质量/摩擦、真机实际 30 Hz 抖动和成功率。当前 v9 尚无新训练 checkpoint 或真机 bundle；历史 v8 仿真与独立真机配置仍声明 25/2 mm，不得用于 v9 环境。
 
 ### EXP-004 推荐训练命令
 
 ```bash
 python scripts/reinforcement_learning/skrl/train.py \
   --task TacEx-Sim2Real-Cube-Real-Alignment-v0 \
+  --num_envs 256 \
+  --enable_cameras \
+  --start_frame_count 5 \
+  --headless
+```
+
+训练完成后在完整位置范围评估至少 100 个完整 episode；当前接受标准为 success rate
+`>=80%` 且机械臂撞桌 transition 比例 `<1%`。达到标准前不导出真机 bundle。
+
+## EXP-004-DR — Real-reference-aligned broad domain-randomized Cube PPO
+
+- 状态：延后 DR 的 300k curriculum 环境和训练配置已实现，待从头训练；旧 200k DR run 不等价于当前 profile
+- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`
+- 继承：与 EXP-004 Clean 使用相同机器人、相机、方块、动作、观测、奖励和 done
+- 课程：0–100k outer policy step 使用 `scale=0` 的精确 Clean 视觉场景，并先完成 20k–100k 物体位置课程；100k–220k 从 0 线性增至 100%；220k–300k 保持 full range。`common_step_counter` 与 `num_envs` 无关，当前 scale 记录为 `info/dr_curriculum_scale`，resume offset 当前需手动设置。
+- 相机 DR：以标定位姿为中心，full range 为 XYZ 各 `±3 mm`、RPY 各 `±1°`；GPU 等效 focal scale `[0.985,1.015]`、principal point shift 各 `±2 px`
+- 图像 DR：brightness/contrast/saturation/gamma 均 `[0.85,1.15]`、hue `±5°`、white-balance red/blue shift `±0.08`、Gaussian blur probability `0.15` / kernel `3`、Gaussian noise std `[0,0.01]`
+- 场景 DR：plate 以 Clean `(0.02,0.02,0.02)` 为中心并在 full scale 取 `[0.01,0.05]`，backdrop 以 Clean `(0.01,0.01,0.01)` 为中心并取 `[0.005,0.03]`；batch-global DomeLight 以 Clean intensity/color 为中心，full range intensity `[1000,3000]`、relative color-temperature tint `[3800,7200] K`；global ground 固定
+- 未包含：质量、摩擦和机器人动力学随机化
+- Agent：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_dr_cfg_resnet18.yaml`
+- 日志目录：`logs/skrl/sim2real_cube_real_alignment_dr/`
+- Trainer：300000 outer policy steps
+- checkpoint、训练成功率和真机成功率：待确认
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-DR-v0 \
   --num_envs 4 \
   --enable_cameras \
+  --headless
+```
+
+## EXP-004-P — Real-Alignment privileged-position reward/control upper bound
+
+- 状态：环境和 Agent 配置已实现；训练与成功率待确认
+- 目标：去除视觉定位变量，判断当前动作、物理和 reach/lift/success 奖励能否学会稳定抓取
+- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-Privileged-v0`
+- Environment：`source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_privileged_env.py`
+- Agent：`source/tacex_tasks/tacex_tasks/sim2real_grasp/agents/skrl_ppo_cube_real_alignment_privileged_cfg.yaml`
+- Actor observation：28-D，`proprio_obs:15 + action_history:4 + privileged_cube_pos:3 + privileged_gripper_pos:3 + privileged_target_pos:3`
+- Position frame：去除 `scene.env_origins` 的 robot-root-aligned per-env frame
+- Camera/encoder：均不创建；无需 `--enable_cameras`
+- Action/reward/done：继承 EXP-004 Clean，保持 4-D total-width action、质心 0–35 mm lift、无倾角 gate、5-step hold、撞桌 `-10` 和 150-step horizon
+- PPO：与 Clean baseline 保持 rollouts 128、4 epochs、16 minibatches、learning rate `3e-4`，用于尽量只比较观测差异
+- 日志目录：`logs/skrl/sim2real_cube_real_alignment_privileged/`
+- Checkpoint、训练成功率、确定性 play 成功率：待确认
+- 训练链路 smoke：`logs/skrl/sim2real_cube_real_alignment_privileged/2026-07-26_16-18-10_ppo_torch_privileged_position/` 使用 4 env 完成 128 steps/一次 PPO update；只证明环境、28-D Actor、49-D Critic 和 Runner 接通，不计作抓取效果。
+- 部署：不允许；Actor 依赖 simulator ground truth
+
+```bash
+python scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-Privileged-v0 \
+  --num_envs 256 \
   --headless
 ```
 
@@ -248,9 +309,61 @@ python scripts/reinforcement_learning/skrl/play.py --task Isaac-UR10-Robotiq-2F8
 | 抓取/放置成功率 | 待确认 | 未找到评估 CSV |
 | 平均回报 | 待确认 | 未汇总 TensorBoard event |
 
+## EXP-003 — Real-Alignment v3 exported Actor 批量 rollout 诊断
+
+- 状态：已完成诊断采集；该 checkpoint 不满足当前 v9 部署 contract
+- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-v0`
+- Policy / method：PPO vision-only ResNet18 exported deterministic Actor
+- Seed：42
+- Num envs：32
+- Policy steps：450（每个 episode 最多 150）
+- Checkpoint：`logs/skrl/sim2real_cube_real_alignment/2026-07-25_22-01-32_ppo_torch_vision_only_resnet18/checkpoints/best_agent.pt`
+- Exported Actor：`logs/skrl/sim2real_cube_real_alignment/2026-07-25_22-01-32_ppo_torch_vision_only_resnet18/checkpoints/exported/policy_actor_e2e_best_agent.pt`
+- Contract：v3；显式 legacy diagnostic，仅复现保存的 `env.pkl`，不表示当前 v9/真机兼容
+- 结果来源：
+  - `metrics/sim2real_rollouts/rollout_v3_32env_450steps.npz`
+  - `metrics/sim2real_rollouts/rollout_v3_32env_450steps.summary.json`
+  - `metrics/sim2real_rollouts/rollout_v3_32env_450steps.analysis.json`
+  - `metrics/sim2real_rollouts/rollout_v3_32env_450steps.actions.csv`
+
+### EXP-003 结果
+
+| 指标 | 值 |
+| --- | ---: |
+| Transition 数 | 14,400 |
+| 完成 episode | 98 |
+| Success terminal | 7 |
+| 完成 episode 成功率 | 7.14% |
+| episode 第一步 mean action `[x,y,z,g]` | `[0.583,-0.307,-0.960,0.765]` |
+| episode 第一步 Z 近饱和比例 | 93.08% |
+| episode 第一步 gripper 近饱和比例 | 89.23% |
+| 全部 transition gripper 近饱和比例 | 51.36% |
+| 夹爪目标位于 80 mm 上限比例 | 76.51% |
+| legacy privileged dz gate 触发比例 | 0.00% |
+| 最大质心相对抬升 | 59.10 mm |
+
+结论：该策略在仿真中已经不是可靠抓取策略。前 30 步主要输出接近最大幅度的 XYZ 运动，并持续给出正夹爪增量（张开），绝大部分时间把夹爪目标推到 80 mm；因此真机表现差不能只归因于视觉 sim-to-real gap。真机 0712 配置的 XYZ/夹爪 scale、history scale/delay 又与 v3 metadata 不一致，会进一步改变闭环行为。
+
 ## Planned Experiments
 
-当前无已从仓库确认的计划实验。新增计划实验时使用以下模板。
+## EXP-005 — Real-Alignment RMA 教师学生蒸馏
+
+- 状态：计划；代码路径已实现，训练未执行
+- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0` / `...-Student-v0`
+- Scene：Real-Alignment Clean v9
+- Policy / method：200k privileged PPO Teacher + 100k single-frame visual position/contact/action distillation
+- Teacher Actor external input：`proprio[15] + history[4] + cube_xyz_root[3] + left_right_contact[2]`
+- Teacher Actor network feature：上述24维 + `gripper_xyz_root_from_fk[3] + (cube-gripper)_xyz[3]` = 30维；不使用物体/末端 quaternion
+- Student deployment input：`RGB[224,224,3] + proprio[15] + history[4]`
+- 评估：固定10x10 XY 网格，共100 episodes
+- RMA-only reward：0.5 N接触阈值；单侧接触0.1/step，双侧接触2.0/step
+- RMA-only gripper actuator：动作尺度仍为5 mm/step；finger `effort_limit_sim=40`、`stiffness=400`、`damping=40`
+- Done：RMA success 不终止 episode；仅 timeout 或严重机器人穿地碰撞终止，episode 成功统计按曾经达到 success 计算
+- 验收：Teacher success >=80%；Student success >=0.9 Teacher；Student 3D RMSE <=15 mm
+- checkpoint：RMA v4 及更早 artifact 已失效；当前 v5 需从头训练
+- 结果：待训练与评估，当前不得写为已达标
+
+新增计划实验时使用以下模板。
 
 ```text
 ## EXP-XXX — 标题

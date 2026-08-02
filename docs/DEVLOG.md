@@ -9,6 +9,250 @@
 - 不确定的作者、意图、commit、seed、checkpoint 或结果统一写“待确认”。
 - 涉及观测、动作、奖励、done、网络输入维度或 checkpoint 兼容性的改动必须明确说明。
 
+## 2026-08-01 CST — DR 延后到 100k 并训练 300k
+
+- 类型：DR 环境配置 / Agent 配置 / 训练监控 / 测试 / 文档
+- 修改：仅将 Real-Alignment DR 的零扰动阶段延长到 100k，100k–220k 线性扩大到 full range，220k–300k 保持 full range；DR Agent trainer 从 200k 延长到 300k。Clean 环境、Clean Agent 及其 200k trainer 不变。
+- 日志：DR 的 `_compute_additional_reward()` 保留继承的撞桌 penalty，并新增 `info/dr_curriculum_scale`，不改变 reward 数值。
+- 依据：旧 200k DR run 的 TensorBoard 曲线在课程后段出现 reach/lift 回退，累计成功接近 0；新时间表先让继承的物体位置课程在 100k 完成，再启动视觉随机化。
+- 影响：不修改物理、Actor/Critic observation key/shape、4-D action、reward、success、done 或 Clean task；DR env config hash 和训练时长改变，旧 DR checkpoint 不能作为当前 profile 的续训起点，需要从头训练。
+- 验证情况：`git diff --check`、完整 `python -m compileall -q source scripts tools`、Clean/DR Agent YAML 解析和 4-env Real-Alignment Isaac 定向 pytest 12 项通过；其中 Clean trainer 明确保持 200k，DR trainer 为 300k，DR 课程边界和 `info/dr_curriculum_scale` 断言通过。未执行 300k 训练、正式评估或真机闭环。
+
+## 2026-08-01 CST — DR 改为严格基于 Clean 的视觉课程
+
+- 类型：环境配置 / GPU 视觉随机化 / 光照 / 测试 / 文档
+- 修改：Real-Alignment DR 的课程初值从 `0.10` 改为 `0`，前 20k policy steps 与 Clean 视觉路径完全一致，20k–120k 再线性扩大到 full range。Plate/backdrop 的中心改为 Clean 的近黑材质，分别在 full scale 的每通道 `[0.01,0.05]` 和 `[0.005,0.03]` 内变化。
+- 光照：DomeLight 以 Clean 的 intensity `2000`、color `(0.75,0.75,0.75)` 为中心；随机色温使用相对 5500 K 的 RGB tint 且关闭 renderer 二次色温处理，使 scale=0 精确恢复 Clean。
+- 影响：不修改物理、4-D action、`action_history/proprio/wrist_resnet` shape、奖励、success 或 done；DR 视觉分布和 env config hash 改变，旧 DR checkpoint 不作为新课程的续训起点。Clean checkpoint 的网络 shape 和控制语义保持兼容。
+- 验证情况：`git diff --check`、完整 `python -m compileall -q source scripts tools` 和 4-env Real-Alignment Isaac 定向 pytest 12 项通过；其中显式验证 scale=0 的相机/内参/后处理缓存、材质、光照及像素输出与 Clean 一致。标准 discovery 的 base Python 缺少 `isaacsim`；改用 `isaaclab_2.1.1` 后 warm start 成功，但仍被既有 ISSUE-015（缺失 `test_argparser_launch.py` skip target）阻断。未重新训练或执行真机闭环。
+
+## 2026-07-31 CST — 增加最近 200 policy steps 的 episode 成功率
+
+- 类型：训练监控 / play metrics / 测试 / 文档
+- 修改：Real-Alignment Clean/DR/Privileged 在每次 `_get_dones()` 后记录该 policy step 完成和成功的 episode 数；长度 200 的 step 环形窗口统计 `sum(success)/sum(completed)`，并保留累计成功率。无完成 episode 的 step 也推进窗口，窗口内无完成 episode 时 rate 为 0。
+- 日志：发布 `recent_success_rate`、`episode_success_rate_window`、`info/episode_success_rate_cumulative`、窗口及累计计数；每 200 步的现有 `[奖励]` 行追加窗口成功率、成功/完成分子分母和累计成功率。
+- 影响：不修改 reward、done、观测/action shape、控制、相机或 policy contract；一个成功 episode 只在连续保持 5 步触发 success done 时统计一次。
+- 验证情况：`git diff --check`、完整 `compileall`、4-env Clean/DR Isaac 定向 pytest 12 项和 2-env 无相机 Privileged pytest 1 项通过；窗口第 201 步淘汰第 1 步、累计统计不受窗口淘汰影响的边界断言通过。未执行重新训练或真机闭环。
+
+## 2026-07-30 CST — 验证 Real-Alignment reach 奖励几何峰值
+
+- 类型：诊断测试 / 实验记录
+- 修改：新增 4-env Isaac 回归测试，将方块质心分别写入左右指尖中点、25 mm 偏移、50 mm 偏移和 `panda_hand` origin，并通过生产 `_get_rewards()` 隔离测量 reach 项；没有修改奖励实现、权重或中心定义。
+- 结果：指尖中点与 `panda_hand+0.1034 m` TCP 误差最大约 `1.37e-7 m`；四个候选位置的 raw reach 分别为 `1.0000/0.7551/0.5379/0.2245`。reset 时夹爪中心到方块质心约 `0.274 m`，对应 raw reach 约 `0.0083`。
+- 结论：当前 reach 峰值确实位于夹持几何中心，未发现 object COM 或 fingertip midpoint 坐标错误；训练初期 reach 很小由 `reach=1-tanh(distance/0.1)` 在长距离区域接近饱和导致。是否调整 `reach_sigma` 或引入分阶段 shaping 尚未决定。
+- 验证情况：`git diff --check`、完整 `compileall` 和 4-env Real-Alignment Isaac 定向 pytest 11 项通过。
+
+## 2026-07-30 CST — Clean/DR 夹爪增量与 XY reset 范围更新
+
+- 类型：环境配置 / policy contract / 测试 / 文档
+- 修改：Clean 和 DR 的夹爪总宽度增量从 `0.002` 改为 `0.005 m/30 Hz policy step`；方块 nominal `(0.50,0.00) m` 不变，完整 x/y half-range 从 `0.10` 改为 `0.05 m`。位置课程前 20k step 仍为 `±0.02 m`，随后在 100k 达到 `±0.05 m`。Privileged 诊断任务显式保留旧 2 mm 与 `±0.10 m` 配置。
+- 契约：当前 Clean/DR action/history scale 为 `[0.025,0.025,0.025,0.005] m`，policy contract 升级到 v9；v7/v8 严格读取能力保留，旧 v8 live config 会因 action/reset 不匹配而 fail closed。
+- 影响：4-D action、Actor/Critic observation shape、奖励、success、done、相机和频率不变；第四维 history、夹爪 transition、物体 reset distribution 与 env hash 改变，需要从头训练。当前没有 v9 真机 bundle。
+- 验证情况：`git diff --check` 和完整 `compileall` 通过；4-env Clean/DR Isaac 定向 pytest 10 项与 2-env 无相机 Privileged pytest 1 项通过。标准 wrapper 仍误选 base Python；使用正确 Isaac 环境 warm start 成功后，被既有 ISSUE-015（缺失 `test_argparser_launch.py` skip target）阻断。未执行重新训练、正式评估或真机闭环。
+
+## 2026-07-26 CST — 导出 25/2 mm Real-Alignment v8 真机 bundle
+
+- 类型：policy contract / TorchScript export / 真机配置 / 测试 / 文档
+- 依据：`2026-07-26_20-51-57_ppo_torch_vision_only_resnet18` 保存的环境配置使用 `[0.025,0.025,0.025,0.002] m/policy step`，不能套用固定 10/2 mm 的 v7 配置。
+- 修改：contract validator 新增 v8 25/2 mm 严格语义，同时保留 v7 10/2 mm 读取能力；新增 `franka/configs/e2e_bundle_real_alignment_v8_25mm.json`，并将导出的模型/metadata 放入 `franka/checkpoint/real_alignment_v8_25mm/exported/`。
+- Artifact：TorchScript SHA-256 为 `b888e7321c0481f80623ffa84837f32bc8f426eefbd1af33937764d787744c24`，metadata 声明 RGB `224x224x3`、proprio 15、history 4、action 4、contract v8。
+- 验证情况：GPU 物理导出首次因并行训练占用显存失败；未终止训练进程，改用 CPU 物理成功导出，trace max abs error 为 0。独立 JIT 测试输出 finite/bounded，17 项真机 runtime 单测在注入 `franky` import stub 后通过，完整 bundle/config/metadata 严格校验通过。未连接或驱动真机。
+
+## 2026-07-26 CST — Real-Alignment 切换到 400x398 实测 crop 和有效 K
+
+- 类型：相机内参 / GPU 预处理 / policy contract / 真机配置 / 测试 / 文档
+- 修改：Clean/DR 的真实预处理改为 `640x480 -> crop x=[100,500), y=[34,432) -> bilinear 224x224`，策略有效 K 为 `[338.742544,0,123.748857; 0,340.550811,120.393372; 0,0,1]`。
+- Omniverse 补偿：原生 224x224 相机使用 centered 300 px-focal coverage view；ResNet 前用固定 batched GPU affine grid 映射到有效 K，以保留非中心主点和 `fx/fy` 差异。DR 在固定映射之后继续施加其随机 intrinsic/颜色后处理。
+- Contract/部署：升级到 v7，记录 raw K、crop、目标 K、native render K 和补偿模式；新增独立 `franka/configs/e2e_bundle_real_alignment_v7.json`，v6 和 0712 配置不覆盖。旧 Real-Alignment v6 checkpoint 因视觉 contract 改变而 fail closed。
+- 影响：Actor/Critic observation shape、4-D action、reward/success/done、224x224 camera buffer 和控制语义不变；视觉输入改变，必须重新训练。
+- 验证情况：`git diff --check`、完整 `compileall`、JSON 解析、4-env Real-Alignment Isaac 定向 pytest 10 项、无相机 Privileged pytest 1 项和真机 action/history/crop/config 单测 16 项通过。标准 wrapper 仍误选 base Python；用正确 Isaac 环境执行 discovery 可完成 warm start，但被既有 ISSUE-015（缺失 `test_argparser_launch.py` skip target）阻断。未执行重新训练、完整 x 范围图像 smoke 或真实硬件闭环。
+
+## 2026-07-26 CST — Real-Alignment XYZ 动作提高到 10 mm/step
+
+- 类型：动作控制 / history / policy contract / 真机配置 / 测试 / 文档
+- 修改：Clean/DR/Privileged Real-Alignment 的 XYZ scale 从 `0.005` 改为 `0.010 m/30 Hz policy step`；夹爪总宽度仍为 `0.002 m/step`。History 和真机 action adapter 同步为 `[0.010,0.010,0.010,0.002]`。
+- Contract：升级到 v6；旧 v5 Real-Alignment 明确 fail closed。独立真机配置更新为 `franka/configs/e2e_bundle_real_alignment_v6.json`，旧 `0712` 配置不变。
+- 影响：Actor/Critic observation shape、4-D action shape、相机、reward/success/done 不变；XYZ transition 和 history 数值范围改变，必须从头训练。
+- 验证情况：`git diff --check`、完整 `compileall`、Real-Alignment Isaac 定向 pytest 9 项、Privileged pytest 1 项和真机 action/history/crop/config 测试 16 项通过；满幅 XYZ action 与 history 均断言为 `±0.010 m`，v5 contract 拒绝逻辑通过。未重新训练。
+
+## 2026-07-26 CST — Real-Alignment 方块 x 范围改为 0.40–0.60 m
+
+- 类型：环境 reset / 位置课程 / policy contract / 测试 / 文档
+- 修改：Clean/DR/Privileged 共用的方块 nominal x 从 `0.60 m` 改为 `0.50 m`，完整 robot-root 范围改为 `x=[0.40,0.60] m`；y 仍为 `[-0.10,0.10] m`。前 20k steps 的 x 课程范围相应改为 `[0.48,0.52] m`，20k–100k 线性扩展。
+- 原因：当前相机标定下，旧 `x=0.70 m` 方块最下沿落在 224x224 图像之外；新上界 `x=0.60 m` 对完整 5 cm 方块保留约 10 像素底部余量。
+- 影响：相机、动作尺度、观测维度、reward/success/done 不变；reset distribution 和 v5 contract nominal/bounds 改变，旧范围 checkpoint 不兼容。
+- 验证情况：`git diff --check`、完整 `compileall` 和 Real-Alignment/Privileged 定向 pytest 通过；3-env Isaac 图像 smoke 将方块分别固定在 `x=0.40/0.50/0.60 m`，三者均完整出现在实际 `[224,224,3]` 相机输出中，最远端仍保留底部边缘。预览保存于 `logs/validation/real_alignment_x_0p40_0p60_preview/`；尚未重新训练。
+
+## 2026-07-26 CST — Real-Alignment v5 对齐新真机几何、视觉、动作和碰撞奖励
+
+- 类型：环境 / 奖励与 success / ContactSensor / 课程 / 部署 contract / rollout / 测试 / 文档
+- 适用 task：`TacEx-Sim2Real-Cube-Real-Alignment-v0`、DR 和 Privileged 变体；通用 `TacEx-Sim2Real-Cube-Grasp-v0` 保留原动作与倾角语义。
+- 几何/reset：台面厚度设为 `1 mm`、顶面 `z=0.001 m`，方块质心 `z=0.026 m`；XY 以 robot-root `(0.60,0.00)` 为中心，前 20k steps 为 `±2 cm`，20k–100k 线性扩展到 `±10 cm`。play、bucket 和 rollout 强制完整范围。
+- 相机：改用指定 `base_T_camera_color_optical` ROS 位姿；仿真等效渲染 224x224，真机锁定序列号 `215322076207` 并执行 `640x480 -> crop x=[80,560) -> bilinear 224x224`。Clean 固定近黑台面/背景和白方块，DR 保留既有视觉课程。
+- 动作/history：30 Hz normalized action 逐维缩放为 `[0.005,0.005,0.005,0.002] m/step`；第四维为缓存总宽度增量，history 记录上一拍请求增量。真机 runner 新增 vector history scales 和 strict v5 contract 校验，旧 scalar 配置仍可读取，新增独立 v5 配置且未覆盖 `0712`；新配置 TCP workspace 的 x 上限同步到物体中心上界 `0.70 m`，未额外增加安全余量。
+- 奖励/success：保留 `5*reach + 15*lift + 100*success`，质心 lift 为 0–35 mm；35 mm 连续 5 步即 success。倾角继续写诊断日志，但不再参与 reward、success 或 done。台面 ContactSensor 过滤 `panda_link1–7`、hand 和双 finger，最大力 `>1 N` 时每 step 加 `-10`，不终止。
+- Contract/rollout：contract 升至 v5，旧 v4 Real-Alignment fail closed；rollout 增加碰撞标志/接触力/惩罚，分析不再用可能被碰撞项抵消的 raw reward 判断 success terminal。
+- 影响：Actor/Critic observation shape 和 4-D action shape 不变；物理动作、视觉、reset、reward/success 和 config hash 改变，旧 checkpoint 必须废弃并从头训练。
+- 验证情况：`git diff --check` 和完整 `compileall` 通过；定向 Real-Alignment pytest 9 项、Privileged pytest 1 项及真机 crop/history/config 测试 16 项通过。1-env Clean Isaac smoke 确认 RGB `[1,224,224,3]`、ContactSensor history `[1,2,1,10,3]`、正常台面位置下 100 步满幅下降无误碰撞；仅在临时把运动学台面移到指尖高度的强制接触 smoke 中，实际 filtered force 触发并施加 `-10`。已保存 5 张仿真帧和 1 张仓库旧现实参考 crop。标准 discovery 在 warm start 后被既有 `ISSUE-015` 阻断；未执行 200k 训练、100-episode 正式评估或真实硬件闭环。
+
+## 2026-07-26 CST — 新增无相机 privileged-position Cube 上界任务
+
+- 类型：环境 / Agent 配置 / task 注册 / 定向测试 / 文档
+- 新任务：`TacEx-Sim2Real-Cube-Real-Alignment-Privileged-v0`，继承 Clean Real-Alignment 的物理、reset、4-D action、reward、done 和 5 秒/150-step horizon。
+- 场景：不创建 `wrist_camera` 或 visual backdrop；继承链新增默认开启的 `vision_encoder_enabled` 开关，新任务设为 false，因此不构造 ResNet18，已有视觉 task 行为不变。
+- Actor：28-D 输入，包含 `proprio [N,15]`、`history [N,4]`、仿真真值 `cube/gripper/target position [N,9]`；位置去除 `scene.env_origins`，支持多环境。Actor mean 仍使用 `tanh`。
+- Critic：保持 49-D privileged input；新任务使用独立 PPO YAML 和 `logs/skrl/sim2real_cube_real_alignment_privileged/`。
+- 目的：若该任务能稳定抓取而 vision-only 不能，主要问题指向视觉定位/表征；若仍不能，则优先检查奖励、动作时序、物理接触和课程。
+- 兼容性：Actor input keys/28-D shape 与视觉 checkpoint 不兼容，必须从头训练；该 checkpoint 含仿真真值，不能导出到真机。
+- 验证情况：`git diff --check`、完整 `python -m compileall -q source scripts tools`
+  和 Agent YAML 解析通过；2-env `enable_cameras=False` 定向 pytest 通过，实际
+  创建/reset/step 并确认无 `wrist_camera`/ResNet、position identity 和有限奖励。
+  另以 4 env 完成 128 steps/一次 PPO update，Actor/critic 自动生成和训练链路通过。
+  标准 `./tacex.sh -p tools/run_all_tests.py --discover_only` 因 wrapper 误用 base
+  Python、缺少 `isaacsim` 而在 warm start 前失败；在正确 conda 环境中直接执行
+  discover 时 warm start 成功，但被既有 `ISSUE-015`（skip 列表中的
+  `test_argparser_launch.py` 不存在）阻断，均不属于新任务测试失败。
+
+## 2026-07-26 CST — Sim2real Cube 删除 privileged `dz` gate
+
+- 类型：动作控制 / sim2real contract / checkpoint 兼容性 / 测试 / 文档
+- 适用 task：`TacEx-Sim2Real-Cube-Grasp-v0`、`TacEx-Sim2Real-Cube-Real-Alignment-v0`、`TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`。
+- 修改：父 Cylinder 配置增加 `privileged_dz_gate_enabled=true` 以保留 legacy 行为；Cube 配置覆盖为 false，因此 `_pre_physics_step()` 不再读取 ground-truth object XY，也不再修改 Actor 请求的 `dz`。
+- Contract：升级到 v4，Cube 使用 `per_dimension_processed_action_no_privileged_gate_v3` history 语义并记录 `privileged_dz_gate=disabled`；Cube v1/v2/v3 fail closed。
+- 影响：观测 key/shape、4-D action、奖励、done、夹爪总宽度和 IK 本身不变；Actor 输出后的 XYZ 控制语义改变，2026-07-25 22:01 的 v3 200k run 必须废弃并从头训练。
+- 验证情况：`git diff --check`、`python -m compileall -q source scripts tools`
+  通过；4-env Isaac 定向 pytest 共 7 个测试通过，其中运行时断言 Cube
+  `_pre_physics_step()` 不访问 gate geometry。另用真实 2026-07-25 22:01
+  manifest 验证 v3 checkpoint 被 v4 validator 明确拒绝。
+
+## 2026-07-25 CST — 两个 sim2real Cube task 改为质心 lift curriculum
+
+- 类型：奖励/success 语义 / curriculum / 日志 / policy contract / 测试 / 文档
+- 适用 task：`TacEx-Sim2Real-Cube-Grasp-v0`、`TacEx-Sim2Real-Cube-Real-Alignment-v0`、`TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`。
+- Lift：不再使用最低角点；稳定落桌质心基准为 reset center 加 cube/plate rest offset。质心抬升 `0–35 mm` 线性映射到 lift `[0,1]`，且倾角超限不再将这个学习信号清零；35 mm 满足 success height。
+- Tilt：仅约束 success，最大允许倾角从 policy step 0 的 `40°` 线性收紧到 step 120k 的 `10°`，形成先易后难的课程；`lift_tilt_curriculum_step_offset` 用于显式 resume。
+- 日志：保留当前时刻的 env-mean reach/lift/success/total，新增最近 `reward_print_interval` 个 policy steps 的 `avg_step_total`。
+- Contract：policy contract 从 v2 升至 v3并记录质心 lift/倾角课程字段；strict Cube v2 checkpoint fail closed。观测 key/shape、4-D action、控制、网络输入输出和真机程序不变。
+- 历史物理证据：只读检查 2026-07-25 20:43 的 512-env 旧奖励 event log，确认 step 4000 的 instantaneous max 为 `119.78437` 且 success 标量曾非零；这证明场景曾产生完整抓取轨迹，但不是当前 v3 checkpoint 的成功率结果。
+- 验证情况：`git diff --check` 与 `python -m compileall -q source scripts tools`
+  通过；定向 Isaac pytest 共 6 个测试通过，并实际创建/重置 4 个 DR 并行环境。
+  另以 1 env 实际创建 Clean task，reset 后执行一个零动作 policy step，确认
+  30 Hz、150-step horizon、有限奖励和 `(512,15,4)` policy 输入维度。
+  标准 `--discover_only` 完成 Isaac warm start 后仍被既有 `ISSUE-015`
+  （缺失 `test_argparser_launch.py` skip target）阻断。
+
+## 2026-07-25 CST — Real-Alignment DR 增加相机/光照/GPU 后处理课程学习
+
+- 类型：环境视觉随机化 / curriculum / 多环境语义 / 定向测试 / 文档
+- 课程：`common_step_counter` 每个 30 Hz policy step 加一，与 `num_envs` 无关；0–20k step 使用 full range 的 10%，20k–120k 线性增到 100%，之后保持 full range。新增 `dr_curriculum_step_offset` 作为显式 resume hook，训练入口尚未自动恢复该值。
+- 相机：以用户提供标定位姿为中心，full range 为 XYZ 各 `±3 mm`、RPY 各 `±1°`，使用 `T_calib*deltaT` 和 `TiledCamera.set_world_poses(env_ids=...)`；focal scale `[0.985,1.015]` 与 principal point `±2 px` 通过 batched GPU affine warp 实现。
+- 后处理：每环境每 episode 缓存 brightness/contrast/saturation/gamma/hue/white balance/blur/noise std；Gaussian noise 像素值逐帧采样。处理输入/输出均为 `[N,3,224,224]`，不改变 frozen ResNet18 的 `[N,512]` 输出。
+- 场景：plate 在暗灰/黑色附近、backdrop 在绿色附近使用每环境独立 material；global ground 固定。共享 DomeLight 只在 full-batch reset 更新，部分 reset 不影响其他环境缓存或全局光照。
+- 影响：Clean task、Actor/Critic observation key/shape、4-D action、控制、奖励和 done 均不变；DR env config hash 和视觉分布改变，旧 DR checkpoint 不应被当作相同 profile 续训结果。
+- 验证情况：目标文件 `py_compile` 和局部 `git diff --check` 通过；定向 Isaac pytest 的配置用例进入并通过，但当前另一个 Python 进程占用约 19.1 GiB GPU memory，PhysX 申请约 640 MiB contact buffer 时 OOM，4 个环境级用例未实际完成。
+
+## 2026-07-25 CST — Real-Alignment 对齐 30 Hz 控制链路并延长为 5 秒
+
+- 类型：环境时间配置 / 定向测试 / 文档
+- 修改内容：physics 保持 `dt=1/60 s`，Real-Alignment Clean/DR 使用 `decimation=2`；camera `update_period=1/30 s`，render interval 跟随 decimation。camera/render/policy/action/observation/reward/history 统一为 30 Hz。
+- Episode：`episode_length_s` 从 2.5 秒改为 5 秒，实际 timeout horizon 为 150 个 policy steps；每个 policy step 包含两个 physics substeps。
+- Contract：新增 camera update period/frequency、episode 秒数和 max episode steps；validator 固定要求 60 Hz physics、30 Hz camera/policy、5 秒/150 步，旧时间语义 fail closed。
+- 影响：Actor/critic keys 和张量维度、动作尺度、奖励阈值、success/done 类型不变；控制/history 时间尺度和 episode horizon 改变，旧 60 Hz checkpoint 不得在当前配置中续训或部署。
+- 验证情况：`python -m compileall -q source scripts tools` 和 `git diff --check` 通过；定向 Isaac pytest 4 个测试通过，实际报告 physics `1/60 s`、render/env step `1/30 s`，并断言 `max_episode_length=150`。标准 discover warm start 成功后仍被既有 `ISSUE-015`（缺失 `test_argparser_launch.py` skip target）阻断。
+
+## 2026-07-25 CST — Real-Alignment 使用左右指尖位姿计算抓取中心
+
+- 类型：环境几何 / 奖励 / privileged critic / action gate / strict contract / 测试 / 文档
+- 修改内容：Clean/DR 的 IK/Jacobian TCP 从固定 `panda_hand+0.107 m` 改为 `panda_hand+0.1034 m`；reach reward、critic gripper position/target distance 和近台面 `dz` gate 改用左右 finger link 各经本地 `[0,0,0.045] m` 变换后的世界坐标中点。
+- 几何依据：标准 Panda hand 到 finger origin 为 `0.0584 m`，finger origin 到 nominal tip center 为 `0.045 m`，合计固定 TCP `0.1034 m`；运行时左右指尖中点会显式使用两侧 link 位姿。
+- 兼容范围：基础 Cube/Cylinder 通过默认 hook 保留旧 reward/gate 中心；Real-Alignment Clean/DR 共用新语义。
+- 影响：Actor observation keys/dim、action shape、夹爪总宽度控制和 done 不变；reward、critic privileged state、`dz` gate 与 IK TCP 数值改变。strict v2 contract 新增 TCP/center 字段，旧 Real-Alignment checkpoint 必须重新训练。
+- 额外确认：当时发现 `sim.dt=1/60, decimation=1` 使 policy 为 60 Hz、camera 为 30 Hz；后续已按用户确认改为 `decimation=2`，见 `ISSUE-017` 和本日后续记录。
+- 验证情况：定向 Isaac pytest 4 个测试通过，包含指尖中点、固定 TCP、critic/reward、夹爪控制与 contract；完整静态验证见本次任务报告。
+
+## 2026-07-25 CST — Real-Alignment 分离 Clean 与 broad DR 环境
+
+- 类型：环境配置继承 / task 注册 / Agent 配置 / strict contract / 测试 / 文档
+- Clean：`TacEx-Sim2Real-Cube-Real-Alignment-v0` 只保留 cube XY reset 随机化，关闭图像、光照、ground 和 plate color 随机化。
+- DR：新增 `TacEx-Sim2Real-Cube-Real-Alignment-DR-v0`，继承完全相同的机器人、224x224 相机、方块、动作、观测、奖励和 done，启用 broad image/lighting/scene appearance DR。
+- 日志：DR 使用独立 `skrl_ppo_cube_real_alignment_dr_cfg_resnet18.yaml` 和 `logs/skrl/sim2real_cube_real_alignment_dr/`。
+- Contract：新增 task 已加入 train/export/strict contract allowlist；旧 v1 Real-Alignment DR contract fail closed。
+- Checkpoint：Clean 和 DR 的 task id、env hash 和视觉分布不同，不得跨 profile resume；两者均需从头训练。
+- 未加入：质量、摩擦、相机位姿/内参和机器人动力学随机化，因为现实范围待确认。
+- 验证情况：`git diff --check`、受影响 Python `py_compile`、两个 Agent YAML 解析通过；定向 Isaac pytest 为 `3 passed`。另以 1-env 实际创建 DR task、reset 并执行一步零动作，确认 RGB `[1,224,224,4]`、ResNet `[1,512]`、proprio `[1,15]`、history `[1,4]` 和 reward 均为有限值。
+
+## 2026-07-25 CST — Real-Alignment 相机改为 crop 等效 224x224 直接渲染
+
+- 类型：环境相机配置 / 定向测试 / 文档
+- 修改内容：仅将 `TacEx-Sim2Real-Cube-Real-Alignment-v0` 相机从原生 640x480 改为直接 224x224 渲染。等效内参为 `fx=282.285453, fy=282.373380, cx=112.457381, cy=115.692837`，对应真机 `640x480 -> crop x=[80,560), y=[0,480) -> bilinear resize 224x224`。
+- 显存语义：仿真不再创建 640x480 RGB sensor buffer；像素数从 307200 降至 50176。总显存还取决于 RTX、物理和 PPO buffer，不能据此推断整体下降 6.1 倍。
+- 影响：`wrist_resnet:512`、`proprio_obs:15`、`action_history:4`、动作、奖励和 done 均不变；camera contract 和视觉分布改变，旧 Real-Alignment checkpoint 必须重新训练。
+- 真机边界：本次不修改 `franka`；现有 0712 配置已经声明中央 480x480 crop。RGB/BGR、插值、畸变和当前真机运行时是否严格执行该配置仍需实机验证。
+- 验证情况：`git diff --check`、`python -m compileall -q source scripts tools` 通过；定向 Isaac 测试
+  `conda run -n isaaclab_2.1.1 env TERM=xterm python -m pytest -q -s source/tacex_tasks/test/test_sim2real_cube_real_alignment_gripper.py`
+  为 `2 passed`，实际 sensor RGB 和 policy contract 均断言为 224x224。
+
+## 2026-07-25 CST — Real-Alignment Cube 改为总夹爪宽度增量控制
+
+- 类型：环境动作控制 / policy contract / export metadata / 测试 / 文档
+- 修改内容：Real-Alignment 第四维 clipped action `g` 每个 30 Hz policy step 请求 `0.01*g m` 总宽度增量；缓存目标限制到 `[0,0.08] m`，两侧 finger target 均为一半，两个 physics substep 只重发同一目标。Reset 恢复选中环境约 40 mm 初始宽度。
+- History：`action_history[3]=0.01*g`，即请求的总宽度增量；前三维保持 `0.05*[x,y,z]`。观测 key/shape、动作维度、奖励和 done 均不变。
+- Contract/export：新增 v2 逐维 scale `[0.05,0.05,0.05,0.01]`、总宽度缓存模式和对称映射字段；旧 v1 基础 Cube 可继续验证，旧 v1 Real-Alignment fail closed。
+- Checkpoint：动作 transition 语义改变，旧 Real-Alignment checkpoint 不得 resume 或部署，需要从头训练。
+- 真机边界：本次未修改 `franka`；当前真机总宽度 scale 仍为 `2 mm/step`，与仿真 `10 mm/step` 只在接口语义上对齐。
+- 验证情况：`git diff --check`、`python -m compileall -q source scripts tools` 通过；定向 Isaac 测试
+  `conda run -n isaaclab_2.1.1 env TERM=xterm python -m pytest -q -s source/tacex_tasks/test/test_sim2real_cube_real_alignment_gripper.py`
+  为 `2 passed`。仓库 discover runner 在既有 skip 配置处报
+  `ValueError: Test to skip 'test_argparser_launch.py' not found in tests.`，未进入测试发现。
+
+## 2026-07-25 CST — 现实对齐 Cube 相机改为原生 640x480 内参
+
+- 类型：环境相机配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
+  - `docs/PROJECT_OVERVIEW.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：仅将 `TacEx-Sim2Real-Cube-Real-Alignment-v0` 的相机输出从 `224x224` 改为 `640x480`，并使用用户提供的 `fx=604.897400, fy=605.085815, cx=320.980103, cy=247.913223`。
+- 视觉数据流：相机产生 `[N,480,640,3]` RGB，现有环境前处理随后双线性缩放为 `[N,3,224,224]`，冻结 ResNet18 继续输出 `wrist_resnet:[N,512]`。
+- 影响的观测：Actor observation key 和特征维度不变，但取消了旧的中央方形 crop 等效投影，构图、宽高比和视觉特征分布改变；相机渲染显存和带宽增加。
+- 影响的动作、奖励、done、网络维度：无。
+- checkpoint/export 兼容性：旧 checkpoint 参数 shape 兼容但视觉分布不再一致，必须重新评估，正式使用建议重新训练；旧 224x224 TorchScript export 不代表当前相机 contract。
+- 验证情况：本次任务结束报告记录实际执行命令。
+- 待确认：新内参的标定来源、640x480 仿真画面与现实 RGB 的像素级对齐，以及可承受的并行环境数量。
+
+## 2026-07-25 CST — 更新现实对齐 Cube 第三视角相机位姿
+
+- 类型：环境相机配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
+  - `docs/ARCHITECTURE.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DEVLOG.md`
+- 修改内容：仅将 `TacEx-Sim2Real-Cube-Real-Alignment-v0` 的固定第三视角相机更新为用户提供的 world `pos=(1.26349,-0.01190,0.51067)` 和 OpenGL `rot(wxyz)=(0.62066,0.34013,0.37847,0.59653)`；相机仍不挂载到 Franka link。
+- 位姿解释：四元数模长约 `0.999997`；OpenGL 光轴约为 `(-0.876,-0.029,-0.482)`，向下约 28.8°。
+- 影响的观测：`wrist_resnet` 的图像内容和 ResNet18 特征分布改变；key 和 shape 仍为 `wrist_resnet:512`。
+- 影响的动作、奖励、done、网络维度：无。
+- checkpoint 兼容性：旧 checkpoint 的张量 shape 兼容，但已适应旧相机构图，必须重新评估；用于正式训练/部署时建议从头训练。
+- 验证情况：本次任务结束报告记录实际执行命令。
+- 待确认：该外参是否来自实测 hand-eye calibration，以及新构图与现实 RGB 的像素级对齐效果。
+
+## 2026-07-12 CST — 现实对齐 Cube lift reward 起点改为 1 mm
+
+- 类型：奖励配置 / 文档
+- 修改文件：
+  - `source/tacex_tasks/tacex_tasks/sim2real_grasp/sim2real_cube_real_alignment_env.py`
+  - `docs/EXPERIMENTS.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/DEVLOG.md`
+- 修改内容：仅将 `TacEx-Sim2Real-Cube-Real-Alignment-v0` 的 `lift_reward_start_delta` 从 `0.005 m` 改为 `0.001 m`；`success_lift_delta=0.035 m`、upright 20° 和 hold 5 steps 保持不变。
+- 奖励语义：相对 reset 最低点抬升不超过 1 mm 时 lift reward 为 0；超过 1 mm 后在 1–35 mm 区间线性增长，35 mm 时为 1。
+- 影响的观测、动作、done、网络维度：无。
+- checkpoint 兼容性：奖励 shaping 改变，现有 checkpoint 可以按相同 shape 加载，但不应 resume 继续训练；推荐从头训练。
+- 验证情况：本次任务结束报告记录实际命令和边界结果。
+- 待确认：1 mm dead band 对接触抖动、PPO 收敛和真机成功率的影响。
+
 ## 2026-07-12 CST — 统一 sim2real Cube 训练与导出 contract
 
 - 类型：环境修复 / Agent 配置 / export provenance / 文档
@@ -573,6 +817,118 @@
 - 待确认：
   - Isaac Sim GUI 中键盘事件订阅和 SoftCylinder/SoftCube/SoftCuboid 三类任务的实际交互稳定性。
   - 禁用 done reset 后，极端碰撞/穿模状态下是否仍需人工重启仿真。
+
+## 2026-07-26 — 新增 Sim2real Cube 批量 rollout action 诊断
+
+- 类型：实验脚本 / 诊断
+- 修改文件：
+  - `scripts/reinforcement_learning/skrl/collect_sim2real_cube_rollouts.py`
+  - `scripts/reinforcement_learning/skrl/analyze_sim2real_cube_rollouts.py`
+  - `source/tacex_tasks/tacex_tasks/cylinder_grasping/cylinder_grasping_vision_only_resnet18.py`
+  - `README.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/DATA_FLOW.md`
+  - `docs/EXPERIMENTS.md`
+  - `docs/KNOWN_ISSUES.md`
+- 修改内容：新增 exported Actor 多环境 rollout 采集，记录 action/history/IK/joint/cube/fingertip/gripper/RGB/reward/done；新增离线 CSV 与 action/state plot 生成器；环境侧增加只读诊断缓存。
+- 影响的观测：无；只读取现有 Actor observation。
+- 影响的动作：无；诊断缓存不改变 `_pre_physics_step()` 和 `_apply_action()` 输出。
+- 影响的奖励和 done：无。
+- 网络输入维度：保持 `action_history[4] + proprio_obs[15] + RGB[224,224,3]`。
+- checkpoint 兼容性：正常 train/play/export 继续 fail closed；collector 仅在显式 `--allow_legacy_contract` 时允许旧 v1-v3 离线诊断。
+- 实际采集：v3 2026-07-25 run，32 env、450 policy steps、14,400 transition；98 个完成 episode 中 7 个 success terminal。
+- 待确认：用户真机实际运行使用的 model/config 路径及 rollout log 尚未提供，未做逐帧 sim-real 同输入对照。
+
+## 2026-08-01 — 新增 Real-Alignment RMA 教师学生蒸馏路线
+
+- 类型：代码 / 配置 / 训练脚本 / 评估脚本 / 导出 / 文档
+- 修改内容：新增 Clean v9 RMA Teacher/Student task、共享归一化 Actor Core、单帧 spatial-softmax 定位头、在线双损失蒸馏、固定网格评估和端到端 TorchScript 导出。
+- 影响的观测：仅新增 task；Teacher Actor 为22维，Student 训练环境增加 raw RGB 与 cube XYZ label，部署接口不含 label。
+- 影响的动作：新增路线继续使用4维 tanh action 和 `[0.025,0.025,0.025,0.005]` 尺度；现有 task 不变。
+- 影响的奖励和 done：继承当前 Clean；新增只读 per-env success terminal 缓存供评估。
+- checkpoint 兼容性：RMA 使用独立 manifest/checkpoint，旧 Privileged 及 Clean/DR checkpoint 不兼容也不被修改。
+- 验证情况：`git diff --check` 和完整 `compileall` 通过；RMA Teacher 定向测试1项、Student/模型/TorchScript定向测试4项通过。Teacher 以4 env完成128步和一次PPO更新并写 manifest；Student 以2个相机环境完成2步双损失更新并保存 checkpoint；导出模型 eager/trace/reload 最大误差均为0。仓库 wrapper 使用 base Python，缺少 `isaacsim`；正确 conda 环境的 discover warm start 成功，但被既有缺失 `test_argparser_launch.py` skip target 阻断。
+- 待确认：实际200k Teacher、100k Student 的成功率和位置 RMSE。
+
+## 2026-08-01 — RMA Actor 加入可部署末端位置与相对目标位置
+
+- 类型：代码 / 模型契约 / 测试 / 文档
+- 修改内容：共享 Actor 从 `proprio_obs[:7]` 内嵌 Panda FK，计算机器人根坐标系指尖中点 XYZ，并与 cube XYZ 形成相对目标 XYZ；网络特征由22维增至28维。物体与末端 quaternion 不加入。
+- 依据：Real-Alignment 使用 `panda_hand + [0,0,0.1034] m` 作为 IK TCP，且该点与左右 finger 各自 `[0,0,0.045] m` 指尖中心的中点一致；Panda 固定关节变换来自任务使用的 URDF。
+- 影响的观测：Teacher/Student 环境 key 与 shape 不变；末端 XYZ 在模型内部从7维关节角派生，不引入仿真 privileged link input。
+- 影响的动作、奖励和 done：无；保持4维 tanh action、Clean 控制/奖励/success/done。
+- 影响的网络输入维度：`RMAActorCore` 第一层由22改为28；Student TorchScript 外部三输入签名不变。
+- checkpoint 兼容性：RMA model/manifest/student artifact 升级至 v2，旧22维 RMA checkpoint 拒绝加载并需要重新训练；Clean、DR 和旧 Privileged checkpoint 不受影响。
+- 验证情况：纯 Torch 检查确认初始 FK 输出约 `[0.499844,0.000043,0.299519] m`、仅定位头有梯度且 TorchScript 动态 batch 误差为0；Teacher 定向测试1项和 Student/模型/契约/TorchScript定向测试5项通过，其中 FK 与 Isaac 指尖中点按0.2 mm容差比较；4 env Teacher 完成128步和一次 PPO 更新并写 v2 manifest；2 env Student 完成2步双损失更新；导出 eager/trace/reload 最大误差为0。以上均为链路 smoke，不是策略效果。
+- 待确认：当前28维方案实际200k Teacher、100k Student 的成功率和位置 RMSE。
+
+## 2026-08-01 — RMA 增加特权接触奖励与视觉接触蒸馏
+
+- 类型：RMA 环境 / 模型 / 训练 / 评估 / 导出 / 测试 / 文档
+- 修改内容：仅为 RMA Teacher/Student 新增 cube-to-left/right-finger ContactSensor；0.5 N阈值生成两路二值接触，单侧/双侧接触每步奖励0.1/2.0。Teacher Actor 使用真实接触，Student adaptation head 从RGB联合预测XYZ与接触 logits，并加入接触 BCE。
+- 影响的观测：两个 RMA task 新增 `rma_contact_state[N,2]`；Student 中该键只用于训练标签，不进入部署接口。Clean、DR、旧 Privileged 不变。
+- 影响的网络输入维度：共享 Actor feature 从28维增至30维；视觉头输出由3维位置扩为3维位置加2维接触 logits。
+- checkpoint 兼容性：RMA model/manifest/student artifact 升至v3，v2文件拒绝加载，Teacher和Student均需重新训练；Student TorchScript仍为RGB/本体/history三输入与4维动作输出。
+- 验证情况：完整 `compileall`、Teacher YAML解析和 `git diff --check` 通过；Teacher定向测试1项（含实际双指接触力与2.0奖励）及Student/模型/契约/TorchScript定向测试5项通过。4 env Teacher完成128步与一次PPO更新并写v3 manifest；2 env Student完成2步三损失更新并保存v3 checkpoint；TorchScript导出 eager/trace/reload最大误差均为0。标准 discovery 用base Python时缺少`isaacsim`；正确conda环境warm start成功后被既有`ISSUE-015`缺失skip target阻断。
+- 待确认：200k Teacher/100k Student正式效果、视觉接触 precision/recall/F1 和真实硬件接触泛化。
+
+## 2026-08-01 — 精简 RMA 奖励控制台输出
+
+- 类型：RMA 日志 / 文档
+- 修改内容：只覆盖 RMA Teacher/Student 的控制台奖励摘要，保留加权 reach、lift、success、contact、table、当前 total、最近200步平均奖励、窗口成功率和平均抬升高度；完整诊断量继续写入 TensorBoard log。
+- 影响：不改变奖励数值、观测、动作、done/success、网络输入或 checkpoint；Clean、DR、旧 Privileged 的控制台输出不变。
+- 验证情况：`py_compile`、完整`compileall`和`git diff --check`通过；4 env Teacher完成256策略步与两次PPO更新，step 200仅打印精简摘要且窗口数值正确；RMA Teacher接触/奖励定向测试通过。
+
+## 2026-08-01 — RMA success 改为非终止统计条件
+
+- 类型：RMA 环境 / checkpoint contract / 测试 / 文档
+- 修改内容：只覆盖 RMA Teacher/Student 的 `_get_dones()`；success 继续给奖励并更新 hold counter，但不再触发 done。Episode 只因 timeout 或严重机器人穿地碰撞终止；窗口成功率按 episode 内是否曾达到 success 统计。
+- 影响：Clean、DR 和旧 Privileged 的 done/success 语义不变。RMA manifest、Student checkpoint 和导出 metadata 升至v4，v3及更早 RMA artifact fail closed，需要重新训练 Teacher/Student。
+- 验证情况：`python -m compileall -q source scripts tools`、`git diff --check` 通过；RMA 配置隔离/旧v3 artifact拒绝/Teacher success非终止定向测试通过。
+
+## 2026-08-01 — RMA 单独降低 finger actuator
+
+- 类型：RMA 环境 / checkpoint contract / 测试 / 文档
+- 修改内容：只在 RMA Teacher/Student 的 copied robot cfg 中覆盖 `panda_hand` actuator：`effort_limit_sim=40`、`stiffness=400`、`damping=40`。按用户要求，`gripper_width_delta_scale` 保持 Clean v9 的 `0.005 m/policy step`。
+- 影响：Clean、DR、旧 Privileged 和 TacEx GelSight asset 不变。RMA 物理/控制 contract 改变，manifest、Student checkpoint 和导出 metadata 升至v5，v4及更早 RMA artifact fail closed，需要重新训练 Teacher/Student。
+- 验证情况：`py_compile`、`git diff --check` 通过；RMA 配置隔离/旧v4 artifact拒绝/Teacher success非终止定向测试通过。2-env RMA Teacher 1-iteration smoke 成功写出 v5 manifest，记录 `velocity_limit_sim=null`、5mm/step 动作尺度和 40/400/40 hand actuator。
+
+## 2026-08-01 — RMA Student 允许直接蒸馏
+
+- 类型：训练脚本 / 文档
+- 修改内容：移除 `train_rma_student.py` 的 `--teacher_eval` 与 `--allow_unqualified_teacher` 参数及其固定网格验收门槛。Student 现在只要求兼容的 Teacher checkpoint 及其同一 run 中的 manifest，随后直接开始在线视觉位置、接触和动作蒸馏；`evaluate_rma.py` 保留为可选的后验比较工具。
+- 影响：不改变 Student 环境、观测、损失、网络输入、动作或 checkpoint 格式；无需重新训练已存在的 Teacher。未验证 Teacher 成功率的 checkpoint 也可作为蒸馏源，质量由用户自行负责。
+- 验证情况：`python -m py_compile scripts/reinforcement_learning/skrl/train_rma_student.py source/tacex_tasks/tacex_tasks/sim2real_grasp/rma_artifacts.py` 与 `git diff --check` 通过。
+
+## 2026-08-01 — 对齐 RMA Student 与 Teacher 的接触 contract
+
+- 类型：RMA 环境配置 / 蒸馏启动修复 / 文档
+- 修改内容：Student 原本从 Clean 继承 `0.5 N / 2.0 / 0.1` 的接触阈值、奖励权重和单侧系数，但指定 Teacher manifest 记录的是 `0.2 N / 3.0 / 1.0`。Student 现在显式使用 Teacher 数值，使环境 contract 校验通过，并保证 Student rollout 的接触标签和奖励分布与教师一致。
+- 影响：修改 RMA Student 的接触标签阈值与 reward；不改变 Teacher checkpoint、Actor/Student 网络输入维度、loss 形式或 checkpoint 格式。此前尚未完成的 Student run 不应继续使用。
+- 验证情况：待本次 Student 一步启动验证。
+
+## 2026-08-02 — 统一 RMA Student 蒸馏进度日志
+
+- 类型：训练脚本 / 训练监控 / 文档
+- 修改内容：Student 启动时明确打印总 update、并行环境数、剩余 simulator transition、日志和 checkpoint 间隔；每个日志间隔输出进度、累计 transition、实时 update/sample 吞吐、已耗时、ETA、分项 loss、位置 RMSE、接触 accuracy 和环境发布的累计/最近成功率。checkpoint 输出也改为统一前缀并强制 flush。
+- 影响：只改变控制台和 TensorBoard 监控，不改变环境、观测、loss、优化器、动作、奖励、done 或 checkpoint 格式。`timesteps` 仍表示外层 update，单轮采样 transition 数为 `timesteps * num_envs`。
+- 验证情况：待本次语法与最小 Student 蒸馏验证。
+
+## 2026-08-02 — RMA Student 增加无课程全强度视觉域随机化
+
+- 类型：RMA 环境 / 训练脚本 / checkpoint 路由 / 测试 / 文档
+- 修改内容：新增 `TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0`。该 Student 复用 Real-Alignment DR 实现，并显式关闭 `dr_curriculum_enabled`，因此首个 update 即按 full scale 采样相机外参、焦距/主点 GPU warp、图像颜色/模糊/噪声、板/背景和共享 DomeLight 扰动。
+- 影响的观测：部署和模型输入仍为 `wrist_rgb uint8[N,224,224,3]`、`proprio_obs[N,15]`、`action_history[N,4]`；仅 RGB 分布改变。`rma_cube_pos[N,3]` 与 `rma_contact_state[N,2]` 仍只作训练标签。
+- 影响的物理/奖励/done：不改变 Teacher 或 Student 的机器人、cube、接触阈值/奖励、动作尺度、success 与 done 语义；现有 Teacher manifest 继续校验通过。
+- checkpoint 兼容性：Student payload 记录 Clean 或 DR task。旧 Clean Student v5 artifact 仍可导出；resume 会拒绝跨 Clean/DR profile。DR Student 应从头蒸馏，不应把既有 Clean Student checkpoint 作为 resume 输入。
+- 验证情况：待本次语法、RMA 定向测试和最小 DR Student 蒸馏 smoke。
+
+## 2026-08-02 — 新增蒸馏 RMA Student 专用回放脚本
+
+- 类型：评估脚本 / 文档
+- 修改内容：新增 `play_rma_student.py`，直接加载 RMA Student artifact 的模型 state_dict，不走 skrl PPO `agent.load()`。脚本从 checkpoint 读取 Clean 或 DR task，校验 Teacher manifest 的环境 contract 及 Student encoder/Actor hash，以全随机 XY 范围运行固定步数，并写周期 CSV 与最终 JSON。
+- 影响：不修改训练、Teacher、Student 网络、观测、动作、奖励、done 或 checkpoint 格式；通用 `play.py` 保持只服务 skrl checkpoint。
+- 验证情况：待本次 Student checkpoint 回放 smoke。
 
 ## 条目模板
 

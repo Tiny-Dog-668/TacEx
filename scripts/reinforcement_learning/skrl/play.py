@@ -751,6 +751,8 @@ def main():
         env_cfg.robot_joint_pos_noise = 0.0
     if hasattr(env_cfg, "robot_joint_vel_noise"):
         env_cfg.robot_joint_vel_noise = 0.0
+    if hasattr(env_cfg, "cube_position_curriculum_force_full_range"):
+        env_cfg.cube_position_curriculum_force_full_range = True
 
     print(
         f"[INFO] Evaluation env config: num_envs={env_cfg.scene.num_envs}, "
@@ -762,6 +764,8 @@ def main():
         print(f"[INFO] Evaluation override: robot_joint_pos_noise={env_cfg.robot_joint_pos_noise}")
     if hasattr(env_cfg, "robot_joint_vel_noise"):
         print(f"[INFO] Evaluation override: robot_joint_vel_noise={env_cfg.robot_joint_vel_noise}")
+    if hasattr(env_cfg, "cube_position_curriculum_force_full_range"):
+        print("[INFO] Evaluation override: cube position sampling uses the full configured XY range")
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
     # create isaac environment

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 import isaaclab.sim as sim_utils
@@ -102,17 +104,34 @@ class Sim2RealCubeGraspEnvCfg(Sim2RealGraspEnvCfg):
     cube_half_xy_extent = 0.5 * max(cube_size[0], cube_size[1])
 
     # Legacy absolute thresholds are retained for saved-config compatibility.
-    # Cube reward/done use the reset-relative delta fields below.
+    # Cube reward/done use the reset-relative center-of-mass delta fields below.
     lift_reward_start_lowest_height = 0.007
     success_lowest_height = 0.05
-    # Cube lift/success are measured relative to the lowest point at reset.
-    # This prevents a cube resting on a raised table from receiving lift reward.
-    lift_reward_start_delta = 0.005
-    success_lift_delta = 0.040
+    lift_reference_mode = "center_of_mass"
+    lift_reward_start_delta = 0.0
+    success_lift_delta = 0.035
     success_hold_steps = 5
-    lift_upright_tilt_threshold_deg = 20.0
+    # A real deployment has no simulator ground-truth object XY after Actor
+    # inference, so all sim2real Cube variants execute the requested xyz action
+    # without the inherited privileged near-table dz gate.
+    privileged_dz_gate_enabled = False
+    # Lift is a center-height achievement and remains dense even when the cube
+    # is tilted. The tilt curriculum gates success only.
+    lift_reward_requires_upright = False
+    success_requires_upright = True
 
-    # The inherited action gate uses cylinder_radius in _pre_physics_step.
+    # Start permissive so the policy can first learn grasp/lift, then tighten
+    # the success-quality requirement. DirectRLEnv.common_step_counter advances
+    # once per outer/policy step and is independent of num_envs.
+    lift_tilt_curriculum_enabled = True
+    lift_tilt_curriculum_start_deg = 40.0
+    lift_tilt_curriculum_end_deg = 10.0
+    lift_tilt_curriculum_start_step = 0
+    lift_tilt_curriculum_end_step = 120_000
+    lift_tilt_curriculum_step_offset = 0
+    lift_upright_tilt_threshold_deg = 10.0
+
+    # Retained for inherited object geometry/reset helpers.
     cylinder_radius = cube_half_xy_extent
 
 
@@ -220,14 +239,47 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         world_corners = rotated + cube_pos.unsqueeze(1)
         return torch.min(world_corners[:, :, 2], dim=1).values
 
+    def _cube_rest_separation(self) -> float:
+        """Return the configured cube/table rest-offset separation in meters."""
+
+        def rest_offset(asset_cfg: RigidObjectCfg) -> float:
+            collision_props = getattr(asset_cfg.spawn, "collision_props", None)
+            value = getattr(collision_props, "rest_offset", None)
+            return 0.0 if value is None else float(value)
+
+        return rest_offset(self.cfg.cube) + rest_offset(self.cfg.plate)
+
+    def _current_lift_tilt_threshold_deg(self) -> float:
+        """Return the curriculum-scaled maximum allowed cube tilt."""
+        if not bool(getattr(self.cfg, "lift_tilt_curriculum_enabled", False)):
+            return float(self.cfg.lift_upright_tilt_threshold_deg)
+
+        start_step = int(self.cfg.lift_tilt_curriculum_start_step)
+        end_step = max(int(self.cfg.lift_tilt_curriculum_end_step), start_step + 1)
+        step = int(getattr(self, "common_step_counter", 0)) + int(
+            self.cfg.lift_tilt_curriculum_step_offset
+        )
+        progress = min(max((step - start_step) / float(end_step - start_step), 0.0), 1.0)
+        start_deg = float(self.cfg.lift_tilt_curriculum_start_deg)
+        end_deg = float(self.cfg.lift_tilt_curriculum_end_deg)
+        return start_deg + progress * (end_deg - start_deg)
+
+    def _ensure_cube_lift_reference_height(self) -> None:
+        """Create the per-env settled center-height reference when first needed."""
+        if hasattr(self, "_cube_lift_reference_height_per_env"):
+            return
+        self._cube_lift_reference_height_per_env = (
+            self._cylinder_spawn_height_per_env + self._cube_rest_separation()
+        ).detach().clone()
+
     def _compute_cube_lift_terms(
         self,
-        current_lowest_height: torch.Tensor,
+        current_center_height: torch.Tensor,
         upright_cos: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute reset-relative lift delta, dense progress, and success mask."""
-        spawn_lowest_height = self._cylinder_spawn_height_per_env - 0.5 * float(self.cfg.cube_size[2])
-        lift_delta = current_lowest_height - spawn_lowest_height
+        """Compute settled-center-relative lift progress and success."""
+        self._ensure_cube_lift_reference_height()
+        lift_delta = current_center_height - self._cube_lift_reference_height_per_env
 
         lift_start_delta = max(0.0, float(self.cfg.lift_reward_start_delta))
         success_lift_delta = max(float(self.cfg.success_lift_delta), lift_start_delta + 1e-6)
@@ -238,10 +290,42 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
             max=1.0,
         )
 
-        upright = upright_cos >= self._lift_upright_cos_threshold
-        lift_reward = lift_progress * upright.float()
-        success = (lift_delta >= success_lift_delta) & upright
+        tilt_threshold_deg = self._current_lift_tilt_threshold_deg()
+        upright_cos_threshold = math.cos(math.radians(tilt_threshold_deg))
+        upright = upright_cos >= upright_cos_threshold
+        lift_reward = (
+            lift_progress * upright.float()
+            if bool(self.cfg.lift_reward_requires_upright)
+            else lift_progress
+        )
+        # Treat the configured millimeter boundary as inclusive despite normal
+        # float32 subtraction error in current_height - reference_height.
+        success = lift_delta >= success_lift_delta - 1e-6
+        if bool(getattr(self.cfg, "success_requires_upright", True)):
+            success &= upright
         return lift_delta, lift_reward, success
+
+    def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return task-specific additive reward terms and scalar log values."""
+        return torch.zeros(self.num_envs, device=self.device), {}
+
+    def _additional_reward_print_fields(self) -> str:
+        """Return task-specific fields appended to the periodic reward line."""
+        return ""
+
+    def _update_reward_print_window(self, rewards: torch.Tensor) -> torch.Tensor:
+        """Accumulate the mean per-env reward over the current print window."""
+        if not hasattr(self, "_reward_print_window_sum"):
+            self._reward_print_window_sum = torch.zeros((), device=self.device, dtype=rewards.dtype)
+            self._reward_print_window_count = 0
+        self._reward_print_window_sum.add_(rewards.mean().detach())
+        self._reward_print_window_count += 1
+        return self._reward_print_window_sum / max(self._reward_print_window_count, 1)
+
+    def _reset_reward_print_window(self) -> None:
+        if hasattr(self, "_reward_print_window_sum"):
+            self._reward_print_window_sum.zero_()
+            self._reward_print_window_count = 0
 
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         """Return clean cube critic keys while reusing the sim2real visual/proprio path."""
@@ -259,13 +343,9 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-        """Use reach + cube lowest-corner lift shaping + sustained success reward."""
+        """Use reach + settled-center lift shaping + sustained success reward."""
         cube_pos = self._cube.data.root_pos_w
-        hand_pos = self._robot.data.body_link_pos_w[:, self._body_idx]
-        hand_quat = self._robot.data.body_link_quat_w[:, self._body_idx]
-        ee_pos, _ = math_utils.combine_frame_transforms(
-            hand_pos, hand_quat, self._offset_pos, self._offset_rot
-        )
+        ee_pos = self._compute_reach_center_world()
 
         sigma = max(self.cfg.reach_sigma, 1e-6)
         reach_distance = torch.norm(cube_pos - ee_pos, dim=-1)
@@ -276,14 +356,18 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         current_height = cube_pos[:, 2]
         current_lowest_height = self._compute_cube_lowest_height(cube_pos, self._cube.data.root_quat_w)
-        lift_delta, lift_reward, success = self._compute_cube_lift_terms(current_lowest_height, upright_cos)
+        lift_delta, lift_reward, success = self._compute_cube_lift_terms(current_height, upright_cos)
         success_reward = success.float()
+        tilt_threshold_deg = self._current_lift_tilt_threshold_deg()
 
         rewards = (
             self.cfg.reach_weight * reach_reward
             + self.cfg.lift_weight * lift_reward
             + self.cfg.success_reward_weight * success_reward
         )
+        additional_reward, additional_log = self._compute_additional_reward()
+        rewards = rewards + additional_reward
+        average_step_reward = self._update_reward_print_window(rewards)
 
         log = self.extras.setdefault("log", {})
         log["reward/reach"] = reach_reward.mean().detach()
@@ -296,21 +380,37 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         log["info/cube_lift_delta"] = lift_delta.mean().detach()
         log["info/cube_upright_cos"] = upright_cos.mean().detach()
         log["info/cube_tilt_deg"] = upright_tilt_deg.mean().detach()
+        log["info/lift_tilt_threshold_deg"] = torch.tensor(tilt_threshold_deg, device=self.device)
+        log["info/success_requires_upright"] = torch.tensor(
+            float(bool(getattr(self.cfg, "success_requires_upright", True))),
+            device=self.device,
+        )
         log["info/success_hold_steps"] = self._success_hold_counter.to(torch.float32).mean().detach()
+        log.update(additional_log)
 
         if self.reward_print_interval > 0 and (self.step_count + 1) % self.reward_print_interval == 0:
+            tilt_limit_text = (
+                f"{tilt_threshold_deg:.2f} deg"
+                if bool(getattr(self.cfg, "success_requires_upright", True))
+                else "disabled"
+            )
             print(
                 f"[奖励] step {self.step_count + 1}: "
                 f"reach={reach_reward.mean().item():.3f} (w={self.cfg.reach_weight}), "
                 f"lift={lift_reward.mean().item():.3f} (w={self.cfg.lift_weight}), "
                 f"success={success_reward.mean().item():.3f} (w={self.cfg.success_reward_weight}), "
                 f"tilt={upright_tilt_deg.mean().item():.2f} deg, "
+                f"tilt_limit={tilt_limit_text}, "
                 f"hold={self._success_hold_counter.float().mean().item():.2f}/{self.cfg.success_hold_steps}, "
                 f"center_z={current_height.mean().item():.4f} m, "
                 f"lowest_z={current_lowest_height.mean().item():.4f} m, "
                 f"lift_delta={lift_delta.mean().item():.4f} m, "
-                f"total={rewards.mean().item():.3f}"
+                f"{self._additional_reward_print_fields()}"
+                f"total={rewards.mean().item():.3f}, "
+                f"avg_step_total={average_step_reward.item():.3f} "
+                f"(last {self._reward_print_window_count} policy steps)"
             )
+            self._reset_reward_print_window()
 
         action_curr = torch.where(
             torch.isfinite(self.processed_actions),
@@ -322,16 +422,22 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         return rewards
 
+    def _compute_reach_center_world(self) -> torch.Tensor:
+        """Return the fixed hand-offset reach point used by legacy Cube tasks."""
+        hand_pos = self._robot.data.body_link_pos_w[:, self._body_idx]
+        hand_quat = self._robot.data.body_link_quat_w[:, self._body_idx]
+        ee_pos, _ = math_utils.combine_frame_transforms(
+            hand_pos, hand_quat, self._offset_pos, self._offset_rot
+        )
+        return ee_pos
+
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Terminate on timeout, ground collision, or sustained upright cube lift success."""
+        """Terminate on timeout, severe ground penetration, or sustained cube lift success."""
         time_out = (self.episode_length_buf >= self.max_episode_length - 1).bool()
 
-        current_lowest_height = self._compute_cube_lowest_height(
-            self._cube.data.root_pos_w,
-            self._cube.data.root_quat_w,
-        )
+        current_center_height = self._cube.data.root_pos_w[:, 2]
         upright_cos = self._compute_cube_upright_cos(self._cube.data.root_quat_w)
-        _, _, above_success_height = self._compute_cube_lift_terms(current_lowest_height, upright_cos)
+        _, _, above_success_height = self._compute_cube_lift_terms(current_center_height, upright_cos)
         self._success_hold_counter = torch.where(
             above_success_height,
             self._success_hold_counter + 1,
@@ -371,6 +477,10 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         self._cylinder_spawn_height_per_env[env_ids] = cube_state[:, 2].clone()
         self._lift_target_height_per_env[env_ids] = self._cylinder_spawn_height_per_env[env_ids] + self.cfg.lift_height
+        self._ensure_cube_lift_reference_height()
+        self._cube_lift_reference_height_per_env[env_ids] = (
+            self._cylinder_spawn_height_per_env[env_ids] + self._cube_rest_separation()
+        )
 
         self.actions[env_ids] = 0
         self.processed_actions[env_ids] = 0

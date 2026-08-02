@@ -66,10 +66,10 @@ FRANKA_PANDA_ARM_GSMINI_GRIPPER_RIGID_CFG = ArticulationCfg(
         ),
         "panda_hand": ImplicitActuatorCfg(
             joint_names_expr=["panda_finger_joint.*"],
-            effort_limit_sim=200.0,
+            effort_limit_sim=40.0,
             velocity_limit_sim=0.2,
-            stiffness=2e3,
-            damping=1e2,
+            stiffness=400,
+            damping=40,
         ),
     },
     soft_joint_pos_limit_factor=1.0,

@@ -45,6 +45,7 @@ SUPPORTED_TASKS = (
     "TacEx-Sim2Real-Grasp-v0",
     "TacEx-Sim2Real-Cube-Grasp-v0",
     "TacEx-Sim2Real-Cube-Real-Alignment-v0",
+    "TacEx-Sim2Real-Cube-Real-Alignment-DR-v0",
 )
 BOUNDED_CUBE_TASKS = set(STRICT_SIM2REAL_CUBE_TASKS)
 TRACE_MAX_ABS_TOLERANCE = 1e-5
@@ -482,6 +483,11 @@ def main():
             ),
             "critic_* privileged observations are internally zero-filled because the actor does not consume them.",
         ]
+        if run_contract.get("gripper_control_mode") == "total_width_delta_cached_target":
+            notes.append(
+                "The fourth action is a normalized total-gripper-width delta command; "
+                "environment/deployment code must apply policy_contract.action_scales per dimension."
+            )
         if args_cli.input_mode == "rgb":
             input_signature["wrist_rgb"] = [rgb_height, rgb_width, 3]
             notes.append("wrist_rgb is expected as uint8 RGB frames in HWC layout.")
@@ -501,15 +507,20 @@ def main():
             "output_signature": {
                 "mean_actions": [policy.num_actions],
             },
-            "action_semantics": ["dx", "dy", "dz", "gripper"],
+            "action_semantics": (
+                ["dx", "dy", "dz", "gripper_total_width_delta"]
+                if run_contract.get("gripper_control_mode") == "total_width_delta_cached_target"
+                else ["dx", "dy", "dz", "gripper"]
+            ),
             "actor_mean_transform": "tanh" if bounded_actor_mean else "identity",
             "actor_mean_bounds": [-1.0, 1.0] if bounded_actor_mean else None,
             "policy_contract": run_contract,
             "agent_config_source": str(checkpoint_cfg_path),
             "env_config_source": str(checkpoint_env_cfg_path),
-            "action_history_semantics": "transition-associated environment-processed action after scale/clamp and before dz gate",
+            "action_history_semantics": run_contract.get("action_history"),
             "nominal_policy_frequency_hz": 1.0 / (float(env_cfg.sim.dt) * int(env_cfg.decimation)),
             "environment_action_scale": float(env_cfg.action_scale),
+            "environment_action_scales": run_contract.get("action_scales"),
             "vision_encoder": encoder_manifest,
             "notes": notes,
             "trace_max_abs_err": max_abs_err,
