@@ -42,6 +42,7 @@ import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_grasp.rma_artifacts import (
     RMA_TEACHER_TASK,
     load_student_checkpoint,
+    load_student_model_state,
     load_teacher_manifest,
     load_teacher_policy_state,
     sha256_file,
@@ -120,7 +121,7 @@ def _evaluate(
     student = None
     if role == "student":
         student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).to(device)
-        student.load_state_dict(student_payload["model"], strict=True)
+        load_student_model_state(student, student_payload["model"])
         student.eval()
         if state_dict_sha256(student.vision_encoder.state_dict()) != student_payload.get(
             "vision_encoder_state_dict_sha256"

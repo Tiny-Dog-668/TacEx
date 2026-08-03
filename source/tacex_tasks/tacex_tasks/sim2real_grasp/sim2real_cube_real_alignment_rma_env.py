@@ -336,6 +336,9 @@ class Sim2RealCubeRealAlignmentRMAStudentEnvCfg(Sim2RealCubeRealAlignmentEnvCfg)
     rma_single_contact_reward_fraction = 1.0
     rma_action_rate_penalty_weight = 0.05
     rma_action_rate_penalty_scales = "environment_action_scales"
+    rma_heatmap_supervision_enabled = False
+    rma_heatmap_loss_weight = 0.0
+    rma_heatmap_sigma_px = 1.5
     cube_position_curriculum_force_full_range = True
     rma_role = "student"
     rma_position_frame = "robot_root"
@@ -393,6 +396,25 @@ class Sim2RealCubeRealAlignmentRMAStudentEnv(
 
 
 @configclass
+class Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg(
+    Sim2RealCubeRealAlignmentRMAStudentEnvCfg
+):
+    """Clean RMA Student with explicit cube-center heatmap supervision enabled."""
+
+    rma_heatmap_supervision_enabled = True
+    rma_heatmap_loss_weight = 1.0
+    rma_heatmap_sigma_px = 1.5
+
+
+class Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv(
+    Sim2RealCubeRealAlignmentRMAStudentEnv
+):
+    """Clean visual Student environment for heatmap-supervised distillation."""
+
+    cfg: Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg
+
+
+@configclass
 class Sim2RealCubeRealAlignmentRMAStudentDREnvCfg(
     Sim2RealCubeRealAlignmentDREnvCfg,
 ):
@@ -421,6 +443,9 @@ class Sim2RealCubeRealAlignmentRMAStudentDREnvCfg(
     rma_single_contact_reward_fraction = 1.0
     rma_action_rate_penalty_weight = 0.05
     rma_action_rate_penalty_scales = "environment_action_scales"
+    rma_heatmap_supervision_enabled = False
+    rma_heatmap_loss_weight = 0.0
+    rma_heatmap_sigma_px = 1.5
     cube_position_curriculum_force_full_range = True
     rma_role = "student"
     rma_position_frame = "robot_root"
@@ -451,3 +476,22 @@ class Sim2RealCubeRealAlignmentRMAStudentDREnv(
     """RMA visual Student using the shared full-strength DR implementation."""
 
     cfg: Sim2RealCubeRealAlignmentRMAStudentDREnvCfg
+
+
+@configclass
+class Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg(
+    Sim2RealCubeRealAlignmentRMAStudentDREnvCfg
+):
+    """DR RMA Student with explicit cube-center heatmap supervision enabled."""
+
+    rma_heatmap_supervision_enabled = True
+    rma_heatmap_loss_weight = 1.0
+    rma_heatmap_sigma_px = 1.5
+
+
+class Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv(
+    Sim2RealCubeRealAlignmentRMAStudentDREnv
+):
+    """DR visual Student environment for heatmap-supervised distillation."""
+
+    cfg: Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg

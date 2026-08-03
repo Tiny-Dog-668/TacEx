@@ -16,7 +16,16 @@ from .rma_models import RMA_MODEL_VERSION, RMAActorCore, RMAObservationNormalize
 RMA_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
 RMA_STUDENT_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-v0"
 RMA_STUDENT_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0"
-RMA_STUDENT_TASKS = frozenset((RMA_STUDENT_TASK, RMA_STUDENT_DR_TASK))
+RMA_STUDENT_HEATMAP_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0"
+RMA_STUDENT_HEATMAP_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0"
+RMA_STUDENT_TASKS = frozenset(
+    (
+        RMA_STUDENT_TASK,
+        RMA_STUDENT_DR_TASK,
+        RMA_STUDENT_HEATMAP_TASK,
+        RMA_STUDENT_HEATMAP_DR_TASK,
+    )
+)
 RMA_MANIFEST_FILENAME = "rma_manifest.json"
 RMA_TEACHER_MANIFEST_VERSION = 7
 RMA_STUDENT_CHECKPOINT_VERSION = 5
@@ -210,3 +219,20 @@ def load_student_checkpoint(
         if payload.get("teacher_checkpoint_sha256") != expected_hash:
             raise RuntimeError("Student checkpoint was distilled from a different teacher")
     return payload
+
+
+def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]) -> None:
+    """Load Student weights while allowing newly added heatmap-head parameters."""
+    result = model.load_state_dict(state_dict, strict=False)
+    allowed_missing = {
+        key for key in model.state_dict()
+        if key.startswith("heatmap_head.")
+    }
+    missing = set(result.missing_keys)
+    unexpected = set(result.unexpected_keys)
+    if missing - allowed_missing or unexpected:
+        raise RuntimeError(
+            "RMA Student model state_dict mismatch: "
+            f"missing={sorted(missing - allowed_missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )

@@ -30,6 +30,7 @@ simulation_app = app_launcher.app
 import torch
 
 from tacex_tasks.sim2real_grasp.rma_artifacts import (
+    load_student_model_state,
     load_student_checkpoint,
     sha256_file,
     state_dict_sha256,
@@ -51,7 +52,7 @@ def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint, device="cpu")
     model = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).cpu().eval()
-    model.load_state_dict(payload["model"], strict=True)
+    load_student_model_state(model, payload["model"])
     if state_dict_sha256(model.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
     ):

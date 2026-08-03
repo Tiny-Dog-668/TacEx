@@ -24,15 +24,22 @@ import tacex_tasks  # noqa: F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 from tacex_tasks.sim2real_grasp.rma_artifacts import (
     RMA_STUDENT_DR_TASK,
+    RMA_STUDENT_HEATMAP_DR_TASK,
+    RMA_STUDENT_HEATMAP_TASK,
     RMA_STUDENT_TASK,
+    RMA_STUDENT_TASKS,
     RMA_TEACHER_TASK,
     _env_contract,
+    load_student_model_state,
     load_student_checkpoint,
     load_teacher_manifest,
 )
 from tacex_tasks.sim2real_grasp.rma_models import (
     RMA_ACTOR_FEATURE_DIM,
     RMAActorCore,
+    heatmap_soft_argmax,
+    make_gaussian_heatmaps,
+    project_points_root_to_image,
     RMAVisualStudent,
 )
 
@@ -40,6 +47,8 @@ from tacex_tasks.sim2real_grasp.rma_models import (
 TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
 STUDENT_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-v0"
 STUDENT_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0"
+STUDENT_HEATMAP_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0"
+STUDENT_HEATMAP_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0"
 CLEAN_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-v0"
 DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-DR-v0"
 
@@ -56,15 +65,17 @@ def test_rma_configs_are_isolated_from_existing_tasks():
     teacher = parse_env_cfg(TEACHER_TASK, device="cuda:0", num_envs=1)
     student = parse_env_cfg(STUDENT_TASK, device="cuda:0", num_envs=1)
     student_dr = parse_env_cfg(STUDENT_DR_TASK, device="cuda:0", num_envs=1)
+    student_heatmap = parse_env_cfg(STUDENT_HEATMAP_TASK, device="cuda:0", num_envs=1)
+    student_heatmap_dr = parse_env_cfg(STUDENT_HEATMAP_DR_TASK, device="cuda:0", num_envs=1)
 
-    for cfg in (clean, dr, teacher, student, student_dr):
+    for cfg in (clean, dr, teacher, student, student_dr, student_heatmap, student_heatmap_dr):
         assert cfg.action_scale == pytest.approx(0.05)
         assert cfg.gripper_width_delta_scale == pytest.approx(0.01)
         assert cfg.cube_x_pos_range == pytest.approx(0.05)
         assert cfg.cube_y_pos_range == pytest.approx(0.05)
     assert clean.robot.actuators["panda_hand"].effort_limit_sim == pytest.approx(200.0)
     assert dr.robot.actuators["panda_hand"].effort_limit_sim == pytest.approx(200.0)
-    for cfg in (teacher, student, student_dr):
+    for cfg in (teacher, student, student_dr, student_heatmap, student_heatmap_dr):
         hand = cfg.robot.actuators["panda_hand"]
         assert hand.effort_limit_sim == pytest.approx(40.0)
         assert hand.stiffness == pytest.approx(400.0)
@@ -83,7 +94,16 @@ def test_rma_configs_are_isolated_from_existing_tasks():
     assert teacher.vision_encoder_enabled is False
     assert student.vision_encoder_enabled is False
     assert student_dr.vision_encoder_enabled is False
-    assert teacher.rma_actor_feature_dim == student.rma_actor_feature_dim == student_dr.rma_actor_feature_dim == 30
+    assert student_heatmap.vision_encoder_enabled is False
+    assert student_heatmap_dr.vision_encoder_enabled is False
+    assert (
+        teacher.rma_actor_feature_dim
+        == student.rma_actor_feature_dim
+        == student_dr.rma_actor_feature_dim
+        == student_heatmap.rma_actor_feature_dim
+        == student_heatmap_dr.rma_actor_feature_dim
+        == 30
+    )
     assert teacher.rma_object_pose_components == "position_xyz_only"
     assert student.rma_end_effector_position_source == (
         "embedded_panda_fk_from_proprio_joint_position"
@@ -98,6 +118,16 @@ def test_rma_configs_are_isolated_from_existing_tasks():
     assert student.rma_contact_force_threshold_n == pytest.approx(0.2)
     assert student_dr.rma_contact_force_threshold_n == pytest.approx(0.2)
     assert student_dr.dr_curriculum_enabled is False
+    assert student.rma_heatmap_supervision_enabled is False
+    assert student.rma_heatmap_loss_weight == pytest.approx(0.0)
+    assert student_dr.rma_heatmap_supervision_enabled is False
+    assert student_dr.rma_heatmap_loss_weight == pytest.approx(0.0)
+    assert student_heatmap.rma_heatmap_supervision_enabled is True
+    assert student_heatmap.rma_heatmap_loss_weight == pytest.approx(1.0)
+    assert student_heatmap.rma_heatmap_sigma_px == pytest.approx(1.5)
+    assert student_heatmap_dr.rma_heatmap_supervision_enabled is True
+    assert student_heatmap_dr.rma_heatmap_loss_weight == pytest.approx(1.0)
+    assert student_heatmap_dr.rma_heatmap_sigma_px == pytest.approx(1.5)
     assert student_dr.wrist_visual_randomization_enabled is True
     assert student_dr.camera_pose_randomization_enabled is True
     assert student_dr.camera_intrinsic_warp_enabled is True
@@ -113,6 +143,10 @@ def test_rma_configs_are_isolated_from_existing_tasks():
     assert student_dr.cube_position_curriculum_force_full_range is True
     assert RMA_STUDENT_TASK == STUDENT_TASK
     assert RMA_STUDENT_DR_TASK == STUDENT_DR_TASK
+    assert RMA_STUDENT_HEATMAP_TASK == STUDENT_HEATMAP_TASK
+    assert RMA_STUDENT_HEATMAP_DR_TASK == STUDENT_HEATMAP_DR_TASK
+    assert STUDENT_HEATMAP_TASK in RMA_STUDENT_TASKS
+    assert STUDENT_HEATMAP_DR_TASK in RMA_STUDENT_TASKS
 
 
 def test_student_gradients_only_update_adaptation_head():
@@ -152,6 +186,98 @@ def test_student_gradients_only_update_adaptation_head():
     assert contact_logits.shape == (2, 2)
     assert student_action.shape == (2, 4)
     assert torch.all(student_action.abs() <= 1.0)
+
+
+def test_student_heatmap_head_updates_only_heatmap_branch():
+    student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False)
+    rgb = torch.randint(0, 256, (2, 224, 224, 3), dtype=torch.uint8)
+    _, _, predicted_heatmap = student.predict_adaptation_and_heatmap(rgb)
+    target_uv = torch.tensor([[112.0, 112.0], [64.0, 80.0]])
+    valid = torch.tensor([True, True])
+    target_heatmap = make_gaussian_heatmaps(target_uv, valid, sigma=1.5)
+
+    loss = F.mse_loss(predicted_heatmap, target_heatmap)
+    loss.backward()
+
+    assert predicted_heatmap.shape == (2, 1, 14, 14)
+    assert any(parameter.grad is not None for parameter in student.heatmap_head.parameters())
+    assert all(parameter.grad is None for parameter in student.vision_encoder.parameters())
+    assert all(parameter.grad is None for parameter in student.actor_core.parameters())
+
+
+def test_student_can_unfreeze_resnet_after_layer2_only():
+    student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False)
+    student.unfreeze_backbone_after_layer2()
+
+    for index, module in enumerate(student.vision_encoder):
+        requires_grad = [parameter.requires_grad for parameter in module.parameters()]
+        if not requires_grad:
+            continue
+        if index <= 5:
+            assert not any(requires_grad)
+        else:
+            assert all(requires_grad)
+
+    rgb = torch.randint(0, 256, (2, 224, 224, 3), dtype=torch.uint8)
+    predicted, _, predicted_heatmap = student.predict_adaptation_and_heatmap(rgb)
+    loss = predicted.square().mean() + predicted_heatmap.mean()
+    loss.backward()
+
+    for index, module in enumerate(student.vision_encoder):
+        gradients = [parameter.grad for parameter in module.parameters()]
+        if not gradients:
+            continue
+        if index <= 5:
+            assert all(gradient is None for gradient in gradients)
+        else:
+            assert any(gradient is not None for gradient in gradients)
+
+
+def test_student_state_loader_accepts_legacy_missing_heatmap_head():
+    student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False)
+    legacy_state = {
+        key: value
+        for key, value in student.state_dict().items()
+        if not key.startswith("heatmap_head.")
+    }
+
+    load_student_model_state(student, legacy_state)
+
+
+def test_heatmap_projection_generation_and_soft_argmax():
+    points_root = torch.tensor(
+        [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        dtype=torch.float32,
+    )
+    camera_position_root = torch.zeros(3)
+    camera_quaternion_wxyz = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    intrinsic = torch.tensor(
+        [
+            [100.0, 0.0, 112.0],
+            [0.0, 100.0, 112.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+    uv, valid = project_points_root_to_image(
+        points_root,
+        camera_position_root,
+        camera_quaternion_wxyz,
+        intrinsic,
+    )
+    torch.testing.assert_close(uv[0], torch.tensor([112.0, 112.0]))
+    assert valid.tolist() == [True, False]
+
+    heatmaps = make_gaussian_heatmaps(uv, valid, sigma=1.0)
+    assert heatmaps.shape == (2, 1, 14, 14)
+    assert heatmaps[0, 0].argmax().item() == 7 * 14 + 7
+    assert float(heatmaps[1].sum().item()) == pytest.approx(0.0)
+
+    predicted_uv = heatmap_soft_argmax(heatmaps)
+    torch.testing.assert_close(predicted_uv[0], torch.tensor([112.0, 112.0]), atol=2.0, rtol=0.0)
 
 
 def test_rma_student_environment_observation_contract():

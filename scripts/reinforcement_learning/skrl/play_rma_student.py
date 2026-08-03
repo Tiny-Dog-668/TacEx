@@ -62,6 +62,7 @@ import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_grasp.rma_artifacts import (
     RMA_STUDENT_TASKS,
     load_student_checkpoint,
+    load_student_model_state,
     sha256_file,
     state_dict_sha256,
     validate_live_env_contract,
@@ -126,7 +127,7 @@ def main() -> None:
     base_env = env.unwrapped
     device = torch.device(base_env.device)
     student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).to(device).eval()
-    student.load_state_dict(payload["model"], strict=True)
+    load_student_model_state(student, payload["model"])
     if state_dict_sha256(student.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
     ):

@@ -241,3 +241,12 @@
 - 背景：RMA 中 success 不终止后，策略会在成功后继续执行，强 finger 位置 PD 容易把 cube 压入夹指或桌面。用户明确要求不要把夹爪动作尺度改为2mm/step。
 - 决策：只在 RMA Teacher/Student 的 copied robot cfg 中覆盖 `panda_hand` actuator 为 `effort_limit_sim=40`、`stiffness=400`、`damping=40`；`gripper_width_delta_scale` 仍继承 Clean 的 `0.005 m/policy step`。
 - 影响：Clean、DR、旧 Privileged 和 GelSight asset 不变。RMA 环境物理/控制 contract 改变，manifest/student/export artifact 升至v5，v4及更早 RMA checkpoint 需重新训练。
+
+## DEC-033 — RMA Student 增加显式 cube-center heatmap 辅助监督
+
+- 状态：已实现；训练结果待确认
+- 背景：单帧 RGB 直接回归 cube XYZ 时，position RMSE 不一定继续下降；显式像素级中心监督可以降低视觉定位分支对隐式回归的依赖，并提供可视化诊断。
+- 决策：不改变 Student 部署 `forward()`、Actor 输入或4维动作输出。保留 ResNet18 layer4 spatial-softmax XYZ/contact 分支；从同一 ResNet18 layer3 `[N,256,14,14]` 新增 heatmap head，预测 `[N,1,14,14]`。用 robot-root 坐标中的 `cube_position_root`、相机 optical pose 和 Student 有效内参投影 cube center，生成 Gaussian GT heatmap；相机后方或图像外样本不计 loss。新增 Clean/DR heatmap Student task，旧 Student task 默认关闭 heatmap。
+- Backbone：默认继续冻结全部 ResNet18；训练脚本可用 `--train_backbone_after_layer2` 只解冻 layer3/layer4。layer2 及以前保持冻结，BatchNorm 保持 eval，backbone 使用比 head 更小的独立学习率，默认 `3e-5`。
+- 兼容性：新增层只在 Student 模型中存在，Teacher Actor、manifest model version、policy部署输入输出均不变。旧 Student checkpoint 允许 missing `heatmap_head.*` 加载；新增 head 若未训练，只能视为随机初始化诊断分支，不应解释其 heatmap 输出。切换 backbone 解冻配置续训时 optimizer 状态会重新初始化。
+- 影响：训练脚本日志增加 heatmap loss、uv center error、xyz MAE 和 valid fraction；debug overlay 默认关闭。Heatmap 分支不进入 TorchScript 部署输出，不给真机推理增加新输入或特权信息。

@@ -290,6 +290,34 @@ sim cube-finger filtered force >= 0.2 N -> contact target[2] -> BCE contact loss
 sim cube XYZ + true contact -> same frozen RMAActorCore -> teacher action -> action MSE
 ```
 
+Heatmap-supervised Student task 在不改变部署 `forward()` 的前提下，从同一冻结
+ResNet18 额外读取 layer3 特征：
+
+```text
+calibrated wrist_rgb uint8 [N,224,224,3]
+  -> frozen ResNet18 layer3 [N,256,14,14]
+  -> trainable 3x3 Conv + ReLU + 1x1 Conv
+  -> predicted cube-center heatmap [N,1,14,14]
+
+cube_position_root [N,3]
+  -> root_T_camera optical pose + effective Student K
+  -> projected uv [N,2] in 224x224 pixels + valid mask [N]
+  -> Gaussian GT heatmap [N,1,14,14], sigma default 1.5 heatmap px
+```
+
+投影坐标约定为 robot-root/base 坐标中的 cube center 和 camera optical origin；
+相机四元数为 `wxyz` 且表示 `R_root_camera`，投影时使用
+`R_root_camera.T @ (p_root - t_root)` 得到 ROS optical camera 坐标
+`x-right, y-down, z-forward`。位于相机后方或 224x224 图像范围外的样本通过
+valid mask 排除 heatmap MSE。DR Student Heatmap task 会读取每环境随机化后的相机
+pose、焦距 scale 和主点 shift 来生成对应 GT heatmap。predicted heatmap 的归一化
+期望坐标只用于日志和 debug overlay，不进入 Actor 或部署接口。
+
+默认 Student 训练仍冻结整个 ResNet18。若训练脚本启用
+`--train_backbone_after_layer2`，则只允许 ResNet18 layer3/layer4 更新，conv1、bn1、
+layer1、layer2 及 Actor Core 保持冻结；ResNet BatchNorm 仍保持 eval 模式，避免
+训练过程改写 running statistics。
+
 RMA Student DR task 在上述 `calibrated wrist_rgb` 与 Student adaptation head
 之间插入全强度视觉扰动；每个 episode 为每环境采样相机 `delta XYZ/RPY`、焦距/主点
 warp、brightness/contrast/saturation/gamma/hue/white-balance 和 blur 参数，pixel

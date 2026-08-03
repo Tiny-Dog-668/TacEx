@@ -9,6 +9,16 @@
 - 不确定的作者、意图、commit、seed、checkpoint 或结果统一写“待确认”。
 - 涉及观测、动作、奖励、done、网络输入维度或 checkpoint 兼容性的改动必须明确说明。
 
+## 2026-08-03 CST — 新增 RMA Student cube-center heatmap 辅助监督
+
+- 类型：RMA Student 模型 / 训练脚本 / task 注册 / checkpoint 兼容 / 测试 / 文档
+- 修改：保留现有 `SpatialSoftmaxAdaptationHead` 和 Student `forward(RGB, proprio, history)->action` 接口；从 ResNet18 layer3 `[N,256,14,14]` 新增 `Conv3x3+ReLU+Conv1x1` heatmap head，输出 `[N,1,14,14]`。新增 Clean/DR heatmap Student task：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0`、`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0`。
+- 监督：用 `cube_position_root`、当前 Student 有效内参和相机 optical pose 投影 cube center，生成14x14 Gaussian GT heatmap；默认 `sigma=1.5` heatmap px。相机后方或224x224图像外样本通过 valid mask 排除 heatmap MSE。DR heatmap task 使用每环境随机化后的相机 pose、focal scale 和 principal shift。
+- Backbone 微调：默认仍冻结全部 ResNet18；新增 `--train_backbone_after_layer2` 后只解冻 ResNet18 layer3/layer4，conv1、bn1、layer1、layer2 及 Actor Core 仍冻结。ResNet BatchNorm 保持 eval；backbone 使用独立 `--backbone_learning_rate`，默认 `3e-5`。
+- 日志：训练脚本新增 `Loss/heatmap`、`Heatmap/center_error_px`、`Heatmap/valid_fraction`、`Position/mae_x/y/z_m`，终端进度行同步打印 heatmap loss、uv误差和xyz MAE。`--heatmap_debug_interval > 0` 时在 `heatmap_debug/` 保存少量 RGB overlay；默认关闭，不影响正常训练速度。
+- 兼容性：旧 Student task 默认 heatmap supervision 关闭；新增 heatmap task 默认权重1.0。旧 Student checkpoint 可通过允许 missing `heatmap_head.*` 加载，play/evaluate/export 路径同步使用兼容加载；若 resume 时 optimizer/backbone 训练配置不同，则只加载模型权重并重新初始化 optimizer。TorchScript 仍只导出4维 action，不输出 heatmap。
+- 验证情况：已执行针对修改文件的 `python -m compileall ...`，通过；已用直接文件导入的纯 PyTorch smoke 检查 Student forward、heatmap head 输出、投影/GT heatmap/soft-argmax 和 `torch.jit.script`，通过。系统 Python 直接导入 `tacex_tasks` 因未启动 Isaac/缺少 `omni` 失败，未执行完整 Isaac pytest、训练或评估。
+
 ## 2026-08-01 CST — DR 延后到 100k 并训练 300k
 
 - 类型：DR 环境配置 / Agent 配置 / 训练监控 / 测试 / 文档

@@ -349,19 +349,40 @@ python scripts/reinforcement_learning/skrl/play.py --task Isaac-UR10-Robotiq-2F8
 ## EXP-005 — Real-Alignment RMA 教师学生蒸馏
 
 - 状态：计划；代码路径已实现，训练未执行
-- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0` / `...-Student-v0`
+- Task id：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0` / `...-Student-v0` / `...-Student-DR-v0` / `...-Student-Heatmap-v0` / `...-Student-Heatmap-DR-v0`
 - Scene：Real-Alignment Clean v9
 - Policy / method：200k privileged PPO Teacher + 100k single-frame visual position/contact/action/action-rate distillation
 - Teacher Actor external input：`proprio[15] + history[4] + cube_xyz_root[3] + left_right_contact[2]`
 - Teacher Actor network feature：上述24维 + `gripper_xyz_root_from_fk[3] + (cube-gripper)_xyz[3]` = 30维；不使用物体/末端 quaternion
 - Student deployment input：`RGB[224,224,3] + proprio[15] + history[4]`
+- Heatmap Student：保留原 ResNet18 layer4 spatial-softmax XYZ/contact 分支；新增 ResNet18 layer3 `[N,256,14,14] -> Conv3x3+ReLU+Conv1x1 -> predicted_heatmap [N,1,14,14]`。GT 来自 `cube_position_root` 通过当前 Student 有效内参和相机 optical pose 投影到224x224像素后生成14x14 Gaussian，默认 `sigma=1.5` heatmap px；相机后方或图像外样本不计 heatmap MSE。该分支只影响训练 loss、日志和 debug overlay，不改变 TorchScript 部署接口。
 - 评估：固定10x10 XY 网格，共100 episodes
 - RMA-only reward：0.2 N接触阈值；单侧接触奖励3.0/step；动作变化惩罚 `-0.05 * mean(((a_t-a_{t-1}) / action_scale)^2)`
 - RMA-only gripper actuator：XYZ动作尺度为50 mm/step，夹爪总宽度动作尺度为10 mm/step；finger `effort_limit_sim=40`、`stiffness=400`、`damping=40`
 - Done：RMA success 不终止 episode；仅 timeout 或严重机器人穿地碰撞终止，episode 成功统计按曾经达到 success 计算
 - 验收：Teacher success >=80%；Student success >=0.9 Teacher；Student 3D RMSE <=15 mm
-- checkpoint：RMA Teacher manifest v6 及更早 artifact 已失效；当前 v7 需从头训练 Teacher 后再蒸馏 Student
+- checkpoint：RMA Teacher manifest v6 及更早 artifact 已失效；当前 v7 需从头训练 Teacher 后再蒸馏 Student。新增 heatmap head 允许旧 Student checkpoint 以 missing `heatmap_head.*` 的方式加载，但 heatmap head 本身需训练后才可用于诊断。
 - 结果：待训练与评估，当前不得写为已达标
+
+Heatmap DR Student 推荐训练命令：
+
+```bash
+python scripts/reinforcement_learning/skrl/train_rma_student.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0 \
+  --teacher_checkpoint <teacher.pt> \
+  --num_envs 128 \
+  --timesteps 100000 \
+  --train_backbone_after_layer2 \
+  --backbone_learning_rate 3e-5 \
+  --headless
+```
+
+调试 overlay 默认关闭；需要保存少量 GT/pred center 对比图时追加：
+
+```bash
+  --heatmap_debug_interval 1000 \
+  --heatmap_debug_count 4
+```
 
 新增计划实验时使用以下模板。
 

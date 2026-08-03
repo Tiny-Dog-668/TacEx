@@ -20,6 +20,117 @@ RMA_POSITION_DIM = 3
 RMA_CONTACT_DIM = 2
 RMA_ACTION_DIM = 4
 RMA_ACTOR_FEATURE_DIM = 30
+RMA_HEATMAP_SIZE = 14
+
+
+def quaternion_wxyz_to_matrix(quaternion: torch.Tensor) -> torch.Tensor:
+    """Convert batched wxyz quaternions to rotation matrices.
+
+    The returned matrix maps local/camera-frame vectors into the parent frame.
+    """
+    if quaternion.ndim == 1:
+        quaternion = quaternion.unsqueeze(0)
+    quaternion = quaternion / torch.linalg.norm(quaternion, dim=-1, keepdim=True).clamp(min=1.0e-9)
+    w, x, y, z = quaternion.unbind(dim=-1)
+    two = 2.0
+    return torch.stack(
+        [
+            torch.stack([1.0 - two * (y * y + z * z), two * (x * y - z * w), two * (x * z + y * w)], dim=-1),
+            torch.stack([two * (x * y + z * w), 1.0 - two * (x * x + z * z), two * (y * z - x * w)], dim=-1),
+            torch.stack([two * (x * z - y * w), two * (y * z + x * w), 1.0 - two * (x * x + y * y)], dim=-1),
+        ],
+        dim=-2,
+    )
+
+
+def project_points_root_to_image(
+    points_root: torch.Tensor,
+    camera_position_root: torch.Tensor,
+    camera_quaternion_wxyz: torch.Tensor,
+    intrinsic_matrix: torch.Tensor,
+    image_width: int = 224,
+    image_height: int = 224,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Project robot-root points into ROS optical image pixels.
+
+    Coordinates:
+        points_root: [N,3] in robot-root frame.
+        camera_position_root: [3] or [N,3] camera optical origin in the same frame.
+        camera_quaternion_wxyz: [4] or [N,4] camera optical orientation in root frame.
+        intrinsic_matrix: [3,3] or [N,3,3] for the final Student RGB image.
+
+    ROS optical camera coordinates are x-right, y-down, z-forward.
+    Returns uv [N,2] in 224x224 pixel coordinates and a valid [N] mask.
+    """
+    if points_root.ndim != 2 or points_root.shape[-1] != 3:
+        raise ValueError(f"Expected points_root[N,3], got {tuple(points_root.shape)}")
+    count = points_root.shape[0]
+    if camera_position_root.ndim == 1:
+        camera_position_root = camera_position_root.unsqueeze(0).expand(count, -1)
+    if camera_quaternion_wxyz.ndim == 1:
+        camera_quaternion_wxyz = camera_quaternion_wxyz.unsqueeze(0).expand(count, -1)
+    if intrinsic_matrix.ndim == 2:
+        intrinsic_matrix = intrinsic_matrix.unsqueeze(0).expand(count, -1, -1)
+
+    rotation_root_camera = quaternion_wxyz_to_matrix(camera_quaternion_wxyz)
+    relative_root = points_root - camera_position_root
+    points_camera = torch.bmm(rotation_root_camera.transpose(1, 2), relative_root.unsqueeze(-1)).squeeze(-1)
+    depth = points_camera[:, 2]
+    safe_depth = depth.clamp(min=1.0e-6)
+    u = intrinsic_matrix[:, 0, 0] * (points_camera[:, 0] / safe_depth) + intrinsic_matrix[:, 0, 2]
+    v = intrinsic_matrix[:, 1, 1] * (points_camera[:, 1] / safe_depth) + intrinsic_matrix[:, 1, 2]
+    uv = torch.stack([u, v], dim=-1)
+    valid = (
+        (depth > 1.0e-6)
+        & (u >= 0.0)
+        & (u <= float(image_width - 1))
+        & (v >= 0.0)
+        & (v <= float(image_height - 1))
+    )
+    return uv, valid
+
+
+def make_gaussian_heatmaps(
+    uv_pixels: torch.Tensor,
+    valid: torch.Tensor,
+    *,
+    heatmap_height: int = RMA_HEATMAP_SIZE,
+    heatmap_width: int = RMA_HEATMAP_SIZE,
+    image_height: int = 224,
+    image_width: int = 224,
+    sigma: float = 1.5,
+) -> torch.Tensor:
+    """Create [N,1,H,W] Gaussian heatmaps centered at image-space uv pixels."""
+    if uv_pixels.ndim != 2 or uv_pixels.shape[-1] != 2:
+        raise ValueError(f"Expected uv_pixels[N,2], got {tuple(uv_pixels.shape)}")
+    device = uv_pixels.device
+    dtype = uv_pixels.dtype
+    x = torch.arange(heatmap_width, device=device, dtype=dtype).view(1, 1, 1, heatmap_width)
+    y = torch.arange(heatmap_height, device=device, dtype=dtype).view(1, 1, heatmap_height, 1)
+    center_x = (uv_pixels[:, 0] * float(heatmap_width) / float(image_width)).view(-1, 1, 1, 1)
+    center_y = (uv_pixels[:, 1] * float(heatmap_height) / float(image_height)).view(-1, 1, 1, 1)
+    sigma_value = max(float(sigma), 1.0e-6)
+    heatmap = torch.exp(-((x - center_x).square() + (y - center_y).square()) / (2.0 * sigma_value * sigma_value))
+    return heatmap * valid.to(dtype=dtype).view(-1, 1, 1, 1)
+
+
+def heatmap_soft_argmax(
+    heatmap: torch.Tensor,
+    *,
+    image_height: int = 224,
+    image_width: int = 224,
+) -> torch.Tensor:
+    """Return predicted center uv [N,2] in image pixels from positive [N,1,H,W]."""
+    if heatmap.ndim != 4 or heatmap.shape[1] != 1:
+        raise ValueError(f"Expected heatmap[N,1,H,W], got {tuple(heatmap.shape)}")
+    batch, _, height, width = heatmap.shape
+    weights = heatmap.clamp(min=0.0).reshape(batch, height, width)
+    probability = weights / weights.sum(dim=(1, 2), keepdim=True).clamp(min=1.0e-6)
+    x = torch.arange(width, device=heatmap.device, dtype=heatmap.dtype).view(1, 1, width)
+    y = torch.arange(height, device=heatmap.device, dtype=heatmap.dtype).view(1, height, 1)
+    u = (probability * x).sum(dim=(1, 2)) * float(image_width) / float(width)
+    v = (probability * y).sum(dim=(1, 2)) * float(image_height) / float(height)
+    return torch.stack([u, v], dim=-1)
 
 
 class PandaFingertipKinematics(nn.Module):
@@ -331,6 +442,21 @@ class SpatialSoftmaxAdaptationHead(nn.Module):
         return torch.tanh(self.position_output(features)), self.contact_output(features)
 
 
+class CubeCenterHeatmapHead(nn.Module):
+    """Predict a 14x14 cube-center heatmap from ResNet18 layer3 features."""
+
+    def __init__(self, hidden_channels: int = 64) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Conv2d(256, hidden_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_channels, 1, kernel_size=1),
+        )
+
+    def forward(self, layer3_feature: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(self.network(layer3_feature))
+
+
 class RMAVisualStudent(nn.Module):
     """Frozen ResNet18 + trainable localizer + frozen teacher Actor."""
 
@@ -340,6 +466,7 @@ class RMAVisualStudent(nn.Module):
         backbone = resnet18(weights=weights)
         self.vision_encoder = nn.Sequential(*list(backbone.children())[:-2])
         self.adaptation_head = SpatialSoftmaxAdaptationHead()
+        self.heatmap_head = CubeCenterHeatmapHead()
         self.actor_core = actor_core
         self.register_buffer("image_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer("image_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
@@ -353,6 +480,23 @@ class RMAVisualStudent(nn.Module):
         for parameter in self.actor_core.parameters():
             parameter.requires_grad_(False)
 
+    @torch.jit.unused
+    def unfreeze_backbone_after_layer2(self) -> None:
+        """Train ResNet18 layer3/layer4 while keeping layer2 and earlier frozen.
+
+        ``vision_encoder`` is ResNet18 up to layer4:
+        0=conv1, 1=bn1, 2=relu, 3=maxpool, 4=layer1, 5=layer2,
+        6=layer3, 7=layer4.  BatchNorm modules stay in eval mode through
+        ``train()``, so this only enables gradients on convolution weights.
+        """
+        for parameter in self.vision_encoder.parameters():
+            parameter.requires_grad_(False)
+        for index, module in enumerate(self.vision_encoder):
+            if index >= 6:
+                for parameter in module.parameters():
+                    parameter.requires_grad_(True)
+        self.vision_encoder.eval()
+
     def train(self, mode: bool = True):
         super().train(mode)
         self.vision_encoder.eval()
@@ -360,13 +504,22 @@ class RMAVisualStudent(nn.Module):
         return self
 
     def encode(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
+        _, layer4_feature = self.encode_features(wrist_rgb)
+        return layer4_feature
+
+    def encode_features(self, wrist_rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if not torch.jit.is_scripting():
             if wrist_rgb.ndim != 4 or wrist_rgb.shape[-1] != 3:
                 raise ValueError(f"Expected wrist_rgb [N,H,W,3], got {tuple(wrist_rgb.shape)}")
         image = wrist_rgb.to(torch.float32).permute(0, 3, 1, 2) / 255.0
         image = (image - self.image_mean) / self.image_std
-        with torch.no_grad():
-            return self.vision_encoder(image)
+        x = image
+        layer3_feature = image
+        for index, module in enumerate(self.vision_encoder):
+            x = module(x)
+            if index == 6:
+                layer3_feature = x
+        return layer3_feature, x
 
     def predict_normalized_position(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
         normalized_position, _ = self.predict_adaptation(wrist_rgb)
@@ -374,6 +527,14 @@ class RMAVisualStudent(nn.Module):
 
     def predict_adaptation(self, wrist_rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return self.adaptation_head(self.encode(wrist_rgb))
+
+    def predict_adaptation_and_heatmap(
+        self, wrist_rgb: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        layer3_feature, layer4_feature = self.encode_features(wrist_rgb)
+        normalized_position, contact_logits = self.adaptation_head(layer4_feature)
+        heatmap = self.heatmap_head(layer3_feature)
+        return normalized_position, contact_logits, heatmap
 
     def predict_contact_probability(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
         _, contact_logits = self.predict_adaptation(wrist_rgb)

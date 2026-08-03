@@ -98,7 +98,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 - Cross attention 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_cross_policy.py:OccludedGraspingVisionTactileCrossAttentionPolicy`。
 - Aux heads 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_cross_alpha_aux_policy.py:OccludedGraspingVTTactileCrossAlphaAuxPolicy`。
 - GelFusion-style 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py:OccludedGraspingVTGelFusionPolicy`。
-- Real-Alignment RMA-style：独立 privileged Teacher 与单帧视觉 Student；RMA-only cube ContactSensor 以0.5N阈值生成左右指接触，单侧/双侧接触每步分别奖励0.1/2.0。Teacher 接收 cube XYZ 与真实双指接触；Student 的 adaptation head 从同一 RGB 同时预测 XYZ 和两路接触概率，并通过位置 SmoothL1、接触 BCE 和动作 MSE 蒸馏冻结 Actor。当前 v3 Actor 内嵌 Panda FK，30维网络特征为原28维加左右接触2维；v5 RMA artifact 将 success 设为非终止统计条件，并只在 RMA 中降低 finger actuator 到 `40N/400/40`，但夹爪动作尺度仍为5mm/step。部署接口仍只需要 RGB、本体15维和 history4维，不使用物体或末端 quaternion。
+- Real-Alignment RMA-style：独立 privileged Teacher 与单帧视觉 Student；RMA-only cube ContactSensor 以当前代码中的0.2N阈值生成左右指接触，接触奖励权重为3.0。Teacher 接收 cube XYZ 与真实双指接触；Student 的 adaptation head 从同一 RGB 同时预测 XYZ 和两路接触概率，并通过位置 SmoothL1、接触 BCE、动作 MSE 和动作平滑项蒸馏冻结 Actor。当前 v3 Actor 内嵌 Panda FK，30维网络特征为原28维加左右接触2维；v5 RMA artifact 将 success 设为非终止统计条件，并只在 RMA 中降低 finger actuator 到 `40N/400/40`，夹爪总宽度动作尺度为10mm/step。部署接口仍只需要 RGB、本体15维和 history4维，不使用物体或末端 quaternion。可选 heatmap Student task 保留原 spatial-softmax XYZ 分支，并从 ResNet18 layer3 `[N,256,14,14]` 新增 cube-center heatmap `[N,1,14,14]` 辅助监督；heatmap 不改变 TorchScript 外部输入输出。
 
 ## 9. 当前主要实验变量
 
@@ -142,6 +142,7 @@ RMA Teacher 与 Student：
 ```bash
 python scripts/reinforcement_learning/skrl/train.py --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0 --num_envs 256 --headless
 python scripts/reinforcement_learning/skrl/train_rma_student.py --teacher_checkpoint <teacher.pt> --num_envs 4 --timesteps 100000 --enable_cameras --headless
+python scripts/reinforcement_learning/skrl/train_rma_student.py --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0 --teacher_checkpoint <teacher.pt> --num_envs 128 --timesteps 100000 --train_backbone_after_layer2 --backbone_learning_rate 3e-5 --headless
 ```
 
 已确认训练命令示例：

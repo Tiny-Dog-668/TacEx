@@ -20,6 +20,10 @@ from .sim2real_cube_real_alignment_rma_env import (
     Sim2RealCubeRealAlignmentRMAStudentDREnvCfg,
     Sim2RealCubeRealAlignmentRMAStudentEnv,
     Sim2RealCubeRealAlignmentRMAStudentEnvCfg,
+    Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv,
+    Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv,
+    Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg,
     Sim2RealCubeRealAlignmentRMATeacherEnv,
     Sim2RealCubeRealAlignmentRMATeacherEnvCfg,
 )
@@ -70,6 +74,19 @@ gym.register(
     },
 )
 
+# Camera student with explicit projected cube-center heatmap supervision.
+gym.register(
+    id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0",
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
+        "Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg,
+    },
+)
+
 # RMA Student with full-strength camera/image/scene domain randomization from
 # the first update. The Teacher stays on the matching privileged Clean physics
 # contract; only the visual observation distribution differs.
@@ -82,6 +99,19 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentDREnvCfg,
+    },
+)
+
+# Heatmap-supervised RMA Student with full-strength visual DR from the first update.
+gym.register(
+    id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0",
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
+        "Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg,
     },
 )
 
