@@ -71,8 +71,19 @@ def test_rma_teacher_observation_and_step_contract():
         assert next_observations["policy"]["rma_contact_state"].shape == (2, 2)
         assert rewards.shape == terminated.shape == truncated.shape == (2,)
         assert torch.isfinite(rewards).all()
+        assert "reward/rma_action_rate" in env.unwrapped.extras["log"]
+        assert env.unwrapped.extras["log"]["reward/rma_action_rate"].item() == pytest.approx(0.0)
 
         base_env = env.unwrapped
+        base_env._rma_previous_action_history.zero_()
+        base_env.action_history.zero_()
+        base_env.action_history[:, 0] = cfg.action_scale
+        action_rate_penalty, action_rate_log = base_env._compute_rma_action_rate_penalty()
+        assert torch.all(action_rate_penalty < 0.0)
+        assert action_rate_log["info/rma_action_rate_norm_sq_mean"].item() == pytest.approx(0.25)
+        base_env.action_history.zero_()
+        base_env._rma_previous_action_history.zero_()
+
         base_env._ensure_cube_lift_reference_height()
         lifted_state = base_env._cube.data.root_state_w.clone()
         lifted_state[:, :3] = base_env._cube.data.root_pos_w

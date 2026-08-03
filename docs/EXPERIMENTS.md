@@ -20,7 +20,7 @@
 - 随机化 profile：Clean；只随机 cube XY reset，关闭图像、光照、地面和台面颜色随机化
 - Seed：42
 - Actor observation：`wrist_resnet:512`、`proprio_obs:15`、`action_history:4`
-- Action：4 维 `[dx, dy, dz, gripper_total_width_delta]`；当前 Clean/DR v9 逐维 scale 为 `[0.025,0.025,0.025,0.005] m/policy step`；历史 v8/v7 分别为 25/2 mm 与 10/2 mm
+- Action：4 维 `[dx, dy, dz, gripper_total_width_delta]`；当前环境逐维物理 command scale 为 `[0.05,0.05,0.05,0.01] m/policy step`。RMA checkpoint 内 action-history normalizer 仍为 `[0.025,0.025,0.025,0.005]`，必须存储实际下发的物理增量后再由模型按其训练尺度归一化；历史 v8/v7 分别为 25/2 mm 与 10/2 mm。
 - Object：实测尺寸 `0.05x0.05x0.05 m`
 - Object reset：Franka base/world 对齐坐标以 `(0.50,0.00,0.026) m` 为中心；前 20k policy steps 使用 `x=[0.48,0.52], y=[-0.02,0.02] m`，20k–100k 线性扩展，之后为完整 `x=[0.45,0.55], y=[-0.05,0.05] m`。play、bucket 和 rollout 强制完整范围
 - Geometry：台面厚度 `1 mm`、顶面 `z=0.001 m`，5 cm 方块初始质心 `z=0.026 m`
@@ -28,7 +28,7 @@
 - Frequency：physics 60 Hz；camera/render/policy/action/observation/reward/history 30 Hz（`sim.dt=1/60, decimation=2`）
 - Episode：5 秒，150 个 policy steps
 - 当前策略 camera resolution/intrinsics：`224x224`，有效 `K=[338.742544,0,123.748857; 0,340.550811,120.393372; 0,0,1]`。它对应现实 `640x480` 裁剪 `x=[100,500), y=[34,432)` 后将 400x398 双线性缩放到 224x224；仿真用 centered 300 px-focal coverage render 加固定 GPU warp 实现该有效 K
-- 当前 camera pose：`base_T_camera_color_optical` 的 `pos=(1.172904219177,0.031653013416,0.512212537004)`、Isaac `rot(wxyz)=(-0.375287920087,0.607013774710,0.582420741286,-0.389203461533)`、`convention=ros`；部署相机序列号锁定为 `215322076207`
+- 当前 Panda base world pose：`pos=(0,0,0.02) m`，以匹配真机 20 mm 垫高；桌面/方块仍在 world `z=0` 参考下。`base_T_camera_color_optical` 的 `pos=(1.166091088407,0.035901608197,0.514200335898)`、Isaac `rot(wxyz)=(0.378248136306,-0.604227000834,-0.586824979121,0.384024117374)`、`convention=ros`；相机作为独立 world prim 的实际 position 为 `(1.166091088407,0.035901608197,0.534200335898)`，以保持该 base 外参。部署相机序列号锁定为 `215322076207`。
 - Num envs：256，依据 `training_summary.txt`
 - 日志目录：`logs/skrl/sim2real_cube_real_alignment/2026-07-11_23-15-23_ppo_torch_vision_only_resnet18/`
 - Checkpoint：`checkpoints/best_agent.pt`；同目录存在 `agent_200000.pt`
@@ -43,7 +43,7 @@
 - Reach 几何隔离测试（2026-07-30，4-env Isaac）：reset 时左右指尖中心分别约为 `(0.4999,-0.0200,0.2995)` 与 `(0.4998,0.0200,0.2995) m`，中点约为 `(0.49984,0.000043,0.29952) m`；该中点与 `panda_hand+0.1034 m` IK TCP 的误差最大约 `1.37e-7 m`。使用生产 `_get_rewards()` 且隔离其他奖励后，方块质心位于中点、偏移 25 mm、偏移 50 mm、位于 `panda_hand` origin 时，reach 分别为 `1.0000/0.7551/0.5379/0.2245`，确认峰值位于实际指尖中点而非 hand origin。当前 reset 距离约 `0.274 m`，在 `reach_sigma=0.1 m` 下 raw reach 仅约 `0.0083`，因此早期 reach 数值小主要来自长距离 tanh 饱和，不是中心坐标错误。
 - 当前训练监控：`episode_success_rate_window` 是最近 200 个 policy steps 内成功结束 episode 数 / 所有结束 episode 数；一个并行 step 可贡献多个完成 episode，无完成 episode 的 step 仍推进窗口。日志同时记录窗口成功/完成数、累计成功/完成数和累计成功率；它与单步 `reward/success` 分开，后者仍是当前达到 35 mm 的环境比例。
 - 历史图像对齐 smoke：旧相机 world `pos=(1.90,0.0,0.468)`、向下约 15° 时，seed 42 仿真帧 RGB mean `[70.6,113.0,70.1]`，现实 model median 为 `[80.1,113.0,81.9]`；方块中心分别为 `(86.6,128.6)` 和 `(85.6,128.5)` pixel。这是旧位姿下的单帧外观检查，不适用于当前相机位姿，也不是策略结果。
-- 当前训练 contract v9：ResNet18 始终 `eval()` 且参数冻结；Clean/DR `action_history` 为上一拍逐维 scaled/clipped requested command `[0.025*u_x,0.025*u_y,0.025*u_z,0.005*g]`。夹爪目标宽度每个 policy step 只累加一次，physics application 只重发缓存目标；IK TCP 为固定 `panda_hand+0.1034 m`，reach/critic 使用左右指尖世界坐标中点；Actor 后控制链不读取 ground-truth object XY；Actor deterministic mean 为 `tanh(raw_mean)`。Contract 同时记录新 crop/有效 K/GPU 补偿、相机序列号、`x/y ±5 cm` 物体课程、台面、无倾角 success 和碰撞奖励语义。
+- 当前训练 contract v9：ResNet18 始终 `eval()` 且参数冻结；Clean/DR `action_history` 为上一拍逐维 scaled/clipped requested physical command `[0.05*u_x,0.05*u_y,0.05*u_z,0.01*g]`。RMA Student 训练/部署模型对该 history 使用 checkpoint 固有 `[0.025,0.025,0.025,0.005]` normalizer，二者不能只改其一。夹爪目标宽度每个 policy step 只累加一次，physics application 只重发缓存目标；IK TCP 为固定 `panda_hand+0.1034 m`，reach/critic 使用左右指尖世界坐标中点；Actor 后控制链不读取 ground-truth object XY；Actor deterministic mean 为 `tanh(raw_mean)`。Contract 同时记录新 crop/有效 K/GPU 补偿、相机序列号、`x/y ±5 cm` 物体课程、台面、无倾角 success 和碰撞奖励语义。
 - Checkpoint 兼容性：上述历史 checkpoint 虽然张量 shape 不变，但已经适应旧 BatchNorm、两拍延迟 history、unbounded mean、per-finger/substep 夹爪语义、旧抓取中心或不同 policy frequency，不能在当前环境中 resume 后继续训练；旧 artifact 只能按其保存的环境配置复现，需要按当前 30 Hz/5 秒配置从头重新训练。
 - 当前短训练 run：`logs/skrl/sim2real_cube_real_alignment/2026-07-26_20-51-57_ppo_torch_vision_only_resnet18/`；`best_agent.pt` SHA-256 为 `92c930d2605b8abf58466cbb4717f2004bd92a96629937f62c05efae7fc341d3`。截至约 11.5k steps，TensorBoard 的 reach reward 从约 `0.023` 上升、最好约 `0.331`，reach distance 从约 `0.234 m` 降至约 `0.120 m`；lift 仅短暂约 `0.014`，success 近似为 0。因此它只能用于受控真机链路诊断，不能视为已学会抓取。
 - 当前 v8 export：`checkpoints/exported/policy_actor_e2e_best_agent.pt`，SHA-256 `b888e7321c0481f80623ffa84837f32bc8f426eefbd1af33937764d787744c24`；复制到 `franka/checkpoint/real_alignment_v8_25mm/exported/`，独立 JIT 测试确认输出 finite、bounded、repeat diff 为 0。真机成功率：待确认。
@@ -351,16 +351,16 @@ python scripts/reinforcement_learning/skrl/play.py --task Isaac-UR10-Robotiq-2F8
 - 状态：计划；代码路径已实现，训练未执行
 - Task id：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0` / `...-Student-v0`
 - Scene：Real-Alignment Clean v9
-- Policy / method：200k privileged PPO Teacher + 100k single-frame visual position/contact/action distillation
+- Policy / method：200k privileged PPO Teacher + 100k single-frame visual position/contact/action/action-rate distillation
 - Teacher Actor external input：`proprio[15] + history[4] + cube_xyz_root[3] + left_right_contact[2]`
 - Teacher Actor network feature：上述24维 + `gripper_xyz_root_from_fk[3] + (cube-gripper)_xyz[3]` = 30维；不使用物体/末端 quaternion
 - Student deployment input：`RGB[224,224,3] + proprio[15] + history[4]`
 - 评估：固定10x10 XY 网格，共100 episodes
-- RMA-only reward：0.5 N接触阈值；单侧接触0.1/step，双侧接触2.0/step
-- RMA-only gripper actuator：动作尺度仍为5 mm/step；finger `effort_limit_sim=40`、`stiffness=400`、`damping=40`
+- RMA-only reward：0.2 N接触阈值；单侧接触奖励3.0/step；动作变化惩罚 `-0.05 * mean(((a_t-a_{t-1}) / action_scale)^2)`
+- RMA-only gripper actuator：XYZ动作尺度为50 mm/step，夹爪总宽度动作尺度为10 mm/step；finger `effort_limit_sim=40`、`stiffness=400`、`damping=40`
 - Done：RMA success 不终止 episode；仅 timeout 或严重机器人穿地碰撞终止，episode 成功统计按曾经达到 success 计算
 - 验收：Teacher success >=80%；Student success >=0.9 Teacher；Student 3D RMSE <=15 mm
-- checkpoint：RMA v4 及更早 artifact 已失效；当前 v5 需从头训练
+- checkpoint：RMA Teacher manifest v6 及更早 artifact 已失效；当前 v7 需从头训练 Teacher 后再蒸馏 Student
 - 结果：待训练与评估，当前不得写为已达标
 
 新增计划实验时使用以下模板。

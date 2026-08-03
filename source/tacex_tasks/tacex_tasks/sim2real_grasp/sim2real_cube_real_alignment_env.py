@@ -46,9 +46,13 @@ _TABLE_COLLISION_ROBOT_BODY_NAMES = (
     "panda_rightfinger",
 )
 
-_CLEAN_PLATE_COLOR = (0.02, 0.02, 0.02)
-_CLEAN_BACKDROP_COLOR = (0.01, 0.01, 0.01)
-_CLEAN_DOME_LIGHT_COLOR = (0.75, 0.75, 0.75)
+# Provisional nominal appearance tuned against the supplied cropped D435
+# frame: a near-black work surface and curtain while preserving the bright
+# robot and cube.  Camera geometry remains the supplied calibration.
+_CLEAN_PLATE_COLOR = (0.006, 0.006, 0.006)
+_CLEAN_BACKDROP_COLOR = (0.004, 0.004, 0.004)
+_CLEAN_DOME_LIGHT_INTENSITY = 1600.0
+_CLEAN_DOME_LIGHT_COLOR = (0.72, 0.72, 0.72)
 
 
 @configclass
@@ -103,6 +107,18 @@ class Sim2RealCubeRealAlignmentEnvCfg(Sim2RealCubeGraspEnvCfg):
         "gpu_affine_grid_centered_square_pixel_render_to_calibrated_k"
     )
     camera_resize_interpolation = "bilinear"
+    # The real Panda base is mounted 20 mm above the table/world z=0 plane.
+    # Camera calibration is supplied in this Panda-base frame, while the
+    # standalone TiledCamera below must be spawned in the environment/world
+    # frame.  Keep both representations explicit to avoid silently changing
+    # base_T_camera_color_optical when moving the robot.
+    robot_base_world_position_m = (0.0, 0.0, 0.02)
+    camera_base_position_m = (1.166091088407, 0.035901608197, 0.514200335898)
+    camera_world_position_m = (
+        robot_base_world_position_m[0] + camera_base_position_m[0],
+        robot_base_world_position_m[1] + camera_base_position_m[1],
+        robot_base_world_position_m[2] + camera_base_position_m[2],
+    )
     gripper_control_mode = "total_width_delta_cached_target"
     action_scale = 0.05  # [m] Cartesian increment per 30 Hz policy step at |action|=1
     gripper_width_delta_scale = 0.01  # [m] total-width increment per policy step at |action|=1
@@ -171,7 +187,7 @@ class Sim2RealCubeRealAlignmentEnvCfg(Sim2RealCubeGraspEnvCfg):
                 # contribute half of the total opening width.
                 "panda_finger_joint.*": 0.020000753924250603,
             },
-            pos=(0.0, 0.0, 0.0),
+            pos=robot_base_world_position_m,
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
@@ -195,10 +211,12 @@ class Sim2RealCubeRealAlignmentEnvCfg(Sim2RealCubeGraspEnvCfg):
             clipping_range=(0.05, 30.0),
         ),
         offset=TiledCameraCfg.OffsetCfg(
-            # User-provided base_T_camera_color_optical pose. Quaternion is
-            # converted from ROS xyzw to Isaac wxyz without changing axes.
-            pos=(1.172904219177, 0.031653013416, 0.512212537004),
-            rot=(-0.375287920087, 0.607013774710, 0.582420741286, -0.389203461533),
+            # Calibrated base_T_camera_color_optical pose. Quaternion is
+            # converted from provided ROS xyzw=(-0.604227000834,
+            # -0.586824979121, 0.384024117374, 0.378248136306) to Isaac
+            # wxyz without changing axes.
+            pos=camera_world_position_m,
+            rot=(0.378248136306, -0.604227000834, -0.586824979121, 0.384024117374),
             convention="ros",
         ),
     )
@@ -313,59 +331,60 @@ class Sim2RealCubeRealAlignmentDREnvCfg(Sim2RealCubeRealAlignmentEnvCfg):
     # Explicit resume hook: set this to the restored outer training timestep.
     dr_curriculum_step_offset = 0
 
-    # Per-env camera perturbation in the calibrated camera frame:
-    # T_sample = T_calib * delta_T.
+    # Per-env camera perturbation around the supplied calibrated frame:
+    # T_sample = T_calib * delta_T.  The range models residual mounting and
+    # calibration error, rather than replacing the nominal external calibration.
     camera_pose_randomization_enabled = True
-    camera_position_delta_max_m = (0.003, 0.003, 0.003)
-    camera_rotation_delta_max_deg = (1.0, 1.0, 1.0)
+    camera_position_delta_max_m = (0.0015, 0.0015, 0.0015)
+    camera_rotation_delta_max_deg = (0.5, 0.5, 0.5)
 
     # Omniverse does not render a non-centred principal point reliably. Apply
     # focal/principal perturbations as a batched GPU image warp.
     camera_intrinsic_warp_enabled = True
-    camera_focal_scale_range = (0.985, 1.015)
-    camera_principal_point_shift_max_px = (2.0, 2.0)
+    camera_focal_scale_range = (0.99, 1.01)
+    camera_principal_point_shift_max_px = (1.0, 1.0)
 
     # Per-env parameters are sampled once per episode. Pixel noise itself is
     # sampled each frame using the episode-fixed noise standard deviation.
     wrist_visual_randomization_enabled = True
     wrist_brightness_randomization_enabled = True
-    wrist_brightness_range = (0.85, 1.15)
+    wrist_brightness_range = (0.90, 1.10)
     wrist_gamma_randomization_enabled = True
-    wrist_gamma_range = (0.85, 1.15)
+    wrist_gamma_range = (0.92, 1.08)
     wrist_contrast_randomization_enabled = True
-    wrist_contrast_range = (0.85, 1.15)
+    wrist_contrast_range = (0.90, 1.10)
     wrist_saturation_randomization_enabled = True
-    wrist_saturation_range = (0.85, 1.15)
+    wrist_saturation_range = (0.90, 1.05)
     wrist_hue_randomization_enabled = True
-    wrist_hue_max_deg = 5.0
+    wrist_hue_max_deg = 2.0
     wrist_white_balance_randomization_enabled = True
-    wrist_white_balance_shift_max = 0.08
+    wrist_white_balance_shift_max = 0.04
     wrist_blur_randomization_enabled = True
-    wrist_blur_probability = 0.15
+    wrist_blur_probability = 0.08
     wrist_blur_kernel_sizes = (3,)
     wrist_gaussian_noise_randomization_enabled = True
-    wrist_gaussian_noise_std_range = (0.0, 0.01)
+    wrist_gaussian_noise_std_range = (0.0, 0.006)
 
     # DomeLight is stage-global, so update it only on all-env resets. Per-env
     # exposure and white balance are handled by GPU post-processing.
     light_randomization_enabled = True
-    light_nominal_intensity = 2000.0
+    light_nominal_intensity = _CLEAN_DOME_LIGHT_INTENSITY
     light_nominal_color = _CLEAN_DOME_LIGHT_COLOR
-    light_intensity_range = (1000.0, 3000.0)
+    light_intensity_range = (1300.0, 1900.0)
     light_nominal_color_temperature = 5500.0
-    light_color_temperature_range = (3800.0, 7200.0)
+    light_color_temperature_range = (4800.0, 6200.0)
 
     # Keep the global ground fixed. Both material distributions are centered on
     # the exact Clean colors so scale=0 reproduces the Clean rendered scene.
     ground_color_randomization_enabled = False
     plate_color_randomization_enabled = True
     plate_color_center = _CLEAN_PLATE_COLOR
-    plate_color_min = (0.01, 0.01, 0.01)
-    plate_color_max = (0.05, 0.05, 0.05)
+    plate_color_min = (0.003, 0.003, 0.003)
+    plate_color_max = (0.012, 0.012, 0.012)
     backdrop_color_randomization_enabled = True
     backdrop_color_center = _CLEAN_BACKDROP_COLOR
-    backdrop_color_min = (0.005, 0.005, 0.005)
-    backdrop_color_max = (0.03, 0.03, 0.03)
+    backdrop_color_min = (0.002, 0.002, 0.002)
+    backdrop_color_max = (0.008, 0.008, 0.008)
 
 
 class Sim2RealCubeRealAlignmentEnv(Sim2RealCubeGraspEnv):
@@ -836,7 +855,10 @@ class Sim2RealCubeRealAlignmentEnv(Sim2RealCubeGraspEnv):
             orientation=ground.init_state.rot,
         )
 
-        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=_CLEAN_DOME_LIGHT_COLOR)
+        light_cfg = sim_utils.DomeLightCfg(
+            intensity=_CLEAN_DOME_LIGHT_INTENSITY,
+            color=_CLEAN_DOME_LIGHT_COLOR,
+        )
         light_cfg.func("/World/Light", light_cfg)
 
 

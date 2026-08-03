@@ -85,17 +85,18 @@ class PandaFingertipKinematics(nn.Module):
         )
 
     def forward(self, joint_position: torch.Tensor) -> torch.Tensor:
-        if not torch.jit.is_tracing() and joint_position.shape[-1] != 7:
-            raise ValueError(f"Expected Panda joint_position[...,7], got {tuple(joint_position.shape)}")
-        batch_shape = joint_position.shape[:-1]
-        flattened = joint_position.reshape(-1, 7)
-        transform = torch.eye(4, dtype=flattened.dtype, device=flattened.device)
-        transform = transform.unsqueeze(0).expand(flattened.shape[0], -1, -1)
+        # RMA Teacher/Student input is always batched [N, 7]. Keeping this
+        # explicit avoids a variadic reshape that TorchScript cannot script.
+        if not torch.jit.is_scripting():
+            if joint_position.ndim != 2 or joint_position.shape[-1] != 7:
+                raise ValueError(f"Expected Panda joint_position[N,7], got {tuple(joint_position.shape)}")
+        transform = torch.eye(4, dtype=joint_position.dtype, device=joint_position.device)
+        transform = transform.unsqueeze(0).expand(joint_position.shape[0], -1, -1)
         for index in range(7):
             transform = torch.matmul(transform, self.joint_origin_transforms[index])
-            transform = torch.matmul(transform, self._rotation_z(flattened[:, index]))
+            transform = torch.matmul(transform, self._rotation_z(joint_position[:, index]))
         point = torch.matmul(transform, self.link7_to_fingertip_midpoint)
-        return point[:, :3].reshape(*batch_shape, 3)
+        return point[:, :3]
 
     def contract(self) -> dict[str, object]:
         return {
@@ -135,8 +136,9 @@ class RMAObservationNormalizer(nn.Module):
         self.register_buffer("target_position_scale", torch.tensor([0.10, 0.10, 0.15]))
 
     def normalize_proprio(self, proprio_obs: torch.Tensor) -> torch.Tensor:
-        if not torch.jit.is_tracing() and proprio_obs.shape[-1] != RMA_PROPRIO_DIM:
-            raise ValueError(f"Expected proprio_obs[...,15], got {tuple(proprio_obs.shape)}")
+        if not torch.jit.is_scripting():
+            if proprio_obs.shape[-1] != RMA_PROPRIO_DIM:
+                raise ValueError(f"Expected proprio_obs[...,15], got {tuple(proprio_obs.shape)}")
         joint_mid = 0.5 * (self.joint_lower + self.joint_upper)
         joint_half_range = 0.5 * (self.joint_upper - self.joint_lower)
         joint_pos = (proprio_obs[..., :7] - joint_mid) / joint_half_range
@@ -145,8 +147,9 @@ class RMAObservationNormalizer(nn.Module):
         return torch.cat([joint_pos, joint_vel, gripper_width], dim=-1)
 
     def normalize_history(self, action_history: torch.Tensor) -> torch.Tensor:
-        if not torch.jit.is_tracing() and action_history.shape[-1] != RMA_HISTORY_DIM:
-            raise ValueError(f"Expected action_history[...,4], got {tuple(action_history.shape)}")
+        if not torch.jit.is_scripting():
+            if action_history.shape[-1] != RMA_HISTORY_DIM:
+                raise ValueError(f"Expected action_history[...,4], got {tuple(action_history.shape)}")
         return action_history / self.history_scale
 
     def normalize_position(self, cube_position: torch.Tensor) -> torch.Tensor:
@@ -203,11 +206,11 @@ class RMAActorCore(nn.Module):
         action_history: torch.Tensor,
         cube_position: torch.Tensor,
         contact_state: torch.Tensor,
-        *,
         position_is_normalized: bool = False,
     ) -> torch.Tensor:
-        if not torch.jit.is_tracing() and contact_state.shape[-1] != RMA_CONTACT_DIM:
-            raise ValueError(f"Expected contact_state[...,2], got {tuple(contact_state.shape)}")
+        if not torch.jit.is_scripting():
+            if contact_state.shape[-1] != RMA_CONTACT_DIM:
+                raise ValueError(f"Expected contact_state[...,2], got {tuple(contact_state.shape)}")
         if position_is_normalized:
             normalized_cube_position = cube_position
             cube_position_root = self.normalizer.denormalize_position(cube_position)
@@ -357,8 +360,9 @@ class RMAVisualStudent(nn.Module):
         return self
 
     def encode(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
-        if not torch.jit.is_tracing() and (wrist_rgb.ndim != 4 or wrist_rgb.shape[-1] != 3):
-            raise ValueError(f"Expected wrist_rgb [N,H,W,3], got {tuple(wrist_rgb.shape)}")
+        if not torch.jit.is_scripting():
+            if wrist_rgb.ndim != 4 or wrist_rgb.shape[-1] != 3:
+                raise ValueError(f"Expected wrist_rgb [N,H,W,3], got {tuple(wrist_rgb.shape)}")
         image = wrist_rgb.to(torch.float32).permute(0, 3, 1, 2) / 255.0
         image = (image - self.image_mean) / self.image_std
         with torch.no_grad():

@@ -324,7 +324,10 @@ conda run -n isaaclab_2.1.1 --no-capture-output python \
 
 The TorchScript signature is `wrist_rgb uint8[N,224,224,3]`, `proprio_obs
 float32[N,15]`, and `action_history float32[N,4]` to a bounded `float32[N,4]`
-action mean. No simulator position is part of the deployment input.
+action mean. No simulator position is part of the deployment input. New RMA
+exports support both CPU and CUDA loading via `torch.jit.load(...,
+map_location="cpu" | "cuda:0")`; all three input tensors must be on the
+selected device.
 The exported Actor computes fingertip-midpoint XYZ internally from the first
 seven joint positions in `proprio_obs`; the real robot must provide joint angles
 in the documented Panda joint order and robot-root frame convention.

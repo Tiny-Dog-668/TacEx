@@ -37,6 +37,10 @@ from tacex_tasks.sim2real_grasp.rma_artifacts import (
 from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore, RMAVisualStudent
 
 
+# CUDA convolution kernels need not be bitwise identical to CPU kernels.
+CUDA_VALIDATION_ATOL = 1e-3
+
+
 def _atomic_json_dump(value: dict, path: Path) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -67,7 +71,7 @@ def main() -> None:
         torch.zeros((1, 4), dtype=torch.float32),
     )
     with torch.inference_mode():
-        traced = torch.jit.trace(model, example, strict=True)
+        traced = torch.jit.script(model)
         probe = (
             torch.randint(0, 256, (2, 224, 224, 3), dtype=torch.uint8),
             torch.randn((2, 15), dtype=torch.float32),
@@ -88,9 +92,24 @@ def main() -> None:
     if not torch.all((reloaded_actions >= -1.0) & (reloaded_actions <= 1.0)):
         raise RuntimeError("Exported student actions violate tanh bounds")
 
+    cuda_validation: dict[str, bool | float | None] = {
+        "available": bool(torch.cuda.is_available()),
+        "max_abs_error": None,
+    }
+    if torch.cuda.is_available():
+        cuda_device = torch.device("cuda:0")
+        reloaded_cuda = torch.jit.load(str(output), map_location=cuda_device).eval()
+        probe_cuda = tuple(value.to(cuda_device) for value in probe)
+        with torch.inference_mode():
+            cuda_actions = reloaded_cuda(*probe_cuda)
+        cuda_error = float(torch.max(torch.abs(eager_actions - cuda_actions.cpu())).item())
+        if cuda_error > CUDA_VALIDATION_ATOL or not torch.isfinite(cuda_actions).all():
+            raise RuntimeError(f"CUDA TorchScript validation failed: error={cuda_error}")
+        cuda_validation["max_abs_error"] = cuda_error
+
     metadata = {
         "kind": "tacex_rma_student_torchscript",
-        "version": 5,
+        "version": 6,
         "student_checkpoint": str(checkpoint),
         "student_checkpoint_sha256": sha256_file(checkpoint),
         "teacher_checkpoint": payload.get("teacher_checkpoint"),
@@ -110,6 +129,8 @@ def main() -> None:
         "actor_contract": model.actor_core.contract(),
         "trace_max_abs_error": trace_error,
         "reload_max_abs_error": reload_error,
+        "cuda_validation": cuda_validation,
+        "cuda_validation_atol": CUDA_VALIDATION_ATOL,
         "privileged_inputs": [],
         "notes": [
             "wrist_rgb is uint8 RGB in NHWC layout.",
@@ -119,6 +140,7 @@ def main() -> None:
             "from proprio_obs joint positions.",
             "Cube and end-effector orientation are not Actor features.",
             "Left/right cube-finger contact probabilities are predicted from wrist_rgb.",
+            "Load with map_location='cpu' or map_location='cuda:0'; inputs must use the same device.",
         ],
     }
     metadata_path = output.with_suffix(".json")

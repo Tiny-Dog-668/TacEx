@@ -26,6 +26,7 @@ from tacex_tasks.sim2real_grasp.rma_artifacts import (
     RMA_STUDENT_DR_TASK,
     RMA_STUDENT_TASK,
     RMA_TEACHER_TASK,
+    _env_contract,
     load_student_checkpoint,
     load_teacher_manifest,
 )
@@ -69,6 +70,16 @@ def test_rma_configs_are_isolated_from_existing_tasks():
         assert hand.stiffness == pytest.approx(400.0)
         assert hand.damping == pytest.approx(40.0)
         assert hand.velocity_limit_sim is None
+        contract = _env_contract(cfg)
+        assert contract["robot_base_world_position_m"] == [0.0, 0.0, 0.02]
+        assert contract["action_rate_penalty_weight"] == pytest.approx(0.05)
+        assert contract["action_rate_penalty_scales"] == "environment_action_scales"
+        assert contract["camera_base_position_m"] == pytest.approx(
+            [1.166091088407, 0.035901608197, 0.514200335898]
+        )
+        assert contract["camera_world_position_m"] == pytest.approx(
+            [1.166091088407, 0.035901608197, 0.534200335898]
+        )
     assert teacher.vision_encoder_enabled is False
     assert student.vision_encoder_enabled is False
     assert student_dr.vision_encoder_enabled is False
@@ -78,6 +89,9 @@ def test_rma_configs_are_isolated_from_existing_tasks():
         "embedded_panda_fk_from_proprio_joint_position"
     )
     assert teacher.rma_contact_components == "left_right_cube_finger_binary"
+    assert teacher.rma_action_rate_penalty_weight == pytest.approx(0.05)
+    assert student.rma_action_rate_penalty_weight == pytest.approx(0.05)
+    assert student_dr.rma_action_rate_penalty_weight == pytest.approx(0.05)
     assert teacher.rma_success_terminates_episode is False
     assert student.rma_success_terminates_episode is False
     assert student_dr.rma_success_terminates_episode is False
@@ -199,19 +213,29 @@ def test_rma_student_dr_environment_uses_full_strength_randomization():
         student_env.close()
 
 
-def test_student_torchscript_has_no_privileged_input():
+def test_student_torchscript_has_no_privileged_input(tmp_path):
     student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).eval()
     inputs = (
         torch.zeros((1, 224, 224, 3), dtype=torch.uint8),
         torch.zeros((1, 15), dtype=torch.float32),
         torch.zeros((1, 4), dtype=torch.float32),
     )
-    traced = torch.jit.trace(student, inputs, strict=True)
+    traced = torch.jit.script(student)
     with torch.inference_mode():
         torch.testing.assert_close(student(*inputs), traced(*inputs))
 
+    if torch.cuda.is_available():
+        export_path = tmp_path / "rma_student.pt"
+        traced.save(str(export_path))
+        cuda_model = torch.jit.load(str(export_path), map_location="cuda:0").eval()
+        cuda_inputs = tuple(value.cuda() for value in inputs)
+        with torch.inference_mode():
+            cuda_actions = cuda_model(*cuda_inputs)
+        assert cuda_actions.is_cuda
+        torch.testing.assert_close(traced(*inputs), cuda_actions.cpu(), atol=1e-3, rtol=0.0)
 
-def test_rma_v4_artifacts_are_rejected(tmp_path):
+
+def test_rma_legacy_artifacts_are_rejected(tmp_path):
     run_dir = tmp_path / "teacher_run"
     checkpoint = run_dir / "checkpoints" / "teacher.pt"
     manifest = run_dir / "params" / "rma_manifest.json"
@@ -222,7 +246,7 @@ def test_rma_v4_artifacts_are_rejected(tmp_path):
         json.dumps(
             {
                 "kind": "tacex_rma_teacher",
-                "version": 4,
+                "version": 6,
                 "task": RMA_TEACHER_TASK,
                 "model_version": 3,
             }

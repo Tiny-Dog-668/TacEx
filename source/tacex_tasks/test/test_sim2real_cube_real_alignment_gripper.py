@@ -84,8 +84,11 @@ def test_clean_and_dr_randomization_profiles_are_separated():
     assert base_cube_cfg.success_requires_upright is True
     assert base_cube_cfg.lift_tilt_curriculum_enabled is True
     for cfg in (clean_cfg, dr_cfg):
-        assert cfg.action_scale == pytest.approx(0.025)
-        assert cfg.gripper_width_delta_scale == pytest.approx(0.005)
+        # Environment commands use the physical increments stored in action
+        # history.  RMA model checkpoints may deliberately normalize that
+        # history with their own legacy 0.025 / 0.005 scales.
+        assert cfg.action_scale == pytest.approx(0.05)
+        assert cfg.gripper_width_delta_scale == pytest.approx(0.01)
         assert cfg.success_requires_upright is False
         assert cfg.lift_tilt_curriculum_enabled is False
         assert cfg.plate_thickness_m == pytest.approx(0.001)
@@ -97,9 +100,17 @@ def test_clean_and_dr_randomization_profiles_are_separated():
         assert cfg.cube_position_curriculum_end_step == 100_000
         assert cfg.table_collision_force_threshold_n == pytest.approx(1.0)
         assert cfg.table_collision_penalty == pytest.approx(-10.0)
+        assert cfg.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.02))
+        assert cfg.robot_base_world_position_m == pytest.approx((0.0, 0.0, 0.02))
+        assert cfg.camera_base_position_m == pytest.approx(
+            (1.166091088407, 0.035901608197, 0.514200335898)
+        )
         assert cfg.wrist_camera.offset.convention == "ros"
         assert cfg.wrist_camera.offset.pos == pytest.approx(
-            (1.172904219177, 0.031653013416, 0.512212537004)
+            (1.166091088407, 0.035901608197, 0.534200335898)
+        )
+        assert cfg.wrist_camera.offset.rot == pytest.approx(
+            (0.378248136306, -0.604227000834, -0.586824979121, 0.384024117374)
         )
         assert cfg.camera_crop_roi_xywh == (100, 34, 400, 398)
         assert cfg.camera_model_intrinsic_matrix == pytest.approx(
@@ -158,32 +169,33 @@ def test_clean_and_dr_randomization_profiles_are_separated():
     assert dr_cfg.dr_curriculum_start_step == 100_000
     assert dr_cfg.dr_curriculum_end_step == 220_000
     assert dr_cfg.dr_curriculum_initial_scale == pytest.approx(0.0)
-    assert dr_cfg.camera_position_delta_max_m == (0.003, 0.003, 0.003)
-    assert dr_cfg.camera_rotation_delta_max_deg == (1.0, 1.0, 1.0)
-    assert dr_cfg.camera_focal_scale_range == (0.985, 1.015)
-    assert dr_cfg.camera_principal_point_shift_max_px == (2.0, 2.0)
-    assert dr_cfg.wrist_brightness_range == (0.85, 1.15)
-    assert dr_cfg.wrist_contrast_range == (0.85, 1.15)
-    assert dr_cfg.wrist_saturation_range == (0.85, 1.15)
-    assert dr_cfg.wrist_gamma_range == (0.85, 1.15)
-    assert dr_cfg.wrist_hue_max_deg == pytest.approx(5.0)
-    assert dr_cfg.wrist_white_balance_shift_max == pytest.approx(0.08)
-    assert dr_cfg.wrist_blur_probability == pytest.approx(0.15)
+    assert dr_cfg.camera_position_delta_max_m == (0.0015, 0.0015, 0.0015)
+    assert dr_cfg.camera_rotation_delta_max_deg == (0.5, 0.5, 0.5)
+    assert dr_cfg.camera_focal_scale_range == (0.99, 1.01)
+    assert dr_cfg.camera_principal_point_shift_max_px == (1.0, 1.0)
+    assert dr_cfg.wrist_brightness_range == (0.90, 1.10)
+    assert dr_cfg.wrist_contrast_range == (0.90, 1.10)
+    assert dr_cfg.wrist_saturation_range == (0.90, 1.05)
+    assert dr_cfg.wrist_gamma_range == (0.92, 1.08)
+    assert dr_cfg.wrist_hue_max_deg == pytest.approx(2.0)
+    assert dr_cfg.wrist_white_balance_shift_max == pytest.approx(0.04)
+    assert dr_cfg.wrist_blur_probability == pytest.approx(0.08)
     assert dr_cfg.wrist_blur_kernel_sizes == (3,)
-    assert dr_cfg.wrist_gaussian_noise_std_range == (0.0, 0.01)
-    assert dr_cfg.light_intensity_range == (1000.0, 3000.0)
-    assert dr_cfg.light_color_temperature_range == (3800.0, 7200.0)
-    assert dr_cfg.light_nominal_color == pytest.approx((0.75, 0.75, 0.75))
+    assert dr_cfg.wrist_gaussian_noise_std_range == (0.0, 0.006)
+    assert dr_cfg.light_nominal_intensity == pytest.approx(1600.0)
+    assert dr_cfg.light_intensity_range == (1300.0, 1900.0)
+    assert dr_cfg.light_color_temperature_range == (4800.0, 6200.0)
+    assert dr_cfg.light_nominal_color == pytest.approx((0.72, 0.72, 0.72))
     assert dr_cfg.plate_color_center == pytest.approx(
         clean_cfg.plate.spawn.visual_material.diffuse_color
     )
     assert dr_cfg.backdrop_color_center == pytest.approx(
         clean_cfg.backdrop.spawn.visual_material.diffuse_color
     )
-    assert dr_cfg.plate_color_min == pytest.approx((0.01, 0.01, 0.01))
-    assert dr_cfg.plate_color_max == pytest.approx((0.05, 0.05, 0.05))
-    assert dr_cfg.backdrop_color_min == pytest.approx((0.005, 0.005, 0.005))
-    assert dr_cfg.backdrop_color_max == pytest.approx((0.03, 0.03, 0.03))
+    assert dr_cfg.plate_color_min == pytest.approx((0.003, 0.003, 0.003))
+    assert dr_cfg.plate_color_max == pytest.approx((0.012, 0.012, 0.012))
+    assert dr_cfg.backdrop_color_min == pytest.approx((0.002, 0.002, 0.002))
+    assert dr_cfg.backdrop_color_max == pytest.approx((0.008, 0.008, 0.008))
 
 
 def test_nominal_intrinsic_compensation_places_native_optical_axis_at_calibrated_principal_point(

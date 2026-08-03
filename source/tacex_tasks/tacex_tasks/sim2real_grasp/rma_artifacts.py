@@ -18,7 +18,7 @@ RMA_STUDENT_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-v0"
 RMA_STUDENT_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0"
 RMA_STUDENT_TASKS = frozenset((RMA_STUDENT_TASK, RMA_STUDENT_DR_TASK))
 RMA_MANIFEST_FILENAME = "rma_manifest.json"
-RMA_TEACHER_MANIFEST_VERSION = 5
+RMA_TEACHER_MANIFEST_VERSION = 7
 RMA_STUDENT_CHECKPOINT_VERSION = 5
 
 
@@ -77,6 +77,14 @@ def _env_contract(cfg: Any) -> dict[str, Any]:
             "stiffness": optional_float(hand_actuator.stiffness),
             "damping": optional_float(hand_actuator.damping),
         },
+        # The articulated root and the standalone camera have different
+        # parents in USD. Record both geometry contracts so a Teacher trained
+        # with another base elevation cannot silently supervise a Student.
+        "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
+        "camera_base_position_m": [float(value) for value in cfg.camera_base_position_m],
+        "camera_world_position_m": [float(value) for value in cfg.wrist_camera.offset.pos],
+        "camera_rotation_wxyz": [float(value) for value in cfg.wrist_camera.offset.rot],
+        "camera_convention": str(cfg.wrist_camera.offset.convention),
         "cube_nominal_position": [float(value) for value in cfg.cube.init_state.pos],
         "cube_xy_half_ranges": [float(cfg.cube_x_pos_range), float(cfg.cube_y_pos_range)],
         "position_frame": str(cfg.rma_position_frame),
@@ -87,6 +95,8 @@ def _env_contract(cfg: Any) -> dict[str, Any]:
         "contact_force_threshold_n": float(cfg.rma_contact_force_threshold_n),
         "contact_reward_weight": float(cfg.rma_contact_reward_weight),
         "single_contact_reward_fraction": float(cfg.rma_single_contact_reward_fraction),
+        "action_rate_penalty_weight": float(cfg.rma_action_rate_penalty_weight),
+        "action_rate_penalty_scales": str(cfg.rma_action_rate_penalty_scales),
         "policy_frequency_hz": 1.0 / (float(cfg.sim.dt) * int(cfg.decimation)),
         "episode_length_s": float(cfg.episode_length_s),
         "success_lift_delta_m": float(cfg.success_lift_delta),

@@ -79,6 +79,21 @@ class _RMATerminalMixin:
         self._rma_episode_success_ever = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.bool
         )
+        self._rma_previous_action_history = torch.zeros(
+            (self.num_envs, int(self.cfg.action_space)),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self._rma_action_rate_scale = torch.tensor(
+            [
+                float(self.cfg.action_scale),
+                float(self.cfg.action_scale),
+                float(self.cfg.action_scale),
+                float(self.cfg.gripper_width_delta_scale),
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
 
     def _setup_scene(self) -> None:
         super()._setup_scene()
@@ -139,6 +154,7 @@ class _RMATerminalMixin:
             f"success={float(self.cfg.success_reward_weight) * log['reward/success'].item():.3f}, "
             f"contact={log['reward/rma_contact'].item():.3f}, "
             f"table={log['reward/table_collision'].item():.3f}, "
+            f"smooth={log['reward/rma_action_rate'].item():.3f}, "
             f"total={log['reward/total'].item():.3f}, "
             f"avg_reward_{print_interval}={average_reward.item():.3f}, "
             f"success_window_{print_interval}={metrics['window_rate'].item():.3f} "
@@ -148,6 +164,26 @@ class _RMATerminalMixin:
         )
         self._reset_reward_print_window()
         return rewards
+
+    def _compute_rma_action_rate_penalty(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Penalize command jumps in normalized environment-action units."""
+        weight = float(self.cfg.rma_action_rate_penalty_weight)
+        if weight <= 0.0:
+            zeros = torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
+            return zeros, {
+                "reward/rma_action_rate": zeros.mean().detach(),
+                "info/rma_action_rate_norm_sq_mean": zeros.mean().detach(),
+                "info/rma_action_rate_norm_max": zeros.max().detach(),
+            }
+
+        delta = (self.action_history - self._rma_previous_action_history) / self._rma_action_rate_scale
+        normalized_rate_sq = torch.mean(delta.square(), dim=-1)
+        penalty = -weight * normalized_rate_sq
+        return penalty, {
+            "reward/rma_action_rate": penalty.mean().detach(),
+            "info/rma_action_rate_norm_sq_mean": normalized_rate_sq.mean().detach(),
+            "info/rma_action_rate_norm_max": torch.linalg.vector_norm(delta, dim=-1).max().detach(),
+        }
 
     def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         reward, log = super()._compute_additional_reward()
@@ -160,10 +196,12 @@ class _RMATerminalMixin:
         single_fraction = float(self.cfg.rma_single_contact_reward_fraction)
         contact_reward = single_fraction * single_contact + (1.0 - single_fraction) * bilateral_contact
         weighted_contact_reward = float(self.cfg.rma_contact_reward_weight) * contact_reward
+        action_rate_penalty, action_rate_log = self._compute_rma_action_rate_penalty()
 
         self._last_rma_contact_forces = forces.detach().clone()
         self._last_rma_contact_state = contact.detach().clone()
         self._last_rma_contact_reward = weighted_contact_reward.detach().clone()
+        self._last_rma_action_rate_penalty = action_rate_penalty.detach().clone()
         log.update(
             {
                 "reward/rma_contact": weighted_contact_reward.mean().detach(),
@@ -174,7 +212,8 @@ class _RMATerminalMixin:
                 "info/rma_right_contact_force_n": forces[:, 1].mean().detach(),
             }
         )
-        return reward + weighted_contact_reward, log
+        log.update(action_rate_log)
+        return reward + weighted_contact_reward + action_rate_penalty, log
 
     def _additional_reward_print_fields(self) -> str:
         fields = super()._additional_reward_print_fields()
@@ -186,12 +225,19 @@ class _RMATerminalMixin:
             + f"rma_contact_lr={self._last_rma_contact_state.mean(dim=0).tolist()}, "
             + f"rma_bilateral={bilateral.item():.3f}, "
             + f"rma_contact_reward={self._last_rma_contact_reward.mean().item():.3f}, "
+            + f"rma_action_rate_penalty={self._last_rma_action_rate_penalty.mean().item():.3f}, "
         )
+
+    def _pre_physics_step(self, actions: torch.Tensor) -> None:
+        if hasattr(self, "action_history"):
+            self._rma_previous_action_history = self.action_history.detach().clone()
+        super()._pre_physics_step(actions)
 
     def _reset_idx(self, env_ids: torch.Tensor) -> None:
         super()._reset_idx(env_ids)
         self.rma_cube_contact_sensor.reset(env_ids)
         self._rma_episode_success_ever[env_ids] = False
+        self._rma_previous_action_history[env_ids] = 0.0
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = (self.episode_length_buf >= self.max_episode_length - 1).bool()
@@ -239,6 +285,8 @@ class Sim2RealCubeRealAlignmentRMATeacherEnvCfg(Sim2RealCubeRealAlignmentEnvCfg)
     rma_contact_force_threshold_n = 0.2
     rma_contact_reward_weight = 3.0
     rma_single_contact_reward_fraction = 1.0
+    rma_action_rate_penalty_weight = 0.05
+    rma_action_rate_penalty_scales = "environment_action_scales"
     rma_role = "teacher"
     rma_position_frame = "robot_root"
     rma_actor_feature_dim = 30
@@ -286,6 +334,8 @@ class Sim2RealCubeRealAlignmentRMAStudentEnvCfg(Sim2RealCubeRealAlignmentEnvCfg)
     rma_contact_force_threshold_n = 0.2
     rma_contact_reward_weight = 3.0
     rma_single_contact_reward_fraction = 1.0
+    rma_action_rate_penalty_weight = 0.05
+    rma_action_rate_penalty_scales = "environment_action_scales"
     cube_position_curriculum_force_full_range = True
     rma_role = "student"
     rma_position_frame = "robot_root"
@@ -369,6 +419,8 @@ class Sim2RealCubeRealAlignmentRMAStudentDREnvCfg(
     rma_contact_force_threshold_n = 0.2
     rma_contact_reward_weight = 3.0
     rma_single_contact_reward_fraction = 1.0
+    rma_action_rate_penalty_weight = 0.05
+    rma_action_rate_penalty_scales = "environment_action_scales"
     cube_position_curriculum_force_full_range = True
     rma_role = "student"
     rma_position_frame = "robot_root"

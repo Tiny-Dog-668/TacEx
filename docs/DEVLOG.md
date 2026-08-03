@@ -948,3 +948,47 @@
 - 验证情况：
 - 待确认：
 ```
+## 2026-08-02 — RMA Student TorchScript 支持 CUDA 加载
+
+- 类型：部署导出 / 模型兼容性 / 测试 / 文档
+- 修改内容：RMA Student 导出由 `torch.jit.trace` 改为 `torch.jit.script`，避免 trace 将 Panda FK 中静态索引的 buffer 内联为 CPU 常量；RMA Student 导出脚本在 CUDA 可用时自动加载新文件到 `cuda:0` 并与 CPU eager 输出比较，CUDA 的 `1e-3` 动作容差单独记录以允许 CPU/GPU 卷积浮点差异。
+- 影响：Teacher/Student 数值、state_dict 键名、观测、动作、训练和现有 checkpoint 加载语义不变；旧 TorchScript 文件仍可能含 CPU 内联常量，应重新导出后再部署 GPU。
+- 验证情况：已以 Clean、DR 两个现有 Student checkpoint 直接 script 并在 `cuda:0` reload/forward；两者均成功。导出的 CPU/CUDA 动作最大绝对误差分别为 `1.328e-4`、`3.963e-4`，低于 `1e-3` 容差。
+## 2026-08-02 — 更新 Real-Alignment 标定相机外参
+
+- 类型：环境配置 / sim-to-real 视觉 contract / 测试 / 文档
+- 修改内容：`Sim2RealCubeRealAlignmentEnvCfg.wrist_camera` 的 nominal `base_T_camera_color_optical` 更新为平移 `(1.166091088407, 0.035901608197, 0.514200335898) m`，以及 ROS optical Isaac `wxyz=(0.378248136306, -0.604227000834, -0.586824979121, 0.384024117374)`；该四元数由提供的 ROS `xyzw` 重排而来，重建旋转矩阵与提供的 `T_base_color` 一致。
+- 影响：Clean、DR 和两个 RMA Student 的相机图像分布改变，现有 Student checkpoint 和 TorchScript 不应继续用于新外参；Teacher 是无相机特权策略，外参本身不改变其观测或动作语义。内参、动作、物理、奖励、done 和网络维度不变。
+- 验证情况：`python -m py_compile` 通过；`git diff --check` 通过；在 Isaac Lab `isaaclab_2.1.1` 中运行 `pytest -q -k clean_and_dr_randomization_profiles_are_separated` 通过，确认 Clean/DR 均解析为该平移、四元数和 `convention=ros`。
+
+## 2026-08-02 — 对齐真机 Franka 20 mm 基座垫高
+
+- 类型：环境几何 / sim-to-real frame contract / 测试 / 文档
+- 修改内容：Real-Alignment Clean 配置将 Panda root world position 设为 `(0,0,0.02) m`；桌面与方块不移动。相机标定仍以提供的 `base_T_camera_color_optical` 保存，独立 TiledCamera 的 world position 同步变为 `(1.166091088407,0.035901608197,0.534200335898)`，故 Panda base 到 camera 的相对变换不变。RMA Teacher manifest 升级至 v6，并把 robot base、camera base/world pose 写入 Teacher–Student environment contract。
+- 影响：机器人相对于桌面/物体的初始几何、IK 可达性、碰撞和图像视角均改变；Clean、DR、RMA Teacher 和两个 RMA Student 都必须从头训练，现有 checkpoint/TorchScript 不可继续使用或 resume。观测/动作张量维度、内参、奖励公式与 done 语义不变。
+- 验证情况：`python -m py_compile` 和 `git diff --check` 通过；在 Isaac Lab `isaaclab_2.1.1` 中运行 Clean/DR 配置定向测试与 4-env reset/table-collision smoke 均通过；RMA Clean/DR/Teacher/Student 配置契约测试通过。
+
+## 2026-08-02 — 保存 RMA Student 的训练输入帧
+
+- 类型：训练可观测性 / 视觉 DR 诊断 / 文档
+- 修改内容：`train_rma_student.py` 新增 `--save_start_frame` 与 `--start_frame_count`。启用后，首次 reset 的不同环境 `wrist_rgb` 以 PNG 写入本次 run 的 `camera_frames/`；保存的是经过当前 Student observation path（含 DR 与 nominal intrinsic warp）的 224×224 uint8 图像，不执行额外环境动作。
+- 影响：默认关闭，训练、随机化、损失、checkpoint 和 Student 部署输入不变；启用后仅在训练开始增加有限的图像 I/O。
+- 验证情况：`python -m py_compile scripts/reinforcement_learning/skrl/train_rma_student.py` 和 `git diff --check` 通过。以新的 Teacher checkpoint、`RMA-Student-DR-v0`、2 env、1 update 运行保存 smoke，成功写出 `start_wrist_rgb_env000_224x224.png` 与 `start_wrist_rgb_env001_224x224.png`，并完成 checkpoint 保存。
+
+## 2026-08-02 — 以真机裁剪帧重设 Real-Alignment visual nominal 与 DR
+
+- 类型：视觉 sim-to-real / 相机 DR / 场景外观 / 实验配置
+- 修改内容：检查了提供的 `224x224` 真机裁剪帧与新外参、20 mm base elevation 下的 Clean/DR Student 输入帧。保留给定标定相机的 nominal 外参和内参；将 Clean 桌面/背景/DomeLight 调为更暗中性的值，并将 DR 收紧为 camera XYZ ±1.5 mm、RPY ±0.5°、focal ±1%、principal ±1 px，brightness/contrast ±10%、gamma ±8%、saturation -10%/+5%、hue ±2°、white balance ±4%、blur 8%、noise std 0–0.006、光照 1300–1900 与 4800–6200 K，以及近黑板/背景材质范围。
+- 影响：Clean 与 DR Student 的 RGB 分布改变，所有现有 Student checkpoint/TorchScript 均不可继续训练或部署，须按新 nominal 从头训练。Teacher 没有视觉输入，动作/物理/奖励/张量维度不变；但新 Teacher run 仍应作为新实验的配套 artifact。真实图中的导轨未建模，是当前未覆盖的 visual gap。
+- 验证情况：`python -m py_compile` 和 `git diff --check` 通过；Isaac Lab 定向 Clean/DR 配置测试通过。分别以 Clean 1 env 和 DR 4 env、各 1 update 运行保存帧 smoke；Clean/DR 均成功产生 224×224 Student 输入 PNG，新的 DR 样本未再出现旧范围下的明显绿色桌面。
+
+## 2026-08-03 — RMA Teacher/Student 增加动作平滑项
+
+- 类型：RMA reward / Student distillation loss / checkpoint contract / 测试 / 文档
+- 修改内容：RMA Teacher、Clean Student 和 DR Student 环境共用 `rma_action_rate_penalty_weight=0.05`，按当前实际下发物理增量 `action_history` 与上一拍的差计算动作变化惩罚，差值除以环境动作尺度 `[0.05,0.05,0.05,0.01]` 后取均方。`train_rma_student.py` 新增 `--action_smoothness_loss_weight`，默认0.05，约束 Student action 接近上一拍环境 action，并将 smooth loss 写入 TensorBoard、控制台和 Student checkpoint loss contract。
+- 影响的观测：不改变 `proprio_obs[15]`、`action_history[4]`、`wrist_rgb[224,224,3]`、`rma_cube_pos[3]` 或 `rma_contact_state[2]` 的 key/shape。
+- 影响的动作：不改变4维 tanh action 或环境动作尺度；只改变训练目标，使策略倾向减少相邻 policy step 的命令跳变。
+- 影响的奖励：RMA reward 新增负项 `reward/rma_action_rate`，Clean/DR/旧 Privileged reward 不变。
+- 影响的 done/success：不改变；RMA success 仍只统计不终止。
+- checkpoint 兼容性：Teacher manifest 升至 v7，并把 action-rate reward 写入 environment contract；v6 及更早 Teacher 不应继续用于新 Student 蒸馏，需从头训练 Teacher/Student。Student 模型和 TorchScript 输入输出维度不变。
+- 验证情况：`python -m py_compile` 通过；`git diff --check` 通过；RMA 配置与 legacy artifact 拒绝定向测试通过；Student 梯度/TorchScript 定向测试通过；独立 Isaac Teacher smoke 确认零动作 `reward/rma_action_rate=0.0`，从0跳到满幅 x action 时 `reward/rma_action_rate=-0.0125`、`info/rma_action_rate_norm_sq_mean=0.25`。完整 Teacher pytest 在旧 FK 对比段输出异常，仅得到 `F` 且无 traceback，本次未作为通过项。

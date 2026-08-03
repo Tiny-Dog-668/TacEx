@@ -45,11 +45,24 @@ parser.add_argument("--position_loss_weight", type=float, default=1.0)
 parser.add_argument("--contact_loss_weight", type=float, default=1.0)
 parser.add_argument("--contact_positive_weight", type=float, default=5.0)
 parser.add_argument("--action_loss_weight", type=float, default=1.0)
+parser.add_argument("--action_smoothness_loss_weight", type=float, default=0.05)
 parser.add_argument("--smooth_l1_beta", type=float, default=0.1)
 parser.add_argument("--grad_norm_clip", type=float, default=1.0)
 parser.add_argument("--log_interval", type=int, default=100)
 parser.add_argument("--checkpoint_interval", type=int, default=10_000)
 parser.add_argument("--log_dir", default=None)
+parser.add_argument(
+    "--save_start_frame",
+    action="store_true",
+    default=False,
+    help="Save initial Student wrist_rgb frames after the training reset.",
+)
+parser.add_argument(
+    "--start_frame_count",
+    type=int,
+    default=5,
+    help="Number of initial environment frames to save when --save_start_frame is enabled.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
@@ -61,6 +74,7 @@ import gymnasium as gym
 import torch
 import torch.nn.functional as F
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
+from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
 import tacex_tasks  # noqa: F401
@@ -99,6 +113,35 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes:d}m{seconds:02d}s"
 
 
+def _save_initial_student_frames(observations: dict, output_dir: Path, frame_count: int) -> int:
+    """Save the exact uint8 RGB observations delivered to the Student at reset.
+
+    Each frame comes from a different reset environment.  For the DR task this
+    preserves the independently sampled camera and visual perturbation for that
+    environment, without taking extra actions or changing training state.
+    """
+    wrist_rgb = observations["policy"].get("wrist_rgb")
+    if wrist_rgb is None:
+        raise RuntimeError("Student reset observations do not contain wrist_rgb")
+    if wrist_rgb.ndim != 4 or wrist_rgb.shape[-1] < 3:
+        raise RuntimeError(
+            "Expected Student wrist_rgb shaped [N,H,W,C], got "
+            f"{tuple(wrist_rgb.shape)}"
+        )
+
+    count = min(max(1, int(frame_count)), int(wrist_rgb.shape[0]))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for env_id in range(count):
+        image = wrist_rgb[env_id, :, :, :3].detach().to(device="cpu")
+        if image.dtype != torch.uint8:
+            image = image.to(torch.float32).mul(255.0).round().clamp(0, 255).to(torch.uint8)
+        height, width = int(image.shape[0]), int(image.shape[1])
+        Image.fromarray(image.contiguous().numpy()).save(
+            output_dir / f"start_wrist_rgb_env{env_id:03d}_{width}x{height}.png"
+        )
+    return count
+
+
 def _loss_contract() -> dict:
     return {
         "position": "smooth_l1_normalized_xyz",
@@ -109,6 +152,9 @@ def _loss_contract() -> dict:
         "contact_positive_weight": float(args.contact_positive_weight),
         "action": "mse_deterministic_tanh_mean",
         "action_weight": float(args.action_loss_weight),
+        "action_smoothness": "mse_student_action_to_previous_environment_action",
+        "action_smoothness_weight": float(args.action_smoothness_loss_weight),
+        "action_smoothness_scales": "environment_action_scales",
     }
 
 
@@ -160,7 +206,12 @@ def main() -> None:
         raise ValueError("timesteps and num_envs must be positive")
     if args.contact_positive_weight <= 0:
         raise ValueError("contact_positive_weight must be positive")
-    if min(args.position_loss_weight, args.contact_loss_weight, args.action_loss_weight) < 0:
+    if min(
+        args.position_loss_weight,
+        args.contact_loss_weight,
+        args.action_loss_weight,
+        args.action_smoothness_loss_weight,
+    ) < 0:
         raise ValueError("loss weights must be non-negative")
 
     teacher_checkpoint = Path(args.teacher_checkpoint).expanduser().resolve()
@@ -177,6 +228,16 @@ def main() -> None:
     validate_live_env_contract(env_cfg, teacher_manifest)
     env = gym.make(args.task, cfg=env_cfg)
     device = torch.device(env.unwrapped.device)
+    action_smoothness_scale = torch.tensor(
+        [
+            float(env_cfg.action_scale),
+            float(env_cfg.action_scale),
+            float(env_cfg.action_scale),
+            float(env_cfg.gripper_width_delta_scale),
+        ],
+        device=device,
+        dtype=torch.float32,
+    )
 
     run_dir = Path(args.log_dir).expanduser().resolve() if args.log_dir else Path(
         "logs/skrl/sim2real_cube_real_alignment_rma_student"
@@ -213,6 +274,13 @@ def main() -> None:
             raise RuntimeError(f"Resume step {start_step} already reached timesteps={args.timesteps}")
 
     observations, _ = env.reset()
+    if args.save_start_frame:
+        output_dir = run_dir / "camera_frames"
+        saved_count = _save_initial_student_frames(observations, output_dir, args.start_frame_count)
+        print(
+            f"[INFO] Saved {saved_count} Student input frame(s) to: {output_dir}",
+            flush=True,
+        )
     remaining_updates = args.timesteps - start_step
     remaining_transitions = remaining_updates * args.num_envs
     print(
@@ -245,6 +313,11 @@ def main() -> None:
                 teacher_actions = model.actor_core(
                     proprio, history, cube_position, contact_state
                 )
+                previous_environment_actions = torch.clamp(
+                    history / action_smoothness_scale,
+                    min=-1.0,
+                    max=1.0,
+                )
 
             position_loss = F.smooth_l1_loss(
                 predicted_normalized,
@@ -262,10 +335,12 @@ def main() -> None:
                 pos_weight=positive_weight,
             )
             action_loss = F.mse_loss(student_actions, teacher_actions)
+            action_smoothness_loss = F.mse_loss(student_actions, previous_environment_actions)
             loss = (
                 args.position_loss_weight * position_loss
                 + args.contact_loss_weight * contact_loss
                 + args.action_loss_weight * action_loss
+                + args.action_smoothness_loss_weight * action_smoothness_loss
             )
 
             optimizer.zero_grad(set_to_none=True)
@@ -289,6 +364,7 @@ def main() -> None:
             writer.add_scalar("Loss/position", position_loss.item(), step)
             writer.add_scalar("Loss/contact_bce", contact_loss.item(), step)
             writer.add_scalar("Loss/action_distillation", action_loss.item(), step)
+            writer.add_scalar("Loss/action_smoothness", action_smoothness_loss.item(), step)
             writer.add_scalar("Position/rmse_3d_m", rmse_3d.item(), step)
             writer.add_scalar("Position/rmse_x_m", rmse_xyz[0].item(), step)
             writer.add_scalar("Position/rmse_y_m", rmse_xyz[1].item(), step)
@@ -327,8 +403,9 @@ def main() -> None:
                     f"| speed={updates_per_second:.2f} updates/s ({transitions_per_second:.2f} samples/s) "
                     f"| elapsed={_format_duration(elapsed_seconds)} "
                     f"| eta={_format_duration(eta_seconds)}\n"
-                    f"  loss(total/pos/contact/action)={loss.item():.5f}/{position_loss.item():.5f}/"
-                    f"{contact_loss.item():.5f}/{action_loss.item():.5f} "
+                    f"  loss(total/pos/contact/action/smooth)={loss.item():.5f}/"
+                    f"{position_loss.item():.5f}/{contact_loss.item():.5f}/"
+                    f"{action_loss.item():.5f}/{action_smoothness_loss.item():.5f} "
                     f"| position_rmse={1000.0 * rmse_3d.item():.2f} mm "
                     f"| contact_acc={contact_accuracy.item():.3f} "
                     f"| success(cumulative/recent)={cumulative_success_rate:.3f}/{recent_success_rate:.3f} "
