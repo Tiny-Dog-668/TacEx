@@ -1,0 +1,60 @@
+seed: 42
+
+models:
+  separate: True
+  policy:
+    class: tacex_tasks.sim2real_grasp.rma_xy_models:RMAXYPrivilegedTeacherPolicy
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    initial_log_std: 0.0
+    fixed_log_std: False
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: "concatenate([STATES['proprio_obs'], STATES['action_history'], STATES['critic_cube_pos'], STATES['critic_cube_quat'], STATES['critic_cube_lin_vel'], STATES['critic_cube_ang_vel'], STATES['critic_gripper_pos'], STATES['critic_gripper_quat'], STATES['critic_gripper_lin_vel'], STATES['critic_gripper_ang_vel'], STATES['critic_target_pos'], STATES['critic_target_distance']])"
+        layers: [512, 256, 128, 64]
+        activations: elu
+    output: ONE
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+agent:
+  class: tacex_tasks.sim2real_grasp.rma_xy_models:RMAXYPPO
+  rollouts: 128
+  learning_epochs: 4
+  mini_batches: 32
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 3.0e-04
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs: {kl_threshold: 0.01, min_lr: 1.0e-06, max_lr: 5.0e-04}
+  state_preprocessor: null
+  value_preprocessor: RunningStandardScaler
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: True
+  clip_predicted_values: True
+  entropy_loss_scale: 0.01
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: False
+  experiment:
+    directory: "sim2real_cube_real_alignment_rma_xy_teacher"
+    experiment_name: "rma_privileged_xy_force"
+    write_interval: 500
+    checkpoint_interval: 10000
+    wandb: False
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 200000
+  environment_info: log

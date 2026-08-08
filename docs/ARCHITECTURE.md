@@ -102,7 +102,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 - Cross attention 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_cross_policy.py:OccludedGraspingVisionTactileCrossAttentionPolicy`。
 - Aux heads 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_cross_alpha_aux_policy.py:OccludedGraspingVTTactileCrossAlphaAuxPolicy`。
 - GelFusion-style 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py:OccludedGraspingVTGelFusionPolicy`。
-- Real-Alignment RMA-style：独立 privileged Teacher 与单帧视觉 Student；RMA-only cube ContactSensor 以当前代码中的0.2N阈值生成左右指接触，接触奖励权重为3.0，并保留动作变化惩罚；当前不再包含 cube-finger 切向力惩罚。Teacher 接收 cube XYZ 与真实双指接触；PandaHand Student 从 RGB 预测 XYZ/contact，GelSight Student 从第三视角 RGB 预测 XYZ、从左右 GelSight tactile RGB 预测 contact，并通过位置 SmoothL1、接触 BCE、动作 MSE 和动作平滑项蒸馏冻结 Actor。当前 v3 Actor 内嵌 Panda FK，30维网络特征为原28维加左右接触2维；v6 RMA Student artifact 记录 Student 输入契约。PandaHand 部署接口为 RGB、本体15维和 history4维；GelSight 部署接口额外需要左右 tactile RGB；均不使用物体或末端 quaternion。可选 heatmap Student task 保留原 spatial-softmax XYZ 分支，并从 ResNet18 layer3 `[N,256,14,14]` 新增 cube-center heatmap `[N,1,14,14]` 辅助监督。GelSight RMA profile 位于 `source/tacex_tasks/tacex_tasks/sim2real_gelsight_rma`，只把机器人替换为 Franka + 左右 GelSight Mini，Actor 观测/4维动作不变，manifest 通过 robot/GelSight contract 禁止与旧 PandaHand profile 交叉蒸馏。
+- Real-Alignment RMA-style：PandaHand 使用独立 XY/force Teacher–Student 契约：Teacher 接收 cube XY 和左右接触力，Student 仅从第三视角 RGB 预测 XY；Actor 从本体 FK 生成夹爪 XY，组成26维特征。每策略步的两次物理子步接触力取最大值，左右均 `>=1 N` 时仅生成一个 `grasped` 特征；Student TorchScript 输入为 `RGB + proprio[15] + history[4] + contact_force_n[2]`。接触 reward 仅在 grasped 时给出，旧 PandaHand RMA checkpoint 不兼容并需重训。GelSight RMA profile 仍保持原有配置、触觉接触预测与 artifact 契约，未随 PandaHand XY/force 路线变更。
 
 ### 9. 当前主要实验变量
 
@@ -493,15 +493,16 @@ train.py / play.py / play_bucket.py
 
 RMA Teacher/Student 使用新增 task，不修改 Clean、DR 或旧 Privileged：
 
-- Teacher：无相机，外部输入为15维本体、4维 history、3维 cube XYZ 和2维真实左右指接触；`RMAActorCore` 从关节角执行 Panda FK，追加3维指尖中点位置与3维 cube-to-gripper 相对向量，形成30维特征并输出4维 tanh action；现有 `train.py` 运行 PPO 200k。
-- Student：环境输出 `wrist_rgb[224,224,3] uint8`、15维本体、4维 history，以及仅用于 loss 的 cube XYZ 和左右指接触标签。
-- `train_rma_student.py` 冻结 ResNet18 layer4 与 Teacher Actor，只训练共享 spatial-softmax adaptation head 的位置与接触分支，共100k步；学生向 Actor 输入 sigmoid 接触概率以保留动作 loss 梯度，并额外用上一拍环境 action 约束 Student 输出的 action-rate smoothness。
+- PandaHand Teacher：无相机，外部输入为15维本体、4维 history、cube XY 和左右真实接触力；`RMAXYActorCore` 从关节角执行 Panda FK 并仅使用夹爪 XY 与 cube-to-gripper XY，再加单一 bilateral `grasped` 状态，形成26维特征后输出4维 tanh action；Z 不是物体输入特征。
+- PandaHand Student：环境输出 `wrist_rgb[224,224,3] uint8`、15维本体、4维 history、仅用于位置损失的 cube XY，以及部署时必须提供的 `contact_force_n[2]`。Student 仅从 RGB 预测 XY，不预测接触。
+- Archived PandaHand RMA v5 replay：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Legacy-Student-Heatmap-DR-v0` 仅供采集旧 `tacex_rma_student` v5 / model v3 artifact；它保留 RGB 预测 XYZ 和左右接触概率的 30 维 Actor，不能用于训练或与当前 XY/force v2 artifact 混用。
+- `train_rma_student.py` 冻结 Teacher Actor，并训练 spatial-softmax XY 分支；Student 与 Teacher 均在 Actor 内将左右接触力以每侧 `>=1 N` 二值化，双侧为真时才认为 grasped。接触 BCE 已移除，保留动作 MSE 与动作平滑约束。
 - `TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0` 是独立的 Student-only profile：复用通用 DR 的相机外参、GPU 内参 warp、颜色/模糊/噪声、板/背景和 DomeLight 扰动，但 `dr_curriculum_enabled=false`，因此从第一个 update 起始终为 full scale。它不改变 Teacher、接触标签、物理、奖励、动作或部署 TorchScript 输入；Student artifact 会记录 Clean 或 DR task，resume 只能在同一 profile 内进行。
 - 当前 Real-Alignment visual nominal 基于用户提供的裁剪 D435 图作首轮人工对齐：保留测得的相机外参/内参，将近黑桌面、近黑背景和较暗中性 DomeLight 作为中心；DR 仅覆盖小残差（camera XYZ ±1.5 mm、RPY ±0.5°、focal ±1%、principal point ±1 px，以及受限的曝光、色彩、模糊和噪声）。画面中的真实导轨尚未建模，不能由 camera/photometric DR 代替；这是待确认的 scene-geometry gap。
 - `evaluate_rma.py` 使用固定10x10 XY 网格；`export_rma_student_jit.py` 导出不含 privileged 输入的端到端 Actor，并对可用 CUDA 执行 CPU/CUDA reload 前向一致性验证；导出文件可由 `map_location="cpu"` 或 `"cuda:0"` 加载。
 - `play_rma_student.py` 专门读取蒸馏 Student artifact，而不实例化 skrl Agent；它根据 checkpoint 的 task 选择 Clean 或全强度 DR 环境，校验 Teacher 环境 contract 与 encoder/Actor 哈希，在完整随机 XY 范围回放确定性 Student 动作，并写 CSV/JSON 成功率摘要。
 - `train_rma_student.py --save_start_frame --start_frame_count N` 会在首次 reset 后将最多 `N` 个不同环境的 `wrist_rgb` 写到本次 run 的 `camera_frames/`；这是 Student 真正接收的 224×224 uint8 输入，DR task 的每张图保留各自 episode 的相机和外观随机化，不额外推进环境。
-- 两个 RMA task 单独注册 cube ContactSensor，以0.2 N阈值生成左右二值接触；Teacher 与 Student 共用 `contact_reward_weight=3.0` 和 `single_contact_reward_fraction=1.0`，并在 reward 中加入 `rma_action_rate_penalty_weight=0.05` 的动作变化惩罚。惩罚按当前 `action_history` 与上一拍 `action_history` 的差计算，再除以环境动作尺度 `[0.05,0.05,0.05,0.01]`。当前 RMA reward 不再包含 cube-finger 切向力惩罚。
+- PandaHand RMA 单独注册 cube ContactSensor，以每个30 Hz策略步内两次物理子步的左右最大力作为输入；每侧 `>=1 N` 且双侧同时满足才给 `contact_reward_weight=3.0` 的抓取奖励。动作变化惩罚保持 `rma_action_rate_penalty_weight=0.05`；当前 PandaHand RMA reward 不含单侧接触或切向力项。
 - RMA 的 success 只作为奖励和统计条件，不触发 done；episode 只因 timeout 或严重机器人穿地碰撞结束，窗口成功率按 episode 内是否曾达到 success 统计。
 - RMA 保持 Clean 的 `10 mm/step` 夹爪总宽度动作尺度，但单独降低 Panda finger actuator 到 `effort_limit_sim=40`、`stiffness=400`、`damping=40`。
 - `source/tacex_tasks/tacex_tasks/sim2real_gelsight_rma` 是 RMA 的 GelSight robot profile 薄封装：继承现有 Real-Alignment RMA Teacher/Student/Heatmap/DR env，只将 robot cfg 替换为 `FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG`。GelSight RMA 的 cube ContactSensor 过滤目标改为 `gelpad_left/right`，避免真实接触发生在独立 gelpad rigid body 时漏掉主要 contact shaping。GelSight `tactile_rgb` 不进入 Teacher Actor observation；Teacher 仍是 `proprio[15]+history[4]+cube_xyz[3]+contact[2]`。GelSight Student TorchScript 调用顺序为 `RGB+proprio+history+gsmini_left_rgb+gsmini_right_rgb -> action[4]`，其中 RGB 预测 cube XYZ，左右 tactile RGB 预测 contact。Teacher 默认不创建 `gsmini_left/right` tactile-rendering sensors；Student 默认创建并作为 observation。

@@ -39,8 +39,8 @@ import torch
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import tacex_tasks  # noqa: F401
-from tacex_tasks.sim2real_grasp.rma_artifacts import (
-    RMA_TEACHER_TASK,
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
+    RMA_XY_TEACHER_TASK,
     load_student_checkpoint,
     load_student_model_state,
     load_teacher_manifest,
@@ -49,10 +49,10 @@ from tacex_tasks.sim2real_grasp.rma_artifacts import (
     state_dict_sha256,
     validate_live_env_contract,
 )
-from tacex_tasks.sim2real_grasp.rma_models import (
-    RMAActorCore,
-    RMAVisualStudent,
-    extract_actor_core_state_dict,
+from tacex_tasks.sim2real_grasp.rma_xy_models import (
+    RMAXYActorCore,
+    RMAXYVisualStudent,
+    extract_xy_actor_core_state_dict,
 )
 
 
@@ -81,10 +81,10 @@ def _install_grid_sampler(base_env, positions: list[tuple[float, float]]) -> Non
     base_env._sample_cube_xy_offsets = types.MethodType(sample, base_env)
 
 
-def _load_actor(teacher_checkpoint: Path, device: torch.device) -> RMAActorCore:
+def _load_actor(teacher_checkpoint: Path, device: torch.device) -> RMAXYActorCore:
     policy_state = load_teacher_policy_state(teacher_checkpoint, device)
-    actor = RMAActorCore().to(device)
-    actor.load_state_dict(extract_actor_core_state_dict(policy_state), strict=True)
+    actor = RMAXYActorCore().to(device)
+    actor.load_state_dict(extract_xy_actor_core_state_dict(policy_state), strict=True)
     actor.eval()
     for parameter in actor.parameters():
         parameter.requires_grad_(False)
@@ -106,23 +106,12 @@ def _evaluate(
         )
         task = str(student_payload["task"])
     else:
-        task = RMA_TEACHER_TASK
+        task = RMA_XY_TEACHER_TASK
     env_cfg = parse_env_cfg(task, device=args.device, num_envs=1)
     env_cfg.seed = args.seed
     env_cfg.cube_position_curriculum_force_full_range = True
     teacher_manifest = load_teacher_manifest(teacher_checkpoint)
     validate_live_env_contract(env_cfg, teacher_manifest)
-    student_input_contract = (
-        student_payload.get("student_input_contract", {})
-        if isinstance(student_payload, dict)
-        else {}
-    )
-    use_tactile_contact = (
-        isinstance(student_input_contract, dict)
-        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
-    )
-    if use_tactile_contact:
-        env_cfg.rma_gelsight_tactile_sensor_enabled = True
     env = gym.make(task, cfg=env_cfg)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
@@ -131,11 +120,7 @@ def _evaluate(
 
     student = None
     if role == "student":
-        student = RMAVisualStudent(
-            RMAActorCore(),
-            pretrained_backbone=False,
-            use_tactile_contact=use_tactile_contact,
-        ).to(device)
+        student = RMAXYVisualStudent(RMAXYActorCore(), pretrained_backbone=False).to(device)
         load_student_model_state(student, student_payload["model"])
         student.eval()
         if state_dict_sha256(student.vision_encoder.state_dict()) != student_payload.get(
@@ -146,10 +131,6 @@ def _evaluate(
             "teacher_actor_state_dict_sha256"
         ):
             raise RuntimeError("Student teacher Actor hash mismatch")
-        if use_tactile_contact and state_dict_sha256(
-            student.tactile_contact_head.state_dict()
-        ) != student_payload.get("tactile_contact_head_state_dict_sha256"):
-            raise RuntimeError("Student tactile contact head hash mismatch")
 
     observations, _ = env.reset()
     records: list[dict] = []
@@ -157,15 +138,9 @@ def _evaluate(
     episode_steps = 0
     episode_collision = False
     episode_bilateral_contact_steps = 0
-    episode_predicted_bilateral_contact_steps = 0
     squared_position_error: list[torch.Tensor] = []
     action_squared_error_sum = 0.0
     action_error_count = 0
-    contact_correct = 0
-    contact_count = 0
-    contact_true_positive = 0
-    contact_false_positive = 0
-    contact_false_negative = 0
     max_steps = len(positions) * (int(base_env.max_episode_length) + 5)
 
     try:
@@ -174,51 +149,30 @@ def _evaluate(
                 obs = observations["policy"]
                 proprio = obs["proprio_obs"].float()
                 history = obs["action_history"].float()
-                cube_position = obs["rma_cube_pos"].float()
-                contact_state = obs["rma_contact_state"].float()
-                teacher_action = actor(proprio, history, cube_position, contact_state)
+                cube_position = obs["rma_cube_xy"].float()
+                contact_force_n = obs["rma_contact_force"].float()
+                teacher_action = actor(proprio, history, cube_position, contact_force_n)
                 episode_bilateral_contact_steps += int(
-                    torch.all(contact_state >= 0.5, dim=-1)[0].item()
+                    torch.all(contact_force_n >= 1.0, dim=-1)[0].item()
                 )
                 if student is None:
                     actions = teacher_action
                 else:
-                    predicted_normalized, contact_logits = student.predict_adaptation(
-                        obs["wrist_rgb"],
-                        obs.get("gsmini_left_rgb"),
-                        obs.get("gsmini_right_rgb"),
-                    )
+                    predicted_normalized = student.predict_adaptation(obs["wrist_rgb"])
                     predicted_position = student.actor_core.normalizer.denormalize_position(
                         predicted_normalized
                     )
-                    predicted_contact = torch.sigmoid(contact_logits)
                     actions = student.action_from_normalized_position(
                         proprio,
                         history,
                         predicted_normalized,
-                        predicted_contact,
+                        contact_force_n,
                     )
                     squared_position_error.append((predicted_position - cube_position).square().cpu())
                     action_squared_error_sum += float(
                         torch.sum((actions - teacher_action).square()).item()
                     )
                     action_error_count += int(actions.numel())
-                    predicted_binary = predicted_contact >= 0.5
-                    target_binary = contact_state >= 0.5
-                    contact_correct += int((predicted_binary == target_binary).sum().item())
-                    contact_count += int(target_binary.numel())
-                    contact_true_positive += int(
-                        torch.logical_and(predicted_binary, target_binary).sum().item()
-                    )
-                    contact_false_positive += int(
-                        torch.logical_and(predicted_binary, ~target_binary).sum().item()
-                    )
-                    contact_false_negative += int(
-                        torch.logical_and(~predicted_binary, target_binary).sum().item()
-                    )
-                    episode_predicted_bilateral_contact_steps += int(
-                        torch.all(predicted_binary, dim=-1)[0].item()
-                    )
 
                 observations, rewards, terminated, truncated, _ = env.step(actions)
                 episode_return += float(rewards[0].item())
@@ -246,22 +200,12 @@ def _evaluate(
                         "bilateral_contact_fraction": (
                             episode_bilateral_contact_steps / episode_steps
                         ),
-                        **(
-                            {
-                                "predicted_bilateral_contact_fraction": (
-                                    episode_predicted_bilateral_contact_steps / episode_steps
-                                )
-                            }
-                            if student is not None
-                            else {}
-                        ),
                     }
                 )
                 episode_return = 0.0
                 episode_steps = 0
                 episode_collision = False
                 episode_bilateral_contact_steps = 0
-                episode_predicted_bilateral_contact_steps = 0
                 if len(records) >= len(positions):
                     break
     finally:
@@ -289,22 +233,11 @@ def _evaluate(
         axis_rmse = torch.sqrt(squared.mean(dim=0))
         summary.update(
             {
-                "position_rmse_xyz_m": axis_rmse.tolist(),
-                "position_rmse_3d_m": float(torch.sqrt(squared.sum(dim=-1).mean()).item()),
+                "position_rmse_xy_m": axis_rmse.tolist(),
+                "position_rmse_2d_m": float(torch.sqrt(squared.sum(dim=-1).mean()).item()),
                 "action_rmse": (action_squared_error_sum / action_error_count) ** 0.5,
-                "contact_accuracy": contact_correct / contact_count,
-                "contact_precision": contact_true_positive
-                / max(contact_true_positive + contact_false_positive, 1),
-                "contact_recall": contact_true_positive
-                / max(contact_true_positive + contact_false_negative, 1),
             }
         )
-        precision = summary["contact_precision"]
-        recall = summary["contact_recall"]
-        summary["contact_f1"] = 2.0 * precision * recall / max(precision + recall, 1.0e-12)
-        summary["mean_predicted_bilateral_contact_fraction"] = sum(
-            row["predicted_bilateral_contact_fraction"] for row in records
-        ) / len(records)
     return summary, records
 
 
@@ -322,7 +255,7 @@ def main() -> None:
         "acceptance": {
             "teacher_success_rate_min": 0.80,
             "student_teacher_success_ratio_min": 0.90,
-            "student_position_rmse_3d_m_max": 0.015,
+            "student_position_rmse_2d_m_max": 0.015,
         },
     }
     teacher_summary, teacher_rows = _evaluate(
@@ -348,7 +281,7 @@ def main() -> None:
         report["passed"] = bool(
             teacher_summary["success_rate"] >= 0.80
             and student_summary["success_rate"] >= 0.90 * teacher_summary["success_rate"]
-            and student_summary["position_rmse_3d_m"] <= 0.015
+            and student_summary["position_rmse_2d_m"] <= 0.015
         )
         student_csv = output.with_suffix(".student.csv")
         with student_csv.open("w", newline="", encoding="utf-8") as file:

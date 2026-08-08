@@ -163,6 +163,7 @@ SIM2REAL_VISION_ENCODER_TASKS = {
     "TacEx-Sim2Real-Cube-Real-Alignment-DR-v0",
 }
 from tacex_tasks.sim2real_grasp.rma_artifacts import RMA_TEACHER_TASKS
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import RMA_XY_TEACHER_TASK
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -362,10 +363,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task in RMA_TEACHER_TASKS and (
+    if args_cli.task == RMA_XY_TEACHER_TASK and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
-        from tacex_tasks.sim2real_grasp.rma_artifacts import (
+        from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
             load_teacher_manifest,
             validate_live_env_contract,
             write_teacher_manifest,
@@ -378,6 +379,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env.unwrapped, os.path.join(log_dir, "params"), agent_cfg
         )
         print(f"[INFO] Saved RMA teacher manifest: {manifest_path}")
+    elif args_cli.task in RMA_TEACHER_TASKS and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        from tacex_tasks.sim2real_grasp.rma_artifacts import (
+            load_teacher_manifest,
+            validate_live_env_contract,
+            write_teacher_manifest,
+        )
+        if resume_path is not None:
+            source_manifest = load_teacher_manifest(resume_path)
+            validate_live_env_contract(env.unwrapped.cfg, source_manifest)
+        manifest_path = write_teacher_manifest(env.unwrapped, os.path.join(log_dir, "params"), agent_cfg)
+        print(f"[INFO] Saved legacy/GelSight RMA teacher manifest: {manifest_path}")
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo", "ppo_rnn"]:

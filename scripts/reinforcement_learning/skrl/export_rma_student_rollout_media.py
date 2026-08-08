@@ -1,7 +1,7 @@
 """Export one synchronized RMA rollout diagnostic video from an episode NPZ.
 
 The MP4 contains third view plus available GelSight views, followed by plots of
-post-action contact force and pre-action true/Student-predicted cube XYZ.  It
+post-action contact force and pre-action true/Student-predicted cube XY. It
 does not write individual camera videos or static images.
 """
 
@@ -27,14 +27,10 @@ _POSITION_COLORS = {
     "X Student": (128, 178, 255),
     "Y true": (0, 153, 0),
     "Y Student": (128, 220, 128),
-    "Z true": (0, 0, 204),
-    "Z Student": (128, 128, 255),
 }
 _CONTACT_STATE_COLORS = {
-    "left actual": (204, 102, 0),
-    "left Student": (255, 178, 128),
-    "right actual": (0, 153, 0),
-    "right Student": (128, 220, 128),
+    "left >=1N": (204, 102, 0),
+    "right >=1N": (0, 153, 0),
 }
 
 
@@ -69,10 +65,9 @@ def load_rollout_diagnostics(
         required = (
             "frame_step_indices",
             "contact_force_n",
-            "rma_cube_pos",
-            "student_predicted_cube_pos",
-            "rma_contact_state",
-            "student_contact_probability",
+            "rma_cube_xy",
+            "student_predicted_cube_xy",
+            "rma_contact_force",
         )
         missing = [key for key in required if key not in rollout]
         if missing:
@@ -89,20 +84,13 @@ def load_rollout_diagnostics(
         }
         signals = {
             "contact_force_n": _as_series("contact_force_n", np.asarray(rollout["contact_force_n"]), (2,)),
-            "rma_cube_pos": _as_series("rma_cube_pos", np.asarray(rollout["rma_cube_pos"]), (3,)),
-            "student_predicted_cube_pos": _as_series(
-                "student_predicted_cube_pos",
-                np.asarray(rollout["student_predicted_cube_pos"]),
-                (3,),
-            ),
-            "rma_contact_state": _as_series(
-                "rma_contact_state", np.asarray(rollout["rma_contact_state"]), (2,)
-            ),
-            "student_contact_probability": _as_series(
-                "student_contact_probability",
-                np.asarray(rollout["student_contact_probability"]),
+            "rma_cube_xy": _as_series("rma_cube_xy", np.asarray(rollout["rma_cube_xy"]), (2,)),
+            "student_predicted_cube_xy": _as_series(
+                "student_predicted_cube_xy",
+                np.asarray(rollout["student_predicted_cube_xy"]),
                 (2,),
             ),
+            "rma_contact_force": _as_series("rma_contact_force", np.asarray(rollout["rma_contact_force"]), (2,)),
         }
     if "wrist_rgb" not in streams:
         raise KeyError("Rollout is missing required third-view wrist_rgb frames")
@@ -217,33 +205,28 @@ def _diagnostic_frame(
         142,
         220,
         {
-            "X true": signals["rma_cube_pos"][:, 0],
-            "X Student": signals["student_predicted_cube_pos"][:, 0],
-            "Y true": signals["rma_cube_pos"][:, 1],
-            "Y Student": signals["student_predicted_cube_pos"][:, 1],
-            "Z true": signals["rma_cube_pos"][:, 2],
-            "Z Student": signals["student_predicted_cube_pos"][:, 2],
+            "X true": signals["rma_cube_xy"][:, 0],
+            "X Student": signals["student_predicted_cube_xy"][:, 0],
+            "Y true": signals["rma_cube_xy"][:, 1],
+            "Y Student": signals["student_predicted_cube_xy"][:, 1],
         },
         _POSITION_COLORS,
         policy_step,
-        "Cube position before action [m] - true solid, Student dashed",
-        dashed_labels=frozenset(("X Student", "Y Student", "Z Student")),
+        "Cube XY before action [m] - true solid, Student dashed",
+        dashed_labels=frozenset(("X Student", "Y Student")),
     )
     _plot_rect(
         charts,
         368,
         150,
         {
-            "left actual": signals["rma_contact_state"][:, 0],
-            "left Student": signals["student_contact_probability"][:, 0],
-            "right actual": signals["rma_contact_state"][:, 1],
-            "right Student": signals["student_contact_probability"][:, 1],
+            "left >=1N": (signals["rma_contact_force"][:, 0] >= 1.0).astype(np.float32),
+            "right >=1N": (signals["rma_contact_force"][:, 1] >= 1.0).astype(np.float32),
         },
         _CONTACT_STATE_COLORS,
         policy_step,
-        "Contact before action [0/1] - actual solid, Student probability dashed",
+        "Contact before action [0/1] from force threshold",
         force_zero_minimum=True,
-        dashed_labels=frozenset(("left Student", "right Student")),
     )
     cv2.putText(
         charts,

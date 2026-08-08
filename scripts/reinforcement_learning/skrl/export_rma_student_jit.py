@@ -29,13 +29,13 @@ simulation_app = app_launcher.app
 
 import torch
 
-from tacex_tasks.sim2real_grasp.rma_artifacts import (
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
     load_student_model_state,
     load_student_checkpoint,
     sha256_file,
     state_dict_sha256,
 )
-from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore, RMAVisualStudent
+from tacex_tasks.sim2real_grasp.rma_xy_models import RMAXYActorCore, RMAXYVisualStudent
 
 
 # CUDA convolution kernels need not be bitwise identical to CPU kernels.
@@ -51,16 +51,7 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint, device="cpu")
-    student_input_contract = payload.get("student_input_contract", {})
-    use_tactile_contact = (
-        isinstance(student_input_contract, dict)
-        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
-    )
-    model = RMAVisualStudent(
-        RMAActorCore(),
-        pretrained_backbone=False,
-        use_tactile_contact=use_tactile_contact,
-    ).cpu().eval()
+    model = RMAXYVisualStudent(RMAXYActorCore(), pretrained_backbone=False).cpu().eval()
     load_student_model_state(model, payload["model"])
     if state_dict_sha256(model.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
@@ -70,10 +61,6 @@ def main() -> None:
         "teacher_actor_state_dict_sha256"
     ):
         raise RuntimeError("Student checkpoint teacher Actor hash mismatch")
-    if use_tactile_contact and state_dict_sha256(
-        model.tactile_contact_head.state_dict()
-    ) != payload.get("tactile_contact_head_state_dict_sha256"):
-        raise RuntimeError("Student checkpoint tactile contact head hash mismatch")
 
     output = Path(args.output).expanduser().resolve() if args.output else (
         checkpoint.parent / "exported" / f"rma_student_e2e_{checkpoint.stem}.pt"
@@ -85,13 +72,8 @@ def main() -> None:
             torch.randint(0, 256, (2, 224, 224, 3), dtype=torch.uint8),
             torch.randn((2, 15), dtype=torch.float32),
             torch.randn((2, 4), dtype=torch.float32) * 0.01,
+            torch.rand((2, 2), dtype=torch.float32) * 2.0,
         )
-        if use_tactile_contact:
-            tactile_probe = (
-                torch.randint(0, 256, (2, 96, 128, 3), dtype=torch.uint8),
-                torch.randint(0, 256, (2, 96, 128, 3), dtype=torch.uint8),
-            )
-            probe = (*probe, *tactile_probe)
         eager_actions = model(*probe)
         traced_actions = traced(*probe)
         trace_error = float(torch.max(torch.abs(eager_actions - traced_actions)).item())
@@ -123,8 +105,8 @@ def main() -> None:
         cuda_validation["max_abs_error"] = cuda_error
 
     metadata = {
-        "kind": "tacex_rma_student_torchscript",
-        "version": 7,
+        "kind": "tacex_rma_xy_student_torchscript",
+        "version": 8,
         "student_checkpoint": str(checkpoint),
         "student_checkpoint_sha256": sha256_file(checkpoint),
         "teacher_checkpoint": payload.get("teacher_checkpoint"),
@@ -134,27 +116,14 @@ def main() -> None:
             "wrist_rgb": [224, 224, 3],
             "proprio_obs": [15],
             "action_history": [4],
-            "gsmini_left_rgb": [96, 128, 3] if use_tactile_contact else None,
-            "gsmini_right_rgb": [96, 128, 3] if use_tactile_contact else None,
+            "contact_force_n": [2],
+            "contact_force_threshold_n": 1.0,
         },
-        "input_order": (
-            [
-                "wrist_rgb",
-                "proprio_obs",
-                "action_history",
-                "gsmini_left_rgb",
-                "gsmini_right_rgb",
-            ]
-            if use_tactile_contact
-            else ["wrist_rgb", "proprio_obs", "action_history"]
-        ),
+        "input_order": ["wrist_rgb", "proprio_obs", "action_history", "contact_force_n"],
         "output_signature": {"mean_actions": [4]},
         "actor_mean_bounds": [-1.0, 1.0],
         "normalization": payload["normalization"],
         "vision_encoder_state_dict_sha256": payload["vision_encoder_state_dict_sha256"],
-        "tactile_contact_head_state_dict_sha256": payload.get(
-            "tactile_contact_head_state_dict_sha256"
-        ),
         "teacher_actor_state_dict_sha256": payload["teacher_actor_state_dict_sha256"],
         "actor_contract": model.actor_core.contract(),
         "trace_max_abs_error": trace_error,
@@ -166,15 +135,10 @@ def main() -> None:
             "wrist_rgb is uint8 RGB in NHWC layout.",
             "Real input must already use the calibrated crop/resize contract.",
             "The simulator-only nominal intrinsic compensation is not embedded.",
-            "Fingertip-midpoint XYZ is computed inside the Actor with Panda FK "
-            "from proprio_obs joint positions.",
-            "Cube and end-effector orientation are not Actor features.",
-            (
-                "Left/right cube-finger contact probabilities are predicted from "
-                "gsmini_left_rgb and gsmini_right_rgb."
-                if use_tactile_contact
-                else "Left/right cube-finger contact probabilities are predicted from wrist_rgb."
-            ),
+            "Fingertip-midpoint FK is computed inside the Actor from "
+            "proprio_obs joint positions.",
+            "The Actor uses cube XY only; object Z and end-effector Z are not Actor features.",
+            "contact_force_n is required at runtime; each side is grasp evidence at >=1 N.",
             "Load with map_location='cpu' or map_location='cuda:0'; inputs must use the same device.",
         ],
     }

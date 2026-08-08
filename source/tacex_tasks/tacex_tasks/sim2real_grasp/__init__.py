@@ -15,17 +15,21 @@ from .sim2real_cube_real_alignment_privileged_env import (
     Sim2RealCubeRealAlignmentPrivilegedEnv,
     Sim2RealCubeRealAlignmentPrivilegedEnvCfg,
 )
+from .sim2real_cube_real_alignment_rma_xy_env import (
+    Sim2RealCubeRealAlignmentRMAXYStudentDREnv,
+    Sim2RealCubeRealAlignmentRMAXYStudentDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAXYStudentEnv,
+    Sim2RealCubeRealAlignmentRMAXYStudentEnvCfg,
+    Sim2RealCubeRealAlignmentRMAXYStudentHeatmapDREnv,
+    Sim2RealCubeRealAlignmentRMAXYStudentHeatmapDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAXYStudentHeatmapEnv,
+    Sim2RealCubeRealAlignmentRMAXYStudentHeatmapEnvCfg,
+    Sim2RealCubeRealAlignmentRMAXYTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAXYTeacherEnvCfg,
+)
 from .sim2real_cube_real_alignment_rma_env import (
-    Sim2RealCubeRealAlignmentRMAStudentDREnv,
-    Sim2RealCubeRealAlignmentRMAStudentDREnvCfg,
-    Sim2RealCubeRealAlignmentRMAStudentEnv,
-    Sim2RealCubeRealAlignmentRMAStudentEnvCfg,
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv,
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg,
-    Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv,
-    Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg,
-    Sim2RealCubeRealAlignmentRMATeacherEnv,
-    Sim2RealCubeRealAlignmentRMATeacherEnvCfg,
 )
 from .sim2real_grasp_env import (
     Sim2RealGraspEnv,
@@ -49,14 +53,14 @@ gym.register(
 gym.register(
     id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0",
     entry_point=(
-        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
-        "Sim2RealCubeRealAlignmentRMATeacherEnv"
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYTeacherEnv"
     ),
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMATeacherEnvCfg,
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYTeacherEnvCfg,
         "skrl_cfg_entry_point": (
-            f"{agents.__name__}:skrl_ppo_cube_real_alignment_rma_teacher.yaml"
+            f"{agents.__name__}:skrl_ppo_cube_real_alignment_rma_xy_teacher.yaml"
         ),
     },
 )
@@ -65,12 +69,12 @@ gym.register(
 gym.register(
     id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-v0",
     entry_point=(
-        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
-        "Sim2RealCubeRealAlignmentRMAStudentEnv"
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYStudentEnv"
     ),
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentEnvCfg,
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentEnvCfg,
     },
 )
 
@@ -78,12 +82,12 @@ gym.register(
 gym.register(
     id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0",
     entry_point=(
-        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
-        "Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv"
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYStudentHeatmapEnv"
     ),
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg,
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentHeatmapEnvCfg,
     },
 )
 
@@ -93,18 +97,32 @@ gym.register(
 gym.register(
     id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0",
     entry_point=(
-        f"{__name__}.sim2real_cube_real_alignment_rma_env:"
-        "Sim2RealCubeRealAlignmentRMAStudentDREnv"
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYStudentDREnv"
     ),
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAStudentDREnvCfg,
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentDREnvCfg,
     },
 )
 
 # Heatmap-supervised RMA Student with full-strength visual DR from the first update.
 gym.register(
     id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0",
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYStudentHeatmapDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentHeatmapDREnvCfg,
+    },
+)
+
+# Archived RGB/XYZ/contact RMA Student replay only. This task preserves the
+# v5 rollout semantics; it is not a training task and cannot load XY/force v2 artifacts.
+gym.register(
+    id="TacEx-Sim2Real-Cube-Real-Alignment-RMA-Legacy-Student-Heatmap-DR-v0",
     entry_point=(
         f"{__name__}.sim2real_cube_real_alignment_rma_env:"
         "Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv"

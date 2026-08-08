@@ -53,6 +53,15 @@ from tacex_tasks.sim2real_grasp.rma_models import (
     project_points_root_to_image,
     RMAVisualStudent,
 )
+from tacex_tasks.sim2real_grasp.rma_xy_models import (
+    RMA_XY_ACTOR_FEATURE_DIM,
+    RMAXYActorCore,
+    RMAXYVisualStudent,
+)
+from tacex_tasks.sim2real_grasp.rma_legacy_rollout import (
+    RMA_LEGACY_STUDENT_HEATMAP_DR_REPLAY_TASK,
+    validate_legacy_v5_student_payload,
+)
 
 
 TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
@@ -196,21 +205,21 @@ def test_rma_configs_are_isolated_from_existing_tasks():
         == student_dr.rma_actor_feature_dim
         == student_heatmap.rma_actor_feature_dim
         == student_heatmap_dr.rma_actor_feature_dim
-        == 30
+        == 26
     )
-    assert teacher.rma_object_pose_components == "position_xyz_only"
+    assert teacher.rma_object_pose_components == "position_xy_only"
     assert student.rma_end_effector_position_source == (
         "embedded_panda_fk_from_proprio_joint_position"
     )
-    assert teacher.rma_contact_components == "left_right_cube_finger_binary"
+    assert teacher.rma_contact_components == "bilateral_cube_finger_force_n_gte_1N_binary"
     assert teacher.rma_action_rate_penalty_weight == pytest.approx(0.05)
     assert student.rma_action_rate_penalty_weight == pytest.approx(0.05)
     assert student_dr.rma_action_rate_penalty_weight == pytest.approx(0.05)
     assert teacher.rma_success_terminates_episode is False
     assert student.rma_success_terminates_episode is False
     assert student_dr.rma_success_terminates_episode is False
-    assert student.rma_contact_force_threshold_n == pytest.approx(0.2)
-    assert student_dr.rma_contact_force_threshold_n == pytest.approx(0.2)
+    assert student.rma_contact_force_threshold_n == pytest.approx(1.0)
+    assert student_dr.rma_contact_force_threshold_n == pytest.approx(1.0)
     assert student_dr.dr_curriculum_enabled is False
     assert student.rma_heatmap_supervision_enabled is False
     assert student.rma_heatmap_loss_weight == pytest.approx(0.0)
@@ -423,42 +432,88 @@ def test_rma_gelsight_student_environment_exposes_tactile_contact_inputs():
 
 
 def test_student_gradients_only_update_adaptation_head():
-    actor = RMAActorCore()
-    assert actor.network[0].in_features == RMA_ACTOR_FEATURE_DIM == 30
+    actor = RMAXYActorCore()
+    assert actor.network[0].in_features == RMA_XY_ACTOR_FEATURE_DIM == 26
     assert actor.contract()["feature_order"][-3:] == [
-        "normalized_gripper_position_root_from_fk[3]",
-        "normalized_cube_minus_gripper_position_root[3]",
-        "left_right_cube_finger_contact[2]",
+        "normalized_gripper_xy_root_from_fk[2]",
+        "normalized_cube_minus_gripper_xy_root[2]",
+        "grasped_bilateral_cube_finger_force_n_gte_1N[1]",
     ]
-    student = RMAVisualStudent(actor, pretrained_backbone=False)
+    student = RMAXYVisualStudent(actor, pretrained_backbone=False)
     rgb = torch.randint(0, 256, (2, 224, 224, 3), dtype=torch.uint8)
     proprio = torch.zeros((2, 15))
     proprio[:, -1] = 0.04
     history = torch.zeros((2, 4))
-    target_position = torch.tensor([[0.45, -0.05, 0.026], [0.55, 0.05, 0.05]])
-    target_contact = torch.tensor([[0.0, 0.0], [1.0, 1.0]])
+    target_position = torch.tensor([[0.45, -0.05], [0.55, 0.05]])
+    target_force = torch.tensor([[0.0, 0.0], [1.0, 1.0]])
 
-    predicted, contact_logits = student.predict_adaptation(rgb)
+    predicted = student.predict_adaptation(rgb)
     student_action = student.action_from_normalized_position(
-        proprio, history, predicted, torch.sigmoid(contact_logits)
+        proprio, history, predicted, target_force
     )
     with torch.no_grad():
-        teacher_action = actor(proprio, history, target_position, target_contact)
+        teacher_action = actor(proprio, history, target_position, target_force)
     loss = F.smooth_l1_loss(
         predicted,
         actor.normalizer.normalize_position(target_position),
         beta=0.1,
-    ) + F.binary_cross_entropy_with_logits(
-        contact_logits, target_contact
     ) + F.mse_loss(student_action, teacher_action)
     loss.backward()
 
     assert any(parameter.grad is not None for parameter in student.adaptation_head.parameters())
     assert all(parameter.grad is None for parameter in student.vision_encoder.parameters())
     assert all(parameter.grad is None for parameter in student.actor_core.parameters())
-    assert contact_logits.shape == (2, 2)
+    assert predicted.shape == (2, 2)
     assert student_action.shape == (2, 4)
     assert torch.all(student_action.abs() <= 1.0)
+
+
+def test_xy_actor_uses_one_bilateral_grasp_feature():
+    """A single force above threshold must not be exposed as a grasp feature."""
+    actor = RMAXYActorCore()
+    captured_features: list[torch.Tensor] = []
+    hook = actor.network[0].register_forward_pre_hook(
+        lambda _module, inputs: captured_features.append(inputs[0].detach().clone())
+    )
+    try:
+        proprio = torch.zeros((3, 15))
+        proprio[:, -1] = 0.04
+        actor(
+            proprio,
+            torch.zeros((3, 4)),
+            torch.tensor([[0.50, 0.00], [0.50, 0.00], [0.50, 0.00]]),
+            torch.tensor([[1.00, 0.999], [1.00, 1.00], [2.00, 1.00]]),
+        )
+    finally:
+        hook.remove()
+
+    assert len(captured_features) == 1
+    assert captured_features[0].shape == (3, 26)
+    torch.testing.assert_close(captured_features[0][:, -1], torch.tensor([0.0, 1.0, 1.0]))
+
+
+def test_legacy_rollout_policy_accepts_only_archived_v5_contract():
+    assert gym.spec(RMA_LEGACY_STUDENT_HEATMAP_DR_REPLAY_TASK) is not None
+    payload = {
+        "kind": "tacex_rma_student",
+        "version": 5,
+        "task": "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0",
+        "model_version": 3,
+        "teacher_manifest": {
+            "model_version": 3,
+            "actor_contract": {"feature_dim": 30},
+            "actor_inputs": {
+                "proprio_obs": 15,
+                "action_history": 4,
+                "rma_cube_pos": 3,
+                "rma_contact_state": 2,
+            },
+        },
+    }
+    validate_legacy_v5_student_payload(payload)
+    payload["model_version"] = 2
+    with pytest.raises(RuntimeError, match="Legacy replay requires"):
+        validate_legacy_v5_student_payload(payload)
 
 
 def test_gelsight_student_contact_head_uses_tactile_rgb():
@@ -609,22 +664,22 @@ def test_rma_student_environment_observation_contract():
         assert not hasattr(base_env, "_resnet18")
         assert obs["wrist_rgb"].shape == (2, 224, 224, 3)
         assert obs["wrist_rgb"].dtype == torch.uint8
-        assert obs["rma_cube_pos"].shape == (2, 3)
-        assert obs["rma_contact_state"].shape == (2, 2)
-        assert torch.all((obs["rma_contact_state"] == 0.0) | (obs["rma_contact_state"] == 1.0))
+        assert obs["rma_cube_xy"].shape == (2, 2)
+        assert obs["rma_contact_force"].shape == (2, 2)
+        assert torch.all(obs["rma_contact_force"] >= 0.0)
         assert "rma_cube_contact_sensor" in base_env.scene.sensors
         torch.testing.assert_close(
-            obs["rma_cube_pos"],
-            base_env._cube.data.root_pos_w - base_env.scene.env_origins,
+            obs["rma_cube_xy"],
+            (base_env._cube.data.root_pos_w - base_env.scene.env_origins)[..., :2],
         )
-        actor = RMAActorCore().to(base_env.device)
+        actor = RMAXYActorCore().to(base_env.device)
         fk_gripper_position = actor.kinematics(obs["proprio_obs"][:, :7])
         simulated_gripper_position = (
             base_env._compute_reach_center_world() - base_env.scene.env_origins
         )
         torch.testing.assert_close(
-            fk_gripper_position,
-            simulated_gripper_position,
+            fk_gripper_position[..., :2],
+            simulated_gripper_position[..., :2],
             atol=2.0e-4,
             rtol=0.0,
         )
@@ -661,11 +716,12 @@ def test_rma_student_dr_environment_uses_full_strength_randomization():
 
 
 def test_student_torchscript_has_no_privileged_input(tmp_path):
-    student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).eval()
+    student = RMAXYVisualStudent(RMAXYActorCore(), pretrained_backbone=False).eval()
     inputs = (
         torch.zeros((1, 224, 224, 3), dtype=torch.uint8),
         torch.zeros((1, 15), dtype=torch.float32),
         torch.zeros((1, 4), dtype=torch.float32),
+        torch.tensor([[1.0, 1.0]], dtype=torch.float32),
     )
     traced = torch.jit.script(student)
     with torch.inference_mode():

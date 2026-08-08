@@ -174,17 +174,13 @@ def _snapshot_transition_diagnostics(base_env, reference):
     }
 
 
-def _load_student_for_rollout(payload: Mapping[str, Any], device, *, use_tactile_contact: bool):
+def _load_student_for_rollout(payload: Mapping[str, Any], device):
     import torch
 
-    from tacex_tasks.sim2real_grasp.rma_artifacts import load_student_model_state, state_dict_sha256
-    from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore, RMAVisualStudent
+    from tacex_tasks.sim2real_grasp.rma_xy_artifacts import load_student_model_state, state_dict_sha256
+    from tacex_tasks.sim2real_grasp.rma_xy_models import RMAXYActorCore, RMAXYVisualStudent
 
-    student = RMAVisualStudent(
-        RMAActorCore(),
-        pretrained_backbone=False,
-        use_tactile_contact=use_tactile_contact,
-    ).to(device).eval()
+    student = RMAXYVisualStudent(RMAXYActorCore(), pretrained_backbone=False).to(device).eval()
     load_student_model_state(student, payload["model"])
     if state_dict_sha256(student.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
@@ -194,10 +190,31 @@ def _load_student_for_rollout(payload: Mapping[str, Any], device, *, use_tactile
         "teacher_actor_state_dict_sha256"
     ):
         raise RuntimeError("Student checkpoint Teacher Actor hash mismatch")
-    if use_tactile_contact and state_dict_sha256(student.tactile_contact_head.state_dict()) != payload.get(
-        "tactile_contact_head_state_dict_sha256"
+    for parameter in student.parameters():
+        parameter.requires_grad_(False)
+    return student
+
+
+def _load_legacy_v5_student_for_rollout(payload: Mapping[str, Any], device):
+    """Load the archived RGB/XYZ/contact Student without widening v2 loaders."""
+    from tacex_tasks.sim2real_grasp.rma_artifacts import (
+        load_student_model_state,
+        state_dict_sha256,
+    )
+    from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore, RMAVisualStudent
+
+    student = RMAVisualStudent(
+        RMAActorCore(), pretrained_backbone=False, use_tactile_contact=False
+    ).to(device).eval()
+    load_student_model_state(student, payload["model"])
+    if state_dict_sha256(student.vision_encoder.state_dict()) != payload.get(
+        "vision_encoder_state_dict_sha256"
     ):
-        raise RuntimeError("Student tactile contact head hash mismatch")
+        raise RuntimeError("Legacy Student vision encoder hash mismatch")
+    if state_dict_sha256(student.actor_core.state_dict()) != payload.get(
+        "teacher_actor_state_dict_sha256"
+    ):
+        raise RuntimeError("Legacy Student Teacher Actor hash mismatch")
     for parameter in student.parameters():
         parameter.requires_grad_(False)
     return student
@@ -209,9 +226,16 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
     from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
     import tacex_tasks  # noqa: F401
+    from tacex_tasks.sim2real_grasp.rma_legacy_rollout import (
+        RMA_LEGACY_STUDENT_HEATMAP_DR_REPLAY_TASK,
+        validate_legacy_v5_student_payload,
+    )
     from tacex_tasks.sim2real_grasp.rma_artifacts import (
-        RMA_STUDENT_TASKS,
-        RMA_STUDENT_CHECKPOINT_VERSION,
+        validate_live_env_contract as validate_legacy_live_env_contract,
+    )
+    from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
+        RMA_XY_STUDENT_TASKS,
+        RMA_XY_STUDENT_CHECKPOINT_VERSION,
         load_student_checkpoint,
         sha256_file,
         validate_live_env_contract,
@@ -221,10 +245,17 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
         f"[INFO] Validating RMA Student checkpoint for task {run.task}: {run.checkpoint}",
         flush=True,
     )
-    payload = load_student_checkpoint(run.checkpoint, device="cpu")
-    validate_run_payload(run, payload, RMA_STUDENT_TASKS)
-    if int(payload.get("version", -1)) != RMA_STUDENT_CHECKPOINT_VERSION:
-        raise RuntimeError("Student checkpoint version changed while loading rollout collector")
+    is_legacy = run.task == RMA_LEGACY_STUDENT_HEATMAP_DR_REPLAY_TASK
+    if is_legacy:
+        payload = torch.load(run.checkpoint, map_location="cpu", weights_only=False)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("Legacy Student checkpoint is not a mapping")
+        validate_legacy_v5_student_payload(payload)
+    else:
+        payload = load_student_checkpoint(run.checkpoint, device="cpu")
+        validate_run_payload(run, payload, RMA_XY_STUDENT_TASKS)
+        if int(payload.get("version", -1)) != RMA_XY_STUDENT_CHECKPOINT_VERSION:
+            raise RuntimeError("Student checkpoint version changed while loading rollout collector")
 
     task_seed = int(args.seed) + run_index
     torch.manual_seed(task_seed)
@@ -234,14 +265,11 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
     env_cfg = parse_env_cfg(run.task, device=args.device, num_envs=1)
     env_cfg.seed = task_seed
     env_cfg.cube_position_curriculum_force_full_range = True
-    validate_live_env_contract(env_cfg, payload["teacher_manifest"])
+    if is_legacy:
+        validate_legacy_live_env_contract(env_cfg, payload["teacher_manifest"])
+    else:
+        validate_live_env_contract(env_cfg, payload["teacher_manifest"])
     student_input_contract = payload.get("student_input_contract", {})
-    use_tactile_contact = (
-        isinstance(student_input_contract, Mapping)
-        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
-    )
-    if use_tactile_contact:
-        env_cfg.rma_gelsight_tactile_sensor_enabled = True
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     task_dir = Path(args.output_dir).expanduser().resolve() / timestamp / run.task
@@ -255,8 +283,10 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
     env = gym.make(run.task, cfg=env_cfg)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
-    student = _load_student_for_rollout(
-        payload, device, use_tactile_contact=use_tactile_contact
+    student = (
+        _load_legacy_v5_student_for_rollout(payload, device)
+        if is_legacy
+        else _load_student_for_rollout(payload, device)
     )
     episode_rows: list[dict[str, Any]] = []
     try:
@@ -270,11 +300,9 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
             records: dict[str, list[np.ndarray]] = {
                 "proprio_obs": [],
                 "action_history": [],
-                "rma_cube_pos": [],
-                "rma_contact_state": [],
-                "student_predicted_cube_pos": [],
-                "student_contact_logits": [],
-                "student_contact_probability": [],
+                "rma_cube_pos" if is_legacy else "rma_cube_xy": [],
+                "rma_contact_state" if is_legacy else "rma_contact_force": [],
+                "student_predicted_cube_pos" if is_legacy else "student_predicted_cube_xy": [],
                 "student_action": [],
                 "oracle_action": [],
                 "reward": [],
@@ -288,7 +316,10 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
                 "table_collision_penalty": [],
             }
             frames: dict[str, list[np.ndarray]] = {"frame_step_indices": []}
-            initial_cube_position = _to_numpy(observations["policy"]["rma_cube_pos"][0])
+            cube_key = "rma_cube_pos" if is_legacy else "rma_cube_xy"
+            contact_key = "rma_contact_state" if is_legacy else "rma_contact_force"
+            prediction_key = "student_predicted_cube_pos" if is_legacy else "student_predicted_cube_xy"
+            initial_cube_position = _to_numpy(observations["policy"][cube_key][0])
             episode_dr = _episode_dr_parameters(base_env)
 
             while True:
@@ -296,42 +327,39 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
                 episode_step = len(records["reward"])
                 proprio = observation["proprio_obs"].to(torch.float32)
                 history = observation["action_history"].to(torch.float32)
-                cube_position = observation["rma_cube_pos"].to(torch.float32)
-                contact_state = observation["rma_contact_state"].to(torch.float32)
-                tactile_left = observation.get("gsmini_left_rgb")
-                tactile_right = observation.get("gsmini_right_rgb")
+                cube_position = observation[cube_key].to(torch.float32)
+                contact_input = observation[contact_key].to(torch.float32)
 
                 if episode_step % int(args.frame_stride) == 0:
                     frames["frame_step_indices"].append(np.asarray(episode_step, dtype=np.int32))
                     frames.setdefault("wrist_rgb", []).append(_to_numpy(observation["wrist_rgb"][0]))
-                    if tactile_left is not None and tactile_right is not None:
-                        frames.setdefault("gsmini_left_rgb", []).append(_to_numpy(tactile_left[0]))
-                        frames.setdefault("gsmini_right_rgb", []).append(_to_numpy(tactile_right[0]))
 
                 with torch.inference_mode():
-                    normalized_position, contact_logits = student.predict_adaptation(
-                        observation["wrist_rgb"], tactile_left, tactile_right
-                    )
+                    if is_legacy:
+                        normalized_position, contact_logits = student.predict_adaptation(
+                            observation["wrist_rgb"]
+                        )
+                        actor_contact = torch.sigmoid(contact_logits)
+                    else:
+                        normalized_position = student.predict_adaptation(observation["wrist_rgb"])
+                        actor_contact = contact_input
                     predicted_position = student.actor_core.normalizer.denormalize_position(
                         normalized_position
                     )
-                    predicted_contact = torch.sigmoid(contact_logits)
                     student_action = student.action_from_normalized_position(
-                        proprio, history, normalized_position, predicted_contact
+                        proprio, history, normalized_position, actor_contact
                     )
                     oracle_action = student.actor_core(
-                        proprio, history, cube_position, contact_state
+                        proprio, history, cube_position, contact_input
                     )
                     observations, rewards, terminated, truncated, _ = env.step(student_action)
 
                 diagnostics = _snapshot_transition_diagnostics(base_env, rewards)
                 records["proprio_obs"].append(_to_numpy(proprio[0]))
                 records["action_history"].append(_to_numpy(history[0]))
-                records["rma_cube_pos"].append(_to_numpy(cube_position[0]))
-                records["rma_contact_state"].append(_to_numpy(contact_state[0]))
-                records["student_predicted_cube_pos"].append(_to_numpy(predicted_position[0]))
-                records["student_contact_logits"].append(_to_numpy(contact_logits[0]))
-                records["student_contact_probability"].append(_to_numpy(predicted_contact[0]))
+                records[cube_key].append(_to_numpy(cube_position[0]))
+                records[contact_key].append(_to_numpy(contact_input[0]))
+                records[prediction_key].append(_to_numpy(predicted_position[0]))
                 records["student_action"].append(_to_numpy(student_action[0]))
                 records["oracle_action"].append(_to_numpy(oracle_action[0]))
                 records["reward"].append(_to_numpy(rewards[0]))
@@ -359,7 +387,11 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
                 "success_ever": int(np.any(arrays["success"])),
                 "table_collision_ever": int(np.any(arrays["table_collision"])),
                 "bilateral_contact_fraction": float(
-                    np.mean(np.all(arrays["rma_contact_state"] >= 0.5, axis=-1))
+                    np.mean(
+                        np.all(arrays[contact_key] > 0.5, axis=-1)
+                        if is_legacy
+                        else np.all(arrays[contact_key] >= 1.0, axis=-1)
+                    )
                 ),
                 "student_oracle_action_mse": float(np.mean(np.square(action_error))),
                 "frame_count": int(arrays["frame_step_indices"].shape[0]),
@@ -389,7 +421,11 @@ def _collect_task(run: RunSpec, args, *, run_index: int) -> Path:
             "policy_frequency_hz": 1.0 / (float(env_cfg.sim.dt) * int(env_cfg.decimation)),
             "student_checkpoint": str(run.checkpoint),
             "student_checkpoint_sha256": sha256_file(run.checkpoint),
-            "student_input_contract": student_input_contract,
+            "student_input_contract": (
+                {"wrist_rgb": [224, 224, 3], "proprio_obs": [15], "action_history": [4],
+                 "contact": "visual_left_right_probability[2]"}
+                if is_legacy else student_input_contract
+            ),
             "teacher_manifest": payload["teacher_manifest"],
             "transition_alignment": "pre_action_observation_and_predictions; post_action_reward_and_diagnostics",
             "image_alignment": "image arrays index policy steps through frame_step_indices",

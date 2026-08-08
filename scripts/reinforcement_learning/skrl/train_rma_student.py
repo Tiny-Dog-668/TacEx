@@ -1,4 +1,4 @@
-"""Online visual position/contact and action distillation for the RMA student."""
+"""Online visual XY and action distillation for the force-aware RMA student."""
 
 from __future__ import annotations
 
@@ -54,8 +54,6 @@ parser.add_argument(
 )
 parser.add_argument("--weight_decay", type=float, default=1.0e-5)
 parser.add_argument("--position_loss_weight", type=float, default=1.0)
-parser.add_argument("--contact_loss_weight", type=float, default=1.0)
-parser.add_argument("--contact_positive_weight", type=float, default=5.0)
 parser.add_argument("--action_loss_weight", type=float, default=1.0)
 parser.add_argument("--action_smoothness_loss_weight", type=float, default=0.05)
 parser.add_argument(
@@ -109,9 +107,9 @@ from PIL import Image, ImageDraw
 from torch.utils.tensorboard import SummaryWriter
 
 import tacex_tasks  # noqa: F401
-from tacex_tasks.sim2real_grasp.rma_artifacts import (
-    RMA_STUDENT_CHECKPOINT_VERSION,
-    RMA_STUDENT_TASKS,
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
+    RMA_XY_STUDENT_CHECKPOINT_VERSION,
+    RMA_XY_STUDENT_TASKS,
     load_student_checkpoint,
     load_student_model_state,
     load_teacher_manifest,
@@ -120,11 +118,11 @@ from tacex_tasks.sim2real_grasp.rma_artifacts import (
     state_dict_sha256,
     validate_live_env_contract,
 )
-from tacex_tasks.sim2real_grasp.rma_models import (
-    RMA_MODEL_VERSION,
-    RMAActorCore,
-    RMAVisualStudent,
-    extract_actor_core_state_dict,
+from tacex_tasks.sim2real_grasp.rma_xy_models import (
+    RMA_XY_MODEL_VERSION,
+    RMAXYActorCore,
+    RMAXYVisualStudent,
+    extract_xy_actor_core_state_dict,
     heatmap_soft_argmax,
     make_gaussian_heatmaps,
     project_points_root_to_image,
@@ -180,16 +178,12 @@ def _save_initial_student_frames(observations: dict, output_dir: Path, frame_cou
 def _loss_contract(
     heatmap_loss_weight: float,
     heatmap_sigma: float,
-    contact_observation_source: str,
 ) -> dict:
     return {
-        "position": "smooth_l1_normalized_xyz",
+        "position": "smooth_l1_normalized_xy",
         "smooth_l1_beta": float(args.smooth_l1_beta),
         "position_weight": float(args.position_loss_weight),
-        "contact": "binary_cross_entropy_with_logits_left_right",
-        "contact_observation_source": str(contact_observation_source),
-        "contact_weight": float(args.contact_loss_weight),
-        "contact_positive_weight": float(args.contact_positive_weight),
+        "contact": "external_left_right_force_n_thresholded_at_1N",
         "action": "mse_deterministic_tanh_mean",
         "action_weight": float(args.action_loss_weight),
         "action_smoothness": "mse_student_action_to_previous_environment_action",
@@ -216,7 +210,7 @@ def _loss_contract_is_resume_compatible(saved: dict | None, current: dict) -> bo
 
 
 def _student_payload(
-    model: RMAVisualStudent,
+    model: RMAXYVisualStudent,
     optimizer: torch.optim.Optimizer,
     step: int,
     teacher_checkpoint: Path,
@@ -224,10 +218,10 @@ def _student_payload(
     loss_contract: dict,
 ) -> dict:
     return {
-        "kind": "tacex_rma_student",
-        "version": RMA_STUDENT_CHECKPOINT_VERSION,
+        "kind": "tacex_rma_xy_student",
+        "version": RMA_XY_STUDENT_CHECKPOINT_VERSION,
         "task": args.task,
-        "model_version": RMA_MODEL_VERSION,
+        "model_version": RMA_XY_MODEL_VERSION,
         "global_step": int(step),
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -239,20 +233,10 @@ def _student_payload(
             "wrist_rgb": [224, 224, 3],
             "proprio_obs": [15],
             "action_history": [4],
-            "gsmini_left_rgb": [96, 128, 3] if model.use_tactile_contact else None,
-            "gsmini_right_rgb": [96, 128, 3] if model.use_tactile_contact else None,
-            "contact_observation_source": (
-                "gelsight_tactile_rgb"
-                if model.use_tactile_contact
-                else "third_person_rgb"
-            ),
+            "contact_force_n": [2],
+            "contact_force_threshold_n": 1.0,
         },
         "vision_encoder_state_dict_sha256": state_dict_sha256(model.vision_encoder.state_dict()),
-        "tactile_contact_head_state_dict_sha256": (
-            state_dict_sha256(model.tactile_contact_head.state_dict())
-            if model.use_tactile_contact
-            else None
-        ),
         "teacher_actor_state_dict_sha256": state_dict_sha256(model.actor_core.state_dict()),
         "loss": loss_contract,
         "optimizer_config": {
@@ -269,17 +253,11 @@ def _student_payload(
 def _prepare_model(
     device: torch.device,
     teacher_checkpoint: Path,
-    *,
-    use_tactile_contact: bool,
-) -> RMAVisualStudent:
+) -> RMAXYVisualStudent:
     policy_state = load_teacher_policy_state(teacher_checkpoint, device)
-    actor_core = RMAActorCore().to(device)
-    actor_core.load_state_dict(extract_actor_core_state_dict(policy_state), strict=True)
-    model = RMAVisualStudent(
-        actor_core,
-        pretrained_backbone=True,
-        use_tactile_contact=use_tactile_contact,
-    ).to(device)
+    actor_core = RMAXYActorCore().to(device)
+    actor_core.load_state_dict(extract_xy_actor_core_state_dict(policy_state), strict=True)
+    model = RMAXYVisualStudent(actor_core, pretrained_backbone=True).to(device)
     model.train()
     return model
 
@@ -400,16 +378,13 @@ def _save_heatmap_debug_frames(
 
 
 def main() -> None:
-    if args.task not in RMA_STUDENT_TASKS:
-        supported = ", ".join(sorted(RMA_STUDENT_TASKS))
+    if args.task not in RMA_XY_STUDENT_TASKS:
+        supported = ", ".join(sorted(RMA_XY_STUDENT_TASKS))
         raise ValueError(f"train_rma_student.py only supports: {supported}")
     if args.timesteps <= 0 or args.num_envs <= 0:
         raise ValueError("timesteps and num_envs must be positive")
-    if args.contact_positive_weight <= 0:
-        raise ValueError("contact_positive_weight must be positive")
     if min(
         args.position_loss_weight,
-        args.contact_loss_weight,
         args.action_loss_weight,
         args.action_smoothness_loss_weight,
     ) < 0:
@@ -435,12 +410,6 @@ def main() -> None:
     env_cfg.seed = args.seed
     env_cfg.cube_position_curriculum_force_full_range = True
     validate_live_env_contract(env_cfg, teacher_manifest)
-    contact_observation_source = str(
-        getattr(env_cfg, "rma_student_contact_observation_source", "third_person_rgb")
-    )
-    use_tactile_contact = contact_observation_source == "gelsight_tactile_rgb"
-    if use_tactile_contact:
-        env_cfg.rma_gelsight_tactile_sensor_enabled = True
     env = gym.make(args.task, cfg=env_cfg)
     device = torch.device(env.unwrapped.device)
     heatmap_supervision_enabled = bool(
@@ -464,7 +433,6 @@ def main() -> None:
     loss_contract = _loss_contract(
         heatmap_loss_weight,
         heatmap_sigma,
-        contact_observation_source,
     )
     action_smoothness_scale = torch.tensor(
         [
@@ -494,7 +462,7 @@ def main() -> None:
                 if args.train_backbone_after_layer2
                 else "none"
             ),
-            "effective_contact_observation_source": contact_observation_source,
+            "effective_contact_observation_source": "external_contact_force_n",
         }
     )
     (params_dir / "student_training.json").write_text(
@@ -505,11 +473,8 @@ def main() -> None:
     model = _prepare_model(
         device,
         teacher_checkpoint,
-        use_tactile_contact=use_tactile_contact,
     )
     head_parameters = list(model.adaptation_head.parameters())
-    if use_tactile_contact:
-        head_parameters += list(model.tactile_contact_head.parameters())
     if heatmap_loss_enabled:
         head_parameters += list(model.heatmap_head.parameters())
     parameter_groups = [
@@ -586,7 +551,7 @@ def main() -> None:
         f"envs={args.num_envs} | remaining_transitions={remaining_transitions:,} | "
         f"log_every={args.log_interval} updates | checkpoint_every={args.checkpoint_interval} updates | "
         f"heatmap_weight={heatmap_loss_weight:g} | heatmap_sigma={heatmap_sigma:g}px | "
-        f"contact_source={contact_observation_source} | "
+        "contact_source=external_contact_force_n | "
         f"backbone_trainable={'layer3+layer4' if args.train_backbone_after_layer2 else 'none'}",
         flush=True,
     )
@@ -604,32 +569,23 @@ def main() -> None:
         for step in range(start_step + 1, args.timesteps + 1):
             obs = observations["policy"]
             wrist_rgb = obs["wrist_rgb"]
-            gsmini_left_rgb = obs.get("gsmini_left_rgb")
-            gsmini_right_rgb = obs.get("gsmini_right_rgb")
-            if use_tactile_contact and (
-                gsmini_left_rgb is None or gsmini_right_rgb is None
-            ):
-                raise RuntimeError(
-                    "GelSight tactile-contact Student observations must contain "
-                    "gsmini_left_rgb and gsmini_right_rgb"
-                )
             proprio = obs["proprio_obs"].to(torch.float32)
             history = obs["action_history"].to(torch.float32)
-            cube_position = obs["rma_cube_pos"].to(torch.float32)
-            contact_state = obs["rma_contact_state"].to(torch.float32)
+            cube_position = obs["rma_cube_xy"].to(torch.float32)
+            contact_force_n = obs["rma_contact_force"].to(torch.float32)
 
             if heatmap_loss_enabled:
                 (
-                    predicted_normalized,
-                    predicted_contact_logits,
-                    predicted_heatmap,
-                ) = model.predict_adaptation_and_heatmap(
-                    wrist_rgb,
-                    gsmini_left_rgb,
-                    gsmini_right_rgb,
+                    predicted_normalized, predicted_heatmap
+                ) = model.predict_adaptation_and_heatmap(wrist_rgb)
+                # Heatmap supervision is a 2-D image target. Its projection
+                # uses simulator Z only to place that label; Z never enters the
+                # Student output, loss target, or Actor feature vector.
+                heatmap_cube_position = (
+                    env.unwrapped._cube.data.root_pos_w - env.unwrapped.scene.env_origins
                 )
                 target_heatmap, target_uv, heatmap_valid = _heatmap_targets(
-                    cube_position,
+                    heatmap_cube_position,
                     env_cfg,
                     env.unwrapped,
                     heatmap_sigma,
@@ -645,25 +601,20 @@ def main() -> None:
                     image_width=int(env_cfg.wrist_camera.width),
                 )
             else:
-                predicted_normalized, predicted_contact_logits = model.predict_adaptation(
-                    wrist_rgb,
-                    gsmini_left_rgb,
-                    gsmini_right_rgb,
-                )
+                predicted_normalized = model.predict_adaptation(wrist_rgb)
                 heatmap_loss = predicted_normalized.sum() * 0.0
                 target_uv = torch.zeros((cube_position.shape[0], 2), device=device)
                 predicted_uv = torch.zeros_like(target_uv)
                 heatmap_valid = torch.zeros(
                     (cube_position.shape[0],), device=device, dtype=torch.bool
                 )
-            predicted_contact = torch.sigmoid(predicted_contact_logits)
             target_normalized = model.actor_core.normalizer.normalize_position(cube_position)
             student_actions = model.action_from_normalized_position(
-                proprio, history, predicted_normalized, predicted_contact
+                proprio, history, predicted_normalized, contact_force_n
             )
             with torch.no_grad():
                 teacher_actions = model.actor_core(
-                    proprio, history, cube_position, contact_state
+                    proprio, history, cube_position, contact_force_n
                 )
                 previous_environment_actions = torch.clamp(
                     history / action_smoothness_scale,
@@ -676,21 +627,10 @@ def main() -> None:
                 target_normalized,
                 beta=args.smooth_l1_beta,
             )
-            positive_weight = torch.full(
-                (contact_state.shape[-1],),
-                float(args.contact_positive_weight),
-                device=device,
-            )
-            contact_loss = F.binary_cross_entropy_with_logits(
-                predicted_contact_logits,
-                contact_state,
-                pos_weight=positive_weight,
-            )
             action_loss = F.mse_loss(student_actions, teacher_actions)
             action_smoothness_loss = F.mse_loss(student_actions, previous_environment_actions)
             loss = (
                 args.position_loss_weight * position_loss
-                + args.contact_loss_weight * contact_loss
                 + args.action_loss_weight * action_loss
                 + args.action_smoothness_loss_weight * action_smoothness_loss
                 + heatmap_loss_weight * heatmap_loss
@@ -706,13 +646,10 @@ def main() -> None:
             position_error = model.actor_core.normalizer.denormalize_position(
                 predicted_normalized.detach()
             ) - cube_position
-            rmse_xyz = torch.sqrt(torch.mean(position_error.square(), dim=0))
-            rmse_3d = torch.sqrt(torch.mean(torch.sum(position_error.square(), dim=-1)))
-            mae_xyz = torch.mean(position_error.abs(), dim=0)
-            predicted_contact_binary = predicted_contact.detach() >= 0.5
-            contact_accuracy = (
-                predicted_contact_binary == contact_state.to(torch.bool)
-            ).to(torch.float32).mean()
+            rmse_xy = torch.sqrt(torch.mean(position_error.square(), dim=0))
+            rmse_2d = torch.sqrt(torch.mean(torch.sum(position_error.square(), dim=-1)))
+            mae_xy = torch.mean(position_error.abs(), dim=0)
+            grasped = (contact_force_n >= 1.0).all(dim=-1)
             heatmap_valid_fraction = heatmap_valid.to(torch.float32).mean()
             if bool(heatmap_valid.any().item()):
                 heatmap_center_error_px = torch.linalg.norm(
@@ -724,28 +661,19 @@ def main() -> None:
 
             writer.add_scalar("Loss/total", loss.item(), step)
             writer.add_scalar("Loss/position", position_loss.item(), step)
-            writer.add_scalar("Loss/xyz", position_loss.item(), step)
-            writer.add_scalar("Loss/contact_bce", contact_loss.item(), step)
+            writer.add_scalar("Loss/xy", position_loss.item(), step)
             writer.add_scalar("Loss/action_distillation", action_loss.item(), step)
             writer.add_scalar("Loss/action_smoothness", action_smoothness_loss.item(), step)
             writer.add_scalar("Loss/heatmap", heatmap_loss.item(), step)
-            writer.add_scalar("Position/rmse_3d_m", rmse_3d.item(), step)
-            writer.add_scalar("Position/rmse_x_m", rmse_xyz[0].item(), step)
-            writer.add_scalar("Position/rmse_y_m", rmse_xyz[1].item(), step)
-            writer.add_scalar("Position/rmse_z_m", rmse_xyz[2].item(), step)
-            writer.add_scalar("Position/mae_x_m", mae_xyz[0].item(), step)
-            writer.add_scalar("Position/mae_y_m", mae_xyz[1].item(), step)
-            writer.add_scalar("Position/mae_z_m", mae_xyz[2].item(), step)
+            writer.add_scalar("Position/rmse_2d_m", rmse_2d.item(), step)
+            writer.add_scalar("Position/rmse_x_m", rmse_xy[0].item(), step)
+            writer.add_scalar("Position/rmse_y_m", rmse_xy[1].item(), step)
+            writer.add_scalar("Position/mae_x_m", mae_xy[0].item(), step)
+            writer.add_scalar("Position/mae_y_m", mae_xy[1].item(), step)
             writer.add_scalar("Heatmap/center_error_px", heatmap_center_error_px.item(), step)
             writer.add_scalar("Heatmap/valid_fraction", heatmap_valid_fraction.item(), step)
             writer.add_scalar("Optimization/grad_norm", float(grad_norm), step)
-            writer.add_scalar("Contact/accuracy", contact_accuracy.item(), step)
-            writer.add_scalar("Contact/true_positive_fraction", contact_state.mean().item(), step)
-            writer.add_scalar(
-                "Contact/predicted_positive_fraction",
-                predicted_contact_binary.to(torch.float32).mean().item(),
-                step,
-            )
+            writer.add_scalar("Contact/grasped_fraction", grasped.to(torch.float32).mean().item(), step)
             if (
                 heatmap_loss_enabled
                 and args.heatmap_debug_interval > 0
@@ -786,17 +714,16 @@ def main() -> None:
                     f"| speed={updates_per_second:.2f} updates/s ({transitions_per_second:.2f} samples/s) "
                     f"| elapsed={_format_duration(elapsed_seconds)} "
                     f"| eta={_format_duration(eta_seconds)}\n"
-                    f"  loss(total/xyz/contact/action/smooth/heatmap)={loss.item():.5f}/"
-                    f"{position_loss.item():.5f}/{contact_loss.item():.5f}/"
-                    f"{action_loss.item():.5f}/{action_smoothness_loss.item():.5f}/"
+                    f"  loss(total/xy/action/smooth/heatmap)={loss.item():.5f}/"
+                    f"{position_loss.item():.5f}/{action_loss.item():.5f}/"
+                    f"{action_smoothness_loss.item():.5f}/"
                     f"{heatmap_loss.item():.5f} "
-                    f"| position_rmse={1000.0 * rmse_3d.item():.2f} mm "
-                    f"| mae_xyz=({1000.0 * mae_xyz[0].item():.1f},"
-                    f"{1000.0 * mae_xyz[1].item():.1f},"
-                    f"{1000.0 * mae_xyz[2].item():.1f}) mm "
+                    f"| position_rmse_xy={1000.0 * rmse_2d.item():.2f} mm "
+                    f"| mae_xy=({1000.0 * mae_xy[0].item():.1f},"
+                    f"{1000.0 * mae_xy[1].item():.1f}) mm "
                     f"| heatmap_uv_err={heatmap_center_error_px.item():.2f}px "
                     f"| heatmap_valid={heatmap_valid_fraction.item():.3f} "
-                    f"| contact_acc={contact_accuracy.item():.3f} "
+                    f"| grasped={grasped.to(torch.float32).mean().item():.3f} "
                     f"| success(cumulative/recent)={cumulative_success_rate:.3f}/{recent_success_rate:.3f} "
                     f"({successful_episodes}/{completed_episodes} completed)",
                     flush=True,

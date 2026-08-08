@@ -20,7 +20,7 @@ import torch
 
 import tacex_tasks  # noqa: F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
-from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore
+from tacex_tasks.sim2real_grasp.rma_xy_models import RMAXYActorCore
 
 
 TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
@@ -41,9 +41,9 @@ def test_rma_teacher_observation_and_step_contract():
         assert "wrist_camera" not in env.unwrapped.scene.sensors
         assert obs["proprio_obs"].shape == (2, 15)
         assert obs["action_history"].shape == (2, 4)
-        assert obs["rma_cube_pos"].shape == (2, 3)
-        assert obs["rma_contact_state"].shape == (2, 2)
-        assert torch.all((obs["rma_contact_state"] == 0.0) | (obs["rma_contact_state"] == 1.0))
+        assert obs["rma_cube_xy"].shape == (2, 2)
+        assert obs["rma_contact_force"].shape == (2, 2)
+        assert torch.all(obs["rma_contact_force"] >= 0.0)
         assert "rma_cube_contact_sensor" in env.unwrapped.scene.sensors
         assert env.unwrapped.rma_cube_contact_sensor.data.force_matrix_w_history.shape == (
             2,
@@ -54,21 +54,21 @@ def test_rma_teacher_observation_and_step_contract():
         )
         assert "privileged_gripper_pos" not in obs
         assert "privileged_target_pos" not in obs
-        actor = RMAActorCore().to(env.unwrapped.device)
+        actor = RMAXYActorCore().to(env.unwrapped.device)
         fk_gripper_position = actor.kinematics(obs["proprio_obs"][:, :7])
         simulated_gripper_position = (
             env.unwrapped._compute_reach_center_world() - env.unwrapped.scene.env_origins
         )
         torch.testing.assert_close(
-            fk_gripper_position,
-            simulated_gripper_position,
+            fk_gripper_position[..., :2],
+            simulated_gripper_position[..., :2],
             atol=2.0e-4,
             rtol=0.0,
         )
         actions = torch.zeros((2, 4), device=env.unwrapped.device)
         next_observations, rewards, terminated, truncated, _ = env.step(actions)
-        assert next_observations["policy"]["rma_cube_pos"].shape == (2, 3)
-        assert next_observations["policy"]["rma_contact_state"].shape == (2, 2)
+        assert next_observations["policy"]["rma_cube_xy"].shape == (2, 2)
+        assert next_observations["policy"]["rma_contact_force"].shape == (2, 2)
         assert rewards.shape == terminated.shape == truncated.shape == (2,)
         assert torch.isfinite(rewards).all()
         assert "reward/rma_action_rate" in env.unwrapped.extras["log"]
@@ -121,7 +121,8 @@ def test_rma_teacher_observation_and_step_contract():
             observations, _, _, _, _ = env.step(actions)
             max_forces = torch.maximum(max_forces, base_env._last_rma_contact_forces)
             contact_state = torch.maximum(
-                contact_state, observations["policy"]["rma_contact_state"]
+                contact_state,
+                (observations["policy"]["rma_contact_force"] >= 1.0).to(torch.float32),
             )
             max_contact_reward = torch.maximum(
                 max_contact_reward, base_env._last_rma_contact_reward

@@ -10,6 +10,15 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-08 CST — PandaHand RMA 改为 XY 视觉定位与 1 N 双侧力抓取
+
+- 类型：RMA Teacher/Student 观测、奖励、蒸馏与部署契约
+- 修改：PandaHand task 改用独立 XY/force 实现：Actor 为26维，Student 仅从 RGB 预测 cube XY；每策略步读取左右方块接触力最大值，双侧均 `>=1 N` 才生成单一 `grasped` 特征并获得接触奖励。
+- 兼容性：Teacher manifest/Student checkpoint、训练/回放/评估/导出接口仍接收 `contact_force_n[2]`，但模型版本升级为 bilateral grasped[1]；此前 PandaHand XY RMA artifact 同样必须重训。GelSight task 配置与旧 artifact 契约未改。
+- 修改：新增仅回放的 Legacy Heatmap-DR task 与采集器 v5 分支，用于归档的 RGB/XYZ/视觉接触 30 维 PandaHand Student；新旧 artifact 在 kind、版本、输入与 task ID 上 fail-closed 隔离。
+- 验证：待本次定向 RMA pytest 与 legacy checkpoint smoke；当前 XY/force v2、训练入口及 GelSight 配置不改变。
+- 验证情况：见本次任务汇报；未将未执行的训练或真机结果记为实验结论。
+
 ### 2026-08-08 CST — 新增 D435 标定四 GelSight 抽屉 task
 
 - 类型：抽屉视触环境 / 相机标定 / task 注册
