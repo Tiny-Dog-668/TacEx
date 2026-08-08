@@ -105,6 +105,13 @@ def main() -> None:
     # Evaluation covers the full Teacher-compatible cube XY distribution.
     env_cfg.cube_position_curriculum_force_full_range = True
     validate_live_env_contract(env_cfg, payload["teacher_manifest"])
+    student_input_contract = payload.get("student_input_contract", {})
+    use_tactile_contact = (
+        isinstance(student_input_contract, dict)
+        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
+    )
+    if use_tactile_contact:
+        env_cfg.rma_gelsight_tactile_sensor_enabled = True
 
     run_dir = checkpoint.parent.parent
     output_dir = (
@@ -126,7 +133,11 @@ def main() -> None:
     env = gym.make(task, cfg=env_cfg, render_mode="rgb_array" if args.video else None)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
-    student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).to(device).eval()
+    student = RMAVisualStudent(
+        RMAActorCore(),
+        pretrained_backbone=False,
+        use_tactile_contact=use_tactile_contact,
+    ).to(device).eval()
     load_student_model_state(student, payload["model"])
     if state_dict_sha256(student.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
@@ -136,6 +147,10 @@ def main() -> None:
         "teacher_actor_state_dict_sha256"
     ):
         raise RuntimeError("Student checkpoint Teacher Actor hash mismatch")
+    if use_tactile_contact and state_dict_sha256(
+        student.tactile_contact_head.state_dict()
+    ) != payload.get("tactile_contact_head_state_dict_sha256"):
+        raise RuntimeError("Student checkpoint tactile contact head hash mismatch")
 
     if args.video:
         video_length = min(args.video_length, args.steps)
@@ -170,6 +185,8 @@ def main() -> None:
                         obs["wrist_rgb"],
                         obs["proprio_obs"].to(torch.float32),
                         obs["action_history"].to(torch.float32),
+                        obs.get("gsmini_left_rgb"),
+                        obs.get("gsmini_right_rgb"),
                     )
                     observations, rewards, _, _, _ = env.step(actions)
                 reward_sum += float(rewards.mean().item())

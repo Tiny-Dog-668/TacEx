@@ -162,7 +162,7 @@ SIM2REAL_VISION_ENCODER_TASKS = {
     "TacEx-Sim2Real-Cube-Real-Alignment-v0",
     "TacEx-Sim2Real-Cube-Real-Alignment-DR-v0",
 }
-RMA_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
+from tacex_tasks.sim2real_grasp.rma_artifacts import RMA_TEACHER_TASKS
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -362,7 +362,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task == RMA_TEACHER_TASK and (
+    if args_cli.task in RMA_TEACHER_TASKS and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_grasp.rma_artifacts import (

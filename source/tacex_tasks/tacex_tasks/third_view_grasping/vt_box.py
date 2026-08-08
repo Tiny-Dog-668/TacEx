@@ -1151,6 +1151,19 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
         J_b = torch.cat([Jv_b, Jw_b], dim=1)
         return J_b
 
+    def _preprocess_third_person_rgb(self, rgb_nchw: torch.Tensor) -> torch.Tensor:
+        """Return third-person RGB before ImageNet normalization.
+
+        Args:
+            rgb_nchw: Float RGB tensor in ``[N, 3, H, W]`` with values in
+                ``[0, 1]``.
+
+        The default is intentionally an identity so existing third-view tasks
+        retain pixel-identical visual inputs. Calibrated derived tasks may
+        override this hook for camera-model-specific image warps.
+        """
+        return rgb_nchw
+
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         """Get observations from the environment."""
         # Proprioceptive observations
@@ -1244,6 +1257,7 @@ class OccludedGraspingVisionFourTactileBoxEnv(DirectRLEnv):
 
         if hasattr(self, "_use_resnet18") and self._use_resnet18:
             xt = third_rgb.permute(0, 3, 1, 2).contiguous().to(self.device)
+            xt = self._preprocess_third_person_rgb(xt)
             if hasattr(self, "_imagenet_mean"):
                 xt = (xt - self._imagenet_mean) / self._imagenet_std
             with torch.no_grad(), torch.amp.autocast(device_type=dev_type, enabled=use_amp, dtype=torch.float16):

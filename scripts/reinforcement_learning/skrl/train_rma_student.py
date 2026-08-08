@@ -177,12 +177,17 @@ def _save_initial_student_frames(observations: dict, output_dir: Path, frame_cou
     return count
 
 
-def _loss_contract(heatmap_loss_weight: float, heatmap_sigma: float) -> dict:
+def _loss_contract(
+    heatmap_loss_weight: float,
+    heatmap_sigma: float,
+    contact_observation_source: str,
+) -> dict:
     return {
         "position": "smooth_l1_normalized_xyz",
         "smooth_l1_beta": float(args.smooth_l1_beta),
         "position_weight": float(args.position_loss_weight),
         "contact": "binary_cross_entropy_with_logits_left_right",
+        "contact_observation_source": str(contact_observation_source),
         "contact_weight": float(args.contact_loss_weight),
         "contact_positive_weight": float(args.contact_positive_weight),
         "action": "mse_deterministic_tanh_mean",
@@ -230,7 +235,24 @@ def _student_payload(
         "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
         "teacher_manifest": teacher_manifest,
         "normalization": model.actor_core.normalizer.contract(),
+        "student_input_contract": {
+            "wrist_rgb": [224, 224, 3],
+            "proprio_obs": [15],
+            "action_history": [4],
+            "gsmini_left_rgb": [96, 128, 3] if model.use_tactile_contact else None,
+            "gsmini_right_rgb": [96, 128, 3] if model.use_tactile_contact else None,
+            "contact_observation_source": (
+                "gelsight_tactile_rgb"
+                if model.use_tactile_contact
+                else "third_person_rgb"
+            ),
+        },
         "vision_encoder_state_dict_sha256": state_dict_sha256(model.vision_encoder.state_dict()),
+        "tactile_contact_head_state_dict_sha256": (
+            state_dict_sha256(model.tactile_contact_head.state_dict())
+            if model.use_tactile_contact
+            else None
+        ),
         "teacher_actor_state_dict_sha256": state_dict_sha256(model.actor_core.state_dict()),
         "loss": loss_contract,
         "optimizer_config": {
@@ -244,11 +266,20 @@ def _student_payload(
     }
 
 
-def _prepare_model(device: torch.device, teacher_checkpoint: Path) -> RMAVisualStudent:
+def _prepare_model(
+    device: torch.device,
+    teacher_checkpoint: Path,
+    *,
+    use_tactile_contact: bool,
+) -> RMAVisualStudent:
     policy_state = load_teacher_policy_state(teacher_checkpoint, device)
     actor_core = RMAActorCore().to(device)
     actor_core.load_state_dict(extract_actor_core_state_dict(policy_state), strict=True)
-    model = RMAVisualStudent(actor_core, pretrained_backbone=True).to(device)
+    model = RMAVisualStudent(
+        actor_core,
+        pretrained_backbone=True,
+        use_tactile_contact=use_tactile_contact,
+    ).to(device)
     model.train()
     return model
 
@@ -404,6 +435,12 @@ def main() -> None:
     env_cfg.seed = args.seed
     env_cfg.cube_position_curriculum_force_full_range = True
     validate_live_env_contract(env_cfg, teacher_manifest)
+    contact_observation_source = str(
+        getattr(env_cfg, "rma_student_contact_observation_source", "third_person_rgb")
+    )
+    use_tactile_contact = contact_observation_source == "gelsight_tactile_rgb"
+    if use_tactile_contact:
+        env_cfg.rma_gelsight_tactile_sensor_enabled = True
     env = gym.make(args.task, cfg=env_cfg)
     device = torch.device(env.unwrapped.device)
     heatmap_supervision_enabled = bool(
@@ -424,7 +461,11 @@ def main() -> None:
     if heatmap_sigma <= 0:
         raise ValueError("effective heatmap sigma must be positive")
     heatmap_loss_enabled = heatmap_loss_weight > 0.0
-    loss_contract = _loss_contract(heatmap_loss_weight, heatmap_sigma)
+    loss_contract = _loss_contract(
+        heatmap_loss_weight,
+        heatmap_sigma,
+        contact_observation_source,
+    )
     action_smoothness_scale = torch.tensor(
         [
             float(env_cfg.action_scale),
@@ -453,6 +494,7 @@ def main() -> None:
                 if args.train_backbone_after_layer2
                 else "none"
             ),
+            "effective_contact_observation_source": contact_observation_source,
         }
     )
     (params_dir / "student_training.json").write_text(
@@ -460,8 +502,14 @@ def main() -> None:
     )
     writer = SummaryWriter(str(run_dir))
 
-    model = _prepare_model(device, teacher_checkpoint)
+    model = _prepare_model(
+        device,
+        teacher_checkpoint,
+        use_tactile_contact=use_tactile_contact,
+    )
     head_parameters = list(model.adaptation_head.parameters())
+    if use_tactile_contact:
+        head_parameters += list(model.tactile_contact_head.parameters())
     if heatmap_loss_enabled:
         head_parameters += list(model.heatmap_head.parameters())
     parameter_groups = [
@@ -538,6 +586,7 @@ def main() -> None:
         f"envs={args.num_envs} | remaining_transitions={remaining_transitions:,} | "
         f"log_every={args.log_interval} updates | checkpoint_every={args.checkpoint_interval} updates | "
         f"heatmap_weight={heatmap_loss_weight:g} | heatmap_sigma={heatmap_sigma:g}px | "
+        f"contact_source={contact_observation_source} | "
         f"backbone_trainable={'layer3+layer4' if args.train_backbone_after_layer2 else 'none'}",
         flush=True,
     )
@@ -555,6 +604,15 @@ def main() -> None:
         for step in range(start_step + 1, args.timesteps + 1):
             obs = observations["policy"]
             wrist_rgb = obs["wrist_rgb"]
+            gsmini_left_rgb = obs.get("gsmini_left_rgb")
+            gsmini_right_rgb = obs.get("gsmini_right_rgb")
+            if use_tactile_contact and (
+                gsmini_left_rgb is None or gsmini_right_rgb is None
+            ):
+                raise RuntimeError(
+                    "GelSight tactile-contact Student observations must contain "
+                    "gsmini_left_rgb and gsmini_right_rgb"
+                )
             proprio = obs["proprio_obs"].to(torch.float32)
             history = obs["action_history"].to(torch.float32)
             cube_position = obs["rma_cube_pos"].to(torch.float32)
@@ -565,7 +623,11 @@ def main() -> None:
                     predicted_normalized,
                     predicted_contact_logits,
                     predicted_heatmap,
-                ) = model.predict_adaptation_and_heatmap(wrist_rgb)
+                ) = model.predict_adaptation_and_heatmap(
+                    wrist_rgb,
+                    gsmini_left_rgb,
+                    gsmini_right_rgb,
+                )
                 target_heatmap, target_uv, heatmap_valid = _heatmap_targets(
                     cube_position,
                     env_cfg,
@@ -583,7 +645,11 @@ def main() -> None:
                     image_width=int(env_cfg.wrist_camera.width),
                 )
             else:
-                predicted_normalized, predicted_contact_logits = model.predict_adaptation(wrist_rgb)
+                predicted_normalized, predicted_contact_logits = model.predict_adaptation(
+                    wrist_rgb,
+                    gsmini_left_rgb,
+                    gsmini_right_rgb,
+                )
                 heatmap_loss = predicted_normalized.sum() * 0.0
                 target_uv = torch.zeros((cube_position.shape[0], 2), device=device)
                 predicted_uv = torch.zeros_like(target_uv)

@@ -14,21 +14,41 @@ from .rma_models import RMA_MODEL_VERSION, RMAActorCore, RMAObservationNormalize
 
 
 RMA_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0"
+RMA_GELSIGHT_TEACHER_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
+)
 RMA_STUDENT_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-v0"
 RMA_STUDENT_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0"
 RMA_STUDENT_HEATMAP_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-v0"
 RMA_STUDENT_HEATMAP_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-Heatmap-DR-v0"
+RMA_GELSIGHT_STUDENT_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Student-v0"
+)
+RMA_GELSIGHT_STUDENT_DR_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Student-DR-v0"
+)
+RMA_GELSIGHT_STUDENT_HEATMAP_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Student-Heatmap-v0"
+)
+RMA_GELSIGHT_STUDENT_HEATMAP_DR_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Student-Heatmap-DR-v0"
+)
+RMA_TEACHER_TASKS = frozenset((RMA_TEACHER_TASK, RMA_GELSIGHT_TEACHER_TASK))
 RMA_STUDENT_TASKS = frozenset(
     (
         RMA_STUDENT_TASK,
         RMA_STUDENT_DR_TASK,
         RMA_STUDENT_HEATMAP_TASK,
         RMA_STUDENT_HEATMAP_DR_TASK,
+        RMA_GELSIGHT_STUDENT_TASK,
+        RMA_GELSIGHT_STUDENT_DR_TASK,
+        RMA_GELSIGHT_STUDENT_HEATMAP_TASK,
+        RMA_GELSIGHT_STUDENT_HEATMAP_DR_TASK,
     )
 )
 RMA_MANIFEST_FILENAME = "rma_manifest.json"
-RMA_TEACHER_MANIFEST_VERSION = 7
-RMA_STUDENT_CHECKPOINT_VERSION = 5
+RMA_TEACHER_MANIFEST_VERSION = 10
+RMA_STUDENT_CHECKPOINT_VERSION = 6
 
 
 def sha256_file(path: str | Path) -> str:
@@ -71,6 +91,21 @@ def _env_contract(cfg: Any) -> dict[str, Any]:
         return None if value is None else float(value)
 
     return {
+        "robot_profile": str(getattr(cfg, "rma_robot_profile", "franka_panda_hand")),
+        "gelsight_enabled": bool(getattr(cfg, "rma_gelsight_enabled", False)),
+        "gelsight_sensor_names": [
+            str(value) for value in getattr(cfg, "rma_gelsight_sensor_names", ())
+        ],
+        "gelsight_sensor_prims": [
+            str(value) for value in getattr(cfg, "rma_gelsight_sensor_prims", ())
+        ],
+        "gelsight_actor_observation": str(
+            getattr(cfg, "rma_gelsight_actor_observation", "none")
+        ),
+        "contact_filter_prim_paths": [
+            str(value)
+            for value in getattr(cfg.rma_cube_contact_sensor, "filter_prim_paths_expr", ())
+        ],
         "action_dim": int(cfg.action_space),
         "action_scales": [
             float(cfg.action_scale),
@@ -126,7 +161,7 @@ def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Map
     manifest = {
         "kind": "tacex_rma_teacher",
         "version": RMA_TEACHER_MANIFEST_VERSION,
-        "task": RMA_TEACHER_TASK,
+        "task": str(getattr(base_env.cfg, "rma_task_id", RMA_TEACHER_TASK)),
         "model_version": RMA_MODEL_VERSION,
         "actor_inputs": {
             "proprio_obs": 15,
@@ -155,7 +190,7 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Teacher RMA manifest not found: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("kind") != "tacex_rma_teacher" or manifest.get("task") != RMA_TEACHER_TASK:
+    if manifest.get("kind") != "tacex_rma_teacher" or manifest.get("task") not in RMA_TEACHER_TASKS:
         raise RuntimeError("Checkpoint is not a compatible Real-Alignment RMA teacher")
     if manifest.get("version") != RMA_TEACHER_MANIFEST_VERSION:
         raise RuntimeError(f"Unsupported RMA teacher manifest version: {manifest.get('version')}")
@@ -173,8 +208,28 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     return manifest
 
 
+def _normalize_environment_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(contract)
+    normalized.setdefault("robot_profile", "franka_panda_hand")
+    normalized.setdefault("gelsight_enabled", False)
+    normalized.setdefault("gelsight_sensor_names", [])
+    normalized.setdefault("gelsight_sensor_prims", [])
+    normalized.setdefault("gelsight_actor_observation", "none")
+    normalized.setdefault(
+        "contact_filter_prim_paths",
+        [
+            "/World/envs/env_.*/Robot/panda_leftfinger",
+            "/World/envs/env_.*/Robot/panda_rightfinger",
+        ],
+    )
+    return normalized
+
+
 def validate_live_env_contract(cfg: Any, manifest: Mapping[str, Any]) -> None:
-    if manifest.get("environment_contract") != _env_contract(cfg):
+    saved_contract = manifest.get("environment_contract")
+    if not isinstance(saved_contract, Mapping):
+        raise RuntimeError("Teacher manifest has no environment contract")
+    if _normalize_environment_contract(saved_contract) != _env_contract(cfg):
         raise RuntimeError("Live RMA environment differs from the teacher environment contract")
 
 
@@ -222,11 +277,11 @@ def load_student_checkpoint(
 
 
 def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]) -> None:
-    """Load Student weights while allowing newly added heatmap-head parameters."""
+    """Load Student weights while allowing newly added optional head parameters."""
     result = model.load_state_dict(state_dict, strict=False)
     allowed_missing = {
         key for key in model.state_dict()
-        if key.startswith("heatmap_head.")
+        if key.startswith("heatmap_head.") or key.startswith("tactile_contact_head.")
     }
     missing = set(result.missing_keys)
     unexpected = set(result.unexpected_keys)

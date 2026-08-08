@@ -112,6 +112,17 @@ def _evaluate(
     env_cfg.cube_position_curriculum_force_full_range = True
     teacher_manifest = load_teacher_manifest(teacher_checkpoint)
     validate_live_env_contract(env_cfg, teacher_manifest)
+    student_input_contract = (
+        student_payload.get("student_input_contract", {})
+        if isinstance(student_payload, dict)
+        else {}
+    )
+    use_tactile_contact = (
+        isinstance(student_input_contract, dict)
+        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
+    )
+    if use_tactile_contact:
+        env_cfg.rma_gelsight_tactile_sensor_enabled = True
     env = gym.make(task, cfg=env_cfg)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
@@ -120,7 +131,11 @@ def _evaluate(
 
     student = None
     if role == "student":
-        student = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).to(device)
+        student = RMAVisualStudent(
+            RMAActorCore(),
+            pretrained_backbone=False,
+            use_tactile_contact=use_tactile_contact,
+        ).to(device)
         load_student_model_state(student, student_payload["model"])
         student.eval()
         if state_dict_sha256(student.vision_encoder.state_dict()) != student_payload.get(
@@ -131,6 +146,10 @@ def _evaluate(
             "teacher_actor_state_dict_sha256"
         ):
             raise RuntimeError("Student teacher Actor hash mismatch")
+        if use_tactile_contact and state_dict_sha256(
+            student.tactile_contact_head.state_dict()
+        ) != student_payload.get("tactile_contact_head_state_dict_sha256"):
+            raise RuntimeError("Student tactile contact head hash mismatch")
 
     observations, _ = env.reset()
     records: list[dict] = []
@@ -165,7 +184,9 @@ def _evaluate(
                     actions = teacher_action
                 else:
                     predicted_normalized, contact_logits = student.predict_adaptation(
-                        obs["wrist_rgb"]
+                        obs["wrist_rgb"],
+                        obs.get("gsmini_left_rgb"),
+                        obs.get("gsmini_right_rgb"),
                     )
                     predicted_position = student.actor_core.normalizer.denormalize_position(
                         predicted_normalized

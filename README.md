@@ -249,7 +249,8 @@ Only the RMA tasks add cube-finger contact shaping. A filtered cube ContactSenso
 uses a `0.2 N` threshold for each finger. Its current weight is `3.0`, with
 the single-contact term enabled (`single_contact_reward_fraction=1.0`). The
 Teacher receives the binary contact state, while the Student receives it only as
-a training label and supplies its own differentiable visual contact probability
+a training label. PandaHand Student predicts contact from RGB; GelSight Student
+predicts contact from left/right tactile RGB and feeds the resulting probability
 to the frozen Actor.
 For the RMA Teacher/Student tasks, success is a reward/statistics condition only:
 an episode terminates on timeout or severe robot ground penetration, not when the
@@ -259,12 +260,37 @@ RMA also keeps the Clean `10 mm/step` total-width gripper action scale but lower
 only the Panda finger position actuator to `effort=40 N`, `stiffness=400`, and
 `damping=40` to reduce cube penetration during hard contact.
 
+The GelSight RMA profile is registered separately under
+`source/tacex_tasks/tacex_tasks/sim2real_gelsight_rma`. It reuses the same
+Teacher/Student RMA logic and the same Actor contract, but swaps the robot asset
+to Franka + left/right GelSight Mini geometry. GelSight tactile images are
+not part of the Teacher Actor observation. GelSight Student creates left/right
+tactile sensors and uses their `tactile_rgb` frames for contact prediction while
+third-person RGB remains responsible for cube position. Its manifest records the robot/GelSight profile, so a
+GelSight Teacher checkpoint must be distilled with a GelSight Student task, not
+with the old PandaHand Student task.
+GelSight RMA contact shaping filters cube contact through `gelpad_left` and
+`gelpad_right`, not the original `panda_leftfinger/rightfinger` bodies. The
+GelSight Teacher keeps the GelSight robot and gelpad collision geometry but does
+not create the tactile-rendering sensors by default; use the preview script when
+you need tactile PNGs.
+
 Train the 200k privileged Teacher:
 
 ```bash
 python scripts/reinforcement_learning/skrl/train.py \
   --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0 \
   --num_envs 256 --headless
+```
+
+Train the matching GelSight privileged Teacher:
+
+```bash
+conda run -n isaaclab_2.1.1 --no-capture-output python \
+  scripts/reinforcement_learning/skrl/train.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0 \
+  --num_envs 256 \
+  --headless
 ```
 
 The 100k Student run directly distills from a compatible Teacher checkpoint and
@@ -287,6 +313,30 @@ conda run -n isaaclab_2.1.1 --no-capture-output python \
   --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0 \
   --teacher_checkpoint <teacher-run>/checkpoints/best_agent.pt \
   --num_envs 64 --timesteps 100000 --headless
+```
+
+GelSight Heatmap + DR Student uses the matching GelSight task id:
+
+```bash
+conda run -n isaaclab_2.1.1 --no-capture-output python \
+  scripts/reinforcement_learning/skrl/train_rma_student.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Student-Heatmap-DR-v0 \
+  --teacher_checkpoint <gelsight-teacher-run>/checkpoints/best_agent.pt \
+  --num_envs 128 \
+  --timesteps 100000 \
+  --train_backbone_after_layer2 \
+  --backbone_learning_rate 3e-5 \
+  --headless
+```
+
+To inspect the GelSight sensor renderings without adding training I/O, use:
+
+```bash
+conda run -n isaaclab_2.1.1 --no-capture-output python \
+  scripts/reinforcement_learning/skrl/save_rma_gelsight_preview.py \
+  --task TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0 \
+  --output_dir logs/skrl/rma_gelsight_preview \
+  --headless
 ```
 
 This is a distinct Student profile and must start from scratch; do not resume a
@@ -451,11 +501,11 @@ Environment tests require Isaac Sim / Isaac Lab, GPU, and a compatible rendering
 
 Project-specific architecture notes are in:
 
-- `docs/PROJECT_OVERVIEW.md`
-- `docs/ARCHITECTURE.md`
-- `docs/DATA_FLOW.md`
-- `docs/KNOWN_ISSUES.md`
-- `docs/DECISIONS.md`
+- `docs/ARCHITECTURE.md` — project overview, module architecture, and data flow
+- `docs/DEVLOG.md` — change log and experiment records
+- `docs/DECISIONS.md` — design decisions (`DEC-xxx`) and known issues (`ISSUE-xxx`)
+
+Development log entries older than 2026-08 are archived under `docs/archive/`.
 
 The original TacEx framework documentation remains under `docs/source`.
 

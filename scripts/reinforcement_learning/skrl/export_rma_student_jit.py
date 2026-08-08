@@ -51,7 +51,16 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint, device="cpu")
-    model = RMAVisualStudent(RMAActorCore(), pretrained_backbone=False).cpu().eval()
+    student_input_contract = payload.get("student_input_contract", {})
+    use_tactile_contact = (
+        isinstance(student_input_contract, dict)
+        and student_input_contract.get("contact_observation_source") == "gelsight_tactile_rgb"
+    )
+    model = RMAVisualStudent(
+        RMAActorCore(),
+        pretrained_backbone=False,
+        use_tactile_contact=use_tactile_contact,
+    ).cpu().eval()
     load_student_model_state(model, payload["model"])
     if state_dict_sha256(model.vision_encoder.state_dict()) != payload.get(
         "vision_encoder_state_dict_sha256"
@@ -61,16 +70,15 @@ def main() -> None:
         "teacher_actor_state_dict_sha256"
     ):
         raise RuntimeError("Student checkpoint teacher Actor hash mismatch")
+    if use_tactile_contact and state_dict_sha256(
+        model.tactile_contact_head.state_dict()
+    ) != payload.get("tactile_contact_head_state_dict_sha256"):
+        raise RuntimeError("Student checkpoint tactile contact head hash mismatch")
 
     output = Path(args.output).expanduser().resolve() if args.output else (
         checkpoint.parent / "exported" / f"rma_student_e2e_{checkpoint.stem}.pt"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    example = (
-        torch.zeros((1, 224, 224, 3), dtype=torch.uint8),
-        torch.zeros((1, 15), dtype=torch.float32),
-        torch.zeros((1, 4), dtype=torch.float32),
-    )
     with torch.inference_mode():
         traced = torch.jit.script(model)
         probe = (
@@ -78,6 +86,12 @@ def main() -> None:
             torch.randn((2, 15), dtype=torch.float32),
             torch.randn((2, 4), dtype=torch.float32) * 0.01,
         )
+        if use_tactile_contact:
+            tactile_probe = (
+                torch.randint(0, 256, (2, 96, 128, 3), dtype=torch.uint8),
+                torch.randint(0, 256, (2, 96, 128, 3), dtype=torch.uint8),
+            )
+            probe = (*probe, *tactile_probe)
         eager_actions = model(*probe)
         traced_actions = traced(*probe)
         trace_error = float(torch.max(torch.abs(eager_actions - traced_actions)).item())
@@ -110,7 +124,7 @@ def main() -> None:
 
     metadata = {
         "kind": "tacex_rma_student_torchscript",
-        "version": 6,
+        "version": 7,
         "student_checkpoint": str(checkpoint),
         "student_checkpoint_sha256": sha256_file(checkpoint),
         "teacher_checkpoint": payload.get("teacher_checkpoint"),
@@ -120,12 +134,27 @@ def main() -> None:
             "wrist_rgb": [224, 224, 3],
             "proprio_obs": [15],
             "action_history": [4],
+            "gsmini_left_rgb": [96, 128, 3] if use_tactile_contact else None,
+            "gsmini_right_rgb": [96, 128, 3] if use_tactile_contact else None,
         },
-        "input_order": ["wrist_rgb", "proprio_obs", "action_history"],
+        "input_order": (
+            [
+                "wrist_rgb",
+                "proprio_obs",
+                "action_history",
+                "gsmini_left_rgb",
+                "gsmini_right_rgb",
+            ]
+            if use_tactile_contact
+            else ["wrist_rgb", "proprio_obs", "action_history"]
+        ),
         "output_signature": {"mean_actions": [4]},
         "actor_mean_bounds": [-1.0, 1.0],
         "normalization": payload["normalization"],
         "vision_encoder_state_dict_sha256": payload["vision_encoder_state_dict_sha256"],
+        "tactile_contact_head_state_dict_sha256": payload.get(
+            "tactile_contact_head_state_dict_sha256"
+        ),
         "teacher_actor_state_dict_sha256": payload["teacher_actor_state_dict_sha256"],
         "actor_contract": model.actor_core.contract(),
         "trace_max_abs_error": trace_error,
@@ -140,7 +169,12 @@ def main() -> None:
             "Fingertip-midpoint XYZ is computed inside the Actor with Panda FK "
             "from proprio_obs joint positions.",
             "Cube and end-effector orientation are not Actor features.",
-            "Left/right cube-finger contact probabilities are predicted from wrist_rgb.",
+            (
+                "Left/right cube-finger contact probabilities are predicted from "
+                "gsmini_left_rgb and gsmini_right_rgb."
+                if use_tactile_contact
+                else "Left/right cube-finger contact probabilities are predicted from wrist_rgb."
+            ),
             "Load with map_location='cpu' or map_location='cuda:0'; inputs must use the same device.",
         ],
     }

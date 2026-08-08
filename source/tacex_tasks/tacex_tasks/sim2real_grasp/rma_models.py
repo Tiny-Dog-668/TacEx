@@ -1,4 +1,4 @@
-"""Shared teacher Actor and visual adaptation models for RMA-style distillation."""
+"""Shared teacher Actor and visual/tactile adaptation models for RMA-style distillation."""
 
 from __future__ import annotations
 
@@ -457,16 +457,72 @@ class CubeCenterHeatmapHead(nn.Module):
         return torch.sigmoid(self.network(layer3_feature))
 
 
-class RMAVisualStudent(nn.Module):
-    """Frozen ResNet18 + trainable localizer + frozen teacher Actor."""
+class TactileContactHead(nn.Module):
+    """Predict left/right contact logits from left/right GelSight tactile RGB."""
 
-    def __init__(self, actor_core: RMAActorCore, *, pretrained_backbone: bool = True) -> None:
+    def __init__(self) -> None:
         super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(6, 16, kernel_size=5, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.output = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64, 32),
+            nn.ELU(),
+            nn.Linear(32, RMA_CONTACT_DIM),
+        )
+        last = self.output[-1]
+        if isinstance(last, nn.Linear):
+            nn.init.zeros_(last.weight)
+            nn.init.constant_(last.bias, -2.0)
+
+    @staticmethod
+    def _to_nchw_01(image: torch.Tensor) -> torch.Tensor:
+        if not torch.jit.is_scripting():
+            if image.ndim != 4 or image.shape[-1] != 3:
+                raise ValueError(f"Expected tactile_rgb [N,H,W,3], got {tuple(image.shape)}")
+        x = image.to(torch.float32)
+        # GelSight simulator output is usually 0-255, but some paths may
+        # already produce 0-1 float images. Keep both contracts usable.
+        if not torch.jit.is_scripting():
+            if bool((x.max() <= 1.0 + 1.0e-6).item()):
+                return x.permute(0, 3, 1, 2).contiguous()
+        return (x / 255.0).permute(0, 3, 1, 2).contiguous()
+
+    def forward(
+        self,
+        gsmini_left_rgb: torch.Tensor,
+        gsmini_right_rgb: torch.Tensor,
+    ) -> torch.Tensor:
+        left = self._to_nchw_01(gsmini_left_rgb)
+        right = self._to_nchw_01(gsmini_right_rgb)
+        return self.output(self.encoder(torch.cat([left, right], dim=1)))
+
+
+class RMAVisualStudent(nn.Module):
+    """Frozen ResNet18 localizer, optional tactile contact head, frozen teacher Actor."""
+
+    def __init__(
+        self,
+        actor_core: RMAActorCore,
+        *,
+        pretrained_backbone: bool = True,
+        use_tactile_contact: bool = False,
+    ) -> None:
+        super().__init__()
+        self.use_tactile_contact = bool(use_tactile_contact)
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained_backbone else None
         backbone = resnet18(weights=weights)
         self.vision_encoder = nn.Sequential(*list(backbone.children())[:-2])
         self.adaptation_head = SpatialSoftmaxAdaptationHead()
         self.heatmap_head = CubeCenterHeatmapHead()
+        self.tactile_contact_head = TactileContactHead()
         self.actor_core = actor_core
         self.register_buffer("image_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer("image_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
@@ -525,19 +581,58 @@ class RMAVisualStudent(nn.Module):
         normalized_position, _ = self.predict_adaptation(wrist_rgb)
         return normalized_position
 
-    def predict_adaptation(self, wrist_rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.adaptation_head(self.encode(wrist_rgb))
+    def _contact_logits(
+        self,
+        visual_contact_logits: torch.Tensor,
+        gsmini_left_rgb: torch.Tensor | None,
+        gsmini_right_rgb: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.use_tactile_contact:
+            if gsmini_left_rgb is None or gsmini_right_rgb is None:
+                raise RuntimeError("Tactile-contact Student requires gsmini_left_rgb and gsmini_right_rgb")
+            return self.tactile_contact_head(gsmini_left_rgb, gsmini_right_rgb)
+        return visual_contact_logits
+
+    def predict_adaptation(
+        self,
+        wrist_rgb: torch.Tensor,
+        gsmini_left_rgb: torch.Tensor | None = None,
+        gsmini_right_rgb: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        normalized_position, visual_contact_logits = self.adaptation_head(self.encode(wrist_rgb))
+        return normalized_position, self._contact_logits(
+            visual_contact_logits,
+            gsmini_left_rgb,
+            gsmini_right_rgb,
+        )
 
     def predict_adaptation_and_heatmap(
-        self, wrist_rgb: torch.Tensor
+        self,
+        wrist_rgb: torch.Tensor,
+        gsmini_left_rgb: torch.Tensor | None = None,
+        gsmini_right_rgb: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         layer3_feature, layer4_feature = self.encode_features(wrist_rgb)
-        normalized_position, contact_logits = self.adaptation_head(layer4_feature)
+        normalized_position, visual_contact_logits = self.adaptation_head(layer4_feature)
+        contact_logits = self._contact_logits(
+            visual_contact_logits,
+            gsmini_left_rgb,
+            gsmini_right_rgb,
+        )
         heatmap = self.heatmap_head(layer3_feature)
         return normalized_position, contact_logits, heatmap
 
-    def predict_contact_probability(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
-        _, contact_logits = self.predict_adaptation(wrist_rgb)
+    def predict_contact_probability(
+        self,
+        wrist_rgb: torch.Tensor,
+        gsmini_left_rgb: torch.Tensor | None = None,
+        gsmini_right_rgb: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        _, contact_logits = self.predict_adaptation(
+            wrist_rgb,
+            gsmini_left_rgb,
+            gsmini_right_rgb,
+        )
         return torch.sigmoid(contact_logits)
 
     def predict_position(self, wrist_rgb: torch.Tensor) -> torch.Tensor:
@@ -564,8 +659,14 @@ class RMAVisualStudent(nn.Module):
         wrist_rgb: torch.Tensor,
         proprio_obs: torch.Tensor,
         action_history: torch.Tensor,
+        gsmini_left_rgb: torch.Tensor | None = None,
+        gsmini_right_rgb: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        normalized_position, contact_logits = self.predict_adaptation(wrist_rgb)
+        normalized_position, contact_logits = self.predict_adaptation(
+            wrist_rgb,
+            gsmini_left_rgb,
+            gsmini_right_rgb,
+        )
         return self.action_from_normalized_position(
             proprio_obs,
             action_history,

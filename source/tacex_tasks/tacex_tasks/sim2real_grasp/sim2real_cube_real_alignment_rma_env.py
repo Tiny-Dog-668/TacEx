@@ -100,8 +100,7 @@ class _RMATerminalMixin:
         self.rma_cube_contact_sensor = ContactSensor(self.cfg.rma_cube_contact_sensor)
         self.scene.sensors["rma_cube_contact_sensor"] = self.rma_cube_contact_sensor
 
-    def _compute_rma_contact_forces(self) -> torch.Tensor:
-        """Return max left/right cube-finger normal force over one policy step."""
+    def _rma_contact_force_history(self) -> torch.Tensor:
         history = self.rma_cube_contact_sensor.data.force_matrix_w_history
         if history is None:
             raise RuntimeError("RMA cube contact sensor has no filtered force history")
@@ -109,7 +108,12 @@ class _RMATerminalMixin:
             raise RuntimeError(
                 f"Expected two RMA finger contact filters, got shape={tuple(history.shape)}"
             )
+        return history
+
+    def _compute_rma_contact_forces(self) -> torch.Tensor:
+        """Return max left/right cube-finger force norm over one policy step."""
         # [N, physics_history=2, cube_body=1, finger_filters=2, xyz=3]
+        history = self._rma_contact_force_history()
         return torch.linalg.vector_norm(history, dim=-1).amax(dim=(1, 2))
 
     def _compute_rma_contact_state(self) -> torch.Tensor:
