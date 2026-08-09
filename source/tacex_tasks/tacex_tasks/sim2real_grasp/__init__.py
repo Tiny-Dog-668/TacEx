@@ -32,6 +32,16 @@ from .sim2real_cube_real_alignment_rma_env import (
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg,
 )
 from .rma_direct_action_student.artifacts import RMA_DIRECT_ACTION_STUDENT_DR_TASK
+from .rma_x040_wide_artifacts import (
+    RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_TEACHER_TASK,
+)
+from .sim2real_cube_real_alignment_rma_x040_wide_env import (
+    Sim2RealCubeRealAlignmentRMAX040WideStudentDREnv,
+    Sim2RealCubeRealAlignmentRMAX040WideStudentDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAX040WideTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAX040WideTeacherEnvCfg,
+)
 from .sim2real_grasp_env import (
     Sim2RealGraspEnv,
     Sim2RealGraspEnvCfg,
@@ -48,6 +58,34 @@ gym.register(
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_vision_only_cfg_resnet18.yaml",
         "skrl_sac_cfg_entry_point": f"{cylinder_agents.__name__}:skrl_sac_cfg.yaml",
     },
+)
+
+# Independent shifted/wide profile. It intentionally has a distinct task and
+# artifact contract: cube XYZ is privileged only for the Teacher and Student
+# training losses, never a deployed Student input.
+gym.register(
+    id=RMA_X040_WIDE_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_x040_wide_env:"
+        "Sim2RealCubeRealAlignmentRMAX040WideTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAX040WideTeacherEnvCfg,
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:skrl_ppo_cube_real_alignment_rma_x040_wide_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_x040_wide_env:"
+        "Sim2RealCubeRealAlignmentRMAX040WideStudentDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAX040WideStudentDREnvCfg},
 )
 
 # RMA-style privileged teacher using the current Clean v9 contract.

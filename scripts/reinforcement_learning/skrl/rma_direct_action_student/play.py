@@ -29,6 +29,14 @@ parser.add_argument("--steps", type=int, default=3_000)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--metrics_interval", type=int, default=200)
 parser.add_argument("--output_dir", default=None)
+parser.add_argument("--video", action="store_true", default=False)
+parser.add_argument("--video_length", type=int, default=300)
+parser.add_argument(
+    "--input_video",
+    action="store_true",
+    default=False,
+    help="Record the exact pre-action wrist_rgb tensor consumed by the Student.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
@@ -55,8 +63,10 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 
 
 def main() -> None:
-    if min(args.num_envs, args.steps, args.metrics_interval) <= 0:
-        raise ValueError("num_envs, steps and metrics_interval must be positive")
+    if min(args.num_envs, args.steps, args.metrics_interval, args.video_length) <= 0:
+        raise ValueError("num_envs, steps, metrics_interval and video_length must be positive")
+    if (args.video or args.input_video) and args.num_envs != 1:
+        raise ValueError("MP4 recording requires --num_envs 1 so the video has one deterministic view")
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint, device="cpu")
     task = str(payload["task"])
@@ -70,13 +80,21 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = output_dir / f"play_metrics_{tag}.csv"
-    env = gym.make(task, cfg=env_cfg)
+    env = gym.make(task, cfg=env_cfg, render_mode="rgb_array" if args.video else None)
     base_env = env.unwrapped
     student = RMADirectActionVisualStudent().to(base_env.device).eval()
     load_student_model_state(student, payload["model"])
     teacher_state = load_teacher_policy_state(payload["teacher_checkpoint"], base_env.device)
     teacher = RMAXYActorCore().to(base_env.device).eval()
     teacher.load_state_dict(extract_xy_actor_core_state_dict(teacher_state), strict=True)
+    if args.video:
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_folder=str(output_dir / "videos"),
+            step_trigger=lambda step: step == 0,
+            video_length=min(args.video_length, args.steps),
+            disable_logger=True,
+        )
     observations, _ = env.reset()
     reward_sum = 0.0
     action_mse_sum = 0.0
@@ -84,6 +102,11 @@ def main() -> None:
     previous_actions = None
     action_delta_sum = 0.0
     action_delta_elements = 0
+    input_video_writer = None
+    input_video_path = None
+    input_video_temporary = None
+    input_video_frames = 0
+    input_video_limit = min(args.video_length, args.steps)
     try:
         with csv_path.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
@@ -91,6 +114,27 @@ def main() -> None:
             with torch.inference_mode():
                 for step in range(1, args.steps + 1):
                     obs = observations["policy"]
+                    if args.input_video and input_video_frames < input_video_limit:
+                        import cv2
+
+                        frame = obs["wrist_rgb"][0].detach().cpu().numpy()
+                        if input_video_writer is None:
+                            input_video_path = output_dir / "input_videos" / f"policy_input_{tag}.mp4"
+                            input_video_path.parent.mkdir(parents=True, exist_ok=True)
+                            input_video_temporary = input_video_path.with_name(
+                                f".{input_video_path.stem}.tmp{input_video_path.suffix}"
+                            )
+                            height, width = frame.shape[:2]
+                            input_video_writer = cv2.VideoWriter(
+                                str(input_video_temporary),
+                                cv2.VideoWriter_fourcc(*"mp4v"),
+                                1.0 / (float(env_cfg.sim.dt) * int(env_cfg.decimation)),
+                                (width, height),
+                            )
+                            if not input_video_writer.isOpened():
+                                raise RuntimeError(f"Unable to open policy-input video: {input_video_path}")
+                        input_video_writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                        input_video_frames += 1
                     actions = student(obs["wrist_rgb"], obs["proprio_obs"].float(), obs["action_history"].float())
                     # Analysis only; teacher labels are not part of the Student call.
                     teacher_actions = teacher(
@@ -112,11 +156,18 @@ def main() -> None:
                         writer.writerow((step, reward_sum / step, teacher_rmse, delta_rmse, float(stats["cumulative_rate"].item()), float(stats["window_rate"].item()), int(stats["success_count"].item()), int(stats["completed_count"].item())))
                         stream.flush()
     finally:
+        if input_video_writer is not None:
+            input_video_writer.release()
+            os.replace(input_video_temporary, input_video_path)
         env.close()
     _atomic_json_dump({
         "kind": "tacex_rma_direct_action_student_play", "student_checkpoint": str(checkpoint),
         "student_checkpoint_sha256": sha256_file(checkpoint), "task": task, "seed": args.seed,
         "num_envs": args.num_envs, "steps": args.steps, "metrics_csv": str(csv_path),
+        "video_enabled": bool(args.video),
+        "video_length": min(args.video_length, args.steps) if args.video else None,
+        "input_video": str(input_video_path) if input_video_path is not None else None,
+        "input_video_frames": input_video_frames,
         "student_runtime_inputs": ["wrist_rgb", "proprio_obs", "action_history"],
         "teacher_action_rmse": (action_mse_sum / action_elements) ** 0.5 if action_elements else None,
     }, output_dir / f"play_summary_{tag}.json")

@@ -103,6 +103,7 @@ TacEx 当前仓库的主线已由用户确认为 `occluded_grasping`：在 Isaac
 - Aux heads 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_tactile_cross_alpha_aux_policy.py:OccludedGraspingVTTactileCrossAlphaAuxPolicy`。
 - GelFusion-style 策略：`source/tacex_tasks/tacex_tasks/occluded_grasping/vt_gelfusion_policy.py:OccludedGraspingVTGelFusionPolicy`。
 - Real-Alignment RMA-style：PandaHand 使用独立 XY/force Teacher–Student 契约：Teacher 接收 cube XY 和左右接触力，Student 仅从第三视角 RGB 预测 XY；Actor 从本体 FK 生成夹爪 XY，组成26维特征。每策略步的两次物理子步接触力取最大值，左右均 `>=1 N` 时仅生成一个 `grasped` 特征；Student TorchScript 输入为 `RGB + proprio[15] + history[4] + contact_force_n[2]`。接触 reward 仅在 grasped 时给出，旧 PandaHand RMA checkpoint 不兼容并需重训。GelSight RMA profile 仍保持原有配置、触觉接触预测与 artifact 契约，未随 PandaHand XY/force 路线变更。
+- X040-Wide RMA（独立 profile）：Teacher Actor 只接收 `proprio[15] + history[4] + cube_position_root[3]`，并由本体 FK 派生 TCP 与相对 cube 的 XYZ，形成 28 维特征；不接收接触力或接触状态。Student 部署仍严格为 `RGB[224,224,3] + proprio[15] + history[4] -> action[4]`，训练时以 simulator cube XYZ 作 ResNet-512-GAP 位置头的辅助 MSE 标签。该 profile 的 cube reset 是 x=0.40、x±8 cm、y±10 cm，无 curriculum；Student 相机 pose DR 是局部 xyz±1 cm、XYZ±2°；仅 Student 把底座 `panda_link0/visuals/panda_link0/subset_5` 绑定为逐 env、逐 episode 的 HSV 自发光材质（H 105°–135°、S 0.75–1.0、V 0.35–1.0），腕部 LED 仍是蓝色。TCP world z<0.011 m 每步额外 -10，但不改变动作或 done。
 
 ### 9. 当前主要实验变量
 
