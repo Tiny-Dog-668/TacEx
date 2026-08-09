@@ -10,6 +10,13 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-09 CST — 新增 PandaHand RMA Direct-Action Visual Student
+
+- 类型：RMA Student 模型 / 蒸馏 / 评估 / 导出 / rollout / task 注册
+- 修改：新增独立 direct-action Student，以现有 Heatmap-DR Student 的 ResNet18 encoder warm start；部署只接收 RGB、本体15维和历史动作4维，经 512+15+4 特征直接输出4维动作，不预测位置或接触。
+- 兼容性：Teacher 仍在仿真中用 cube XY 与双侧接触力生成动作标签，但这两个输入不进入 Student/runtime rollout；新增专用 artifact kind/version，旧 XY/force Student 不能 resume/export，Direct-Action Student 必须重新训练。奖励、done、物理和动作尺度不变。
+- 验证情况：见本次任务汇报；未把 smoke、正式训练、评估或真机部署结果写为已完成实验。
+
 ### 2026-08-08 CST — PandaHand RMA 改为 XY 视觉定位与 1 N 双侧力抓取
 
 - 类型：RMA Teacher/Student 观测、奖励、蒸馏与部署契约

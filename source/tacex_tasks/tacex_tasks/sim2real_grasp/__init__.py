@@ -31,6 +31,7 @@ from .sim2real_cube_real_alignment_rma_env import (
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv,
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnvCfg,
 )
+from .rma_direct_action_student.artifacts import RMA_DIRECT_ACTION_STUDENT_DR_TASK
 from .sim2real_grasp_env import (
     Sim2RealGraspEnv,
     Sim2RealGraspEnvCfg,
@@ -116,6 +117,21 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentHeatmapDREnvCfg,
+    },
+)
+
+# Direct-action visual Student. The DR environment still exposes simulator-only
+# XY/force labels to its dedicated trainer, but the exported Student consumes
+# only RGB, proprioception and action history.
+gym.register(
+    id=RMA_DIRECT_ACTION_STUDENT_DR_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_rma_xy_env:"
+        "Sim2RealCubeRealAlignmentRMAXYStudentDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAXYStudentDREnvCfg,
     },
 )
 

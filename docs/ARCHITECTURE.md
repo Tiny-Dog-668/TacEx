@@ -495,6 +495,7 @@ RMA Teacher/Student 使用新增 task，不修改 Clean、DR 或旧 Privileged�
 
 - PandaHand Teacher：无相机，外部输入为15维本体、4维 history、cube XY 和左右真实接触力；`RMAXYActorCore` 从关节角执行 Panda FK 并仅使用夹爪 XY 与 cube-to-gripper XY，再加单一 bilateral `grasped` 状态，形成26维特征后输出4维 tanh action；Z 不是物体输入特征。
 - PandaHand Student：环境输出 `wrist_rgb[224,224,3] uint8`、15维本体、4维 history、仅用于位置损失的 cube XY，以及部署时必须提供的 `contact_force_n[2]`。Student 仅从 RGB 预测 XY，不预测接触。
+- PandaHand Direct-Action Student：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Direct-Action-Student-DR-v0` 复用同一 full-strength DR 环境和训练标签，但模型独立位于 `rma_direct_action_student/`。ResNet18 layer4 做 global average pooling 得512维视觉特征，与归一化 `proprio[15]`、`history[4]` 拼成531维，经 `531→512→256→128→64→4` ELU MLP 与 `tanh` 直接给出动作；运行时/导出/rollout 不接收或存储 cube XY、左右接触力，这些张量仅由训练端冻结 Teacher 使用以构造动作标签。新 artifact kind/version fail-closed，不能加载原四输入 XY Student。
 - Archived PandaHand RMA v5 replay：`TacEx-Sim2Real-Cube-Real-Alignment-RMA-Legacy-Student-Heatmap-DR-v0` 仅供采集旧 `tacex_rma_student` v5 / model v3 artifact；它保留 RGB 预测 XYZ 和左右接触概率的 30 维 Actor，不能用于训练或与当前 XY/force v2 artifact 混用。
 - `train_rma_student.py` 冻结 Teacher Actor，并训练 spatial-softmax XY 分支；Student 与 Teacher 均在 Actor 内将左右接触力以每侧 `>=1 N` 二值化，双侧为真时才认为 grasped。接触 BCE 已移除，保留动作 MSE 与动作平滑约束。
 - `TacEx-Sim2Real-Cube-Real-Alignment-RMA-Student-DR-v0` 是独立的 Student-only profile：复用通用 DR 的相机外参、GPU 内参 warp、颜色/模糊/噪声、板/背景和 DomeLight 扰动，但 `dr_curriculum_enabled=false`，因此从第一个 update 起始终为 full scale。它不改变 Teacher、接触标签、物理、奖励、动作或部署 TorchScript 输入；Student artifact 会记录 Clean 或 DR task，resume 只能在同一 profile 内进行。

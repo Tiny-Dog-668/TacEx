@@ -271,6 +271,13 @@
 - 兼容性：RMA manifest 的 environment contract 增加 `robot_profile`、`gelsight_enabled`、sensor names/prims、contact filter 和 `gelsight_actor_observation`。GelSight contact filter 进入当前 v10 Teacher manifest；v9 及更早 Teacher manifest 以 unsupported version 清晰拒绝。GelSight Teacher 与旧 PandaHand Student、旧 Teacher 与 GelSight Student 均会 fail closed。
 - 边界：GelSight 触觉只用于 Student contact adaptation head，不改变冻结 Actor Core 或 Teacher 输入。FK 指尖中心仍沿用 PandaHand RMA 契约，GelSight gelpad 接触中心的 sim2real 偏移需后续重新标定。
 
+### DEC-036 — PandaHand RMA Direct-Action Student 不使用运行时接触力或显式位置
+
+- 状态：已采用；需要重新蒸馏和验证
+- 背景：真机无法稳定提供与仿真 `rma_contact_force[2]` 同语义的双侧接触力；RGB-to-XY 中间任务也会把定位误差硬编码进 Teacher Actor 调用。
+- 决策：新增独立 Direct-Action Student，直接以 `RGB[224,224,3] + proprio[15] + action_history[4]` 输出4维动作；Teacher 保留 cube XY/双侧力作为仅训练期 privileged action target，绝不作为部署模型参数或输入。
+- 影响：不改变 RMA Teacher、4维动作尺度、奖励或 done；checkpoint/export/rollout 使用独立 fail-closed kind，旧 XY/force Student 只能作视觉 encoder 初始化，不能继续训练或部署为新 Student。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑
