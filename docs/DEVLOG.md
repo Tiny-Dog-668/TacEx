@@ -10,6 +10,14 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-09 CST — 按真机实测校正 Real-Alignment 背景板黑电平
+
+- 类型：Real-Alignment Clean/DR 场景外观常量与视觉 DR 范围
+- 修改：`_CLEAN_BACKDROP_COLOR` 由 0.004 降至 0.0009 线性反照率，`backdrop_color_min/max` 按原 0.5x..2x 跨度重新居中为 0.00045/0.0018；`wrist_gamma_range` 由 (0.92, 1.08) 放宽回父类默认 (0.85, 1.20)。依据是 224x224 策略输入的逐像素时间 10 分位对比：背景板真机中位 3.82 DN、仿真 15.69 DN（线性差 4.4 倍），而地板真机 10.46 / 仿真 12.17 DN 已对齐，故 `_CLEAN_PLATE_COLOR` 不动。
+- 兼容性：不涉及观测 key、动作维度、奖励、done 或 task 注册；`rma_artifacts._env_contract` 不含材质与视觉 DR 参数，旧 Teacher manifest 与 Student checkpoint 仍可加载。但 Clean 与 DR 两条 task 的渲染分布均改变，要用上此修正需重训。
+- 验证情况：已执行改动文件 `compileall` 与离线数值验算（新反照率预测背景 3.75 DN，对应真机 3.82 DN；gamma 跨度对应背景 1.6..7.1 DN、机械臂亮区 172..193 DN）。**未执行**定向 pytest 与 Isaac smoke：本机无 Isaac Lab 安装与 `isaaclab_2.1.1` conda 环境。渲染实测值待在训练机确认。
+- 遗留：0.0009 是把 Franka 手部指示灯烘焙进中性反照率的过渡值。真机幕布分通道为红 1.0 / 绿 6.0 / 蓝 0.0 DN，环境光单独只贡献约 0.5 DN，其余为随夹爪移动的绿光泼洒。该 LED 一旦建模为真实光源，须在同一次改动中把反照率降到约 0.00012，否则两份贡献叠加。
+
 ### 2026-08-08 CST — PandaHand RMA 改为 XY 视觉定位与 1 N 双侧力抓取
 
 - 类型：RMA Teacher/Student 观测、奖励、蒸馏与部署契约
