@@ -10,13 +10,43 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
-### 2026-08-09 CST — 按真机实测校正 Real-Alignment 背景板黑电平
+### 2026-08-09 CST — 导出 X040-Wide Student step 10000 TorchScript
 
-- 类型：Real-Alignment Clean/DR 场景外观常量与视觉 DR 范围
-- 修改：`_CLEAN_BACKDROP_COLOR` 由 0.004 降至 0.0009 线性反照率，`backdrop_color_min/max` 按原 0.5x..2x 跨度重新居中为 0.00045/0.0018；`wrist_gamma_range` 由 (0.92, 1.08) 放宽回父类默认 (0.85, 1.20)。依据是 224x224 策略输入的逐像素时间 10 分位对比：背景板真机中位 3.82 DN、仿真 15.69 DN（线性差 4.4 倍），而地板真机 10.46 / 仿真 12.17 DN 已对齐，故 `_CLEAN_PLATE_COLOR` 不动。
-- 兼容性：不涉及观测 key、动作维度、奖励、done 或 task 注册；`rma_artifacts._env_contract` 不含材质与视觉 DR 参数，旧 Teacher manifest 与 Student checkpoint 仍可加载。但 Clean 与 DR 两条 task 的渲染分布均改变，要用上此修正需重训。
-- 验证情况：已执行改动文件 `compileall` 与离线数值验算（新反照率预测背景 3.75 DN，对应真机 3.82 DN；gamma 跨度对应背景 1.6..7.1 DN、机械臂亮区 172..193 DN）。**未执行**定向 pytest 与 Isaac smoke：本机无 Isaac Lab 安装与 `isaaclab_2.1.1` conda 环境。渲染实测值待在训练机确认。
-- 遗留：0.0009 是把 Franka 手部指示灯烘焙进中性反照率的过渡值。真机幕布分通道为红 1.0 / 绿 6.0 / 蓝 0.0 DN，环境光单独只贡献约 0.5 DN，其余为随夹爪移动的绿光泼洒。该 LED 一旦建模为真实光源，须在同一次改动中把反照率降到约 0.00012，否则两份贡献叠加。
+- 产物：从 `2026-08-09_20-37-53_distillation/checkpoints/latest.pt` 导出 `checkpoints/exported/rma_x040_wide_student_latest.pt`（47,301,020 bytes）及同名 JSON provenance。
+- 契约：部署输入严格为 `wrist_rgb[224,224,3] + proprio[15] + history[4]`，输出 `action[4]`；训练期 cube XYZ/位置头不进入 runtime，源 checkpoint 与 artifact 契约不变。
+- 验证：script/reload 与 eager 最大误差均为 0；CPU batch 1/3 推理输出有限且位于 `[-1,1]`，TorchScript 与源 checkpoint SHA-256 均匹配元数据。
+
+### 2026-08-09 CST — X040-Wide Student 底座 LED HSV 随机化
+
+- 修改：底座 LED 改为每 env 独立材质，并在每个 episode 按 H=`105°–135°`、S=`0.75–1.0`、V=`0.35–1.0` 采样；episode 内稳定，腕部蓝灯不变。
+- 契约：仅改变 `wrist_rgb` 像素分布，不改 key/shape、动作、奖励或 done；Student artifact 升至 v3，v2 及更早 Student 拒绝加载并需重新蒸馏，Teacher/encoder checkpoint 不受影响。
+- 验证：全仓 `compileall` 与 X040-Wide 定向 pytest 已通过；真实 Teacher/encoder checkpoint 的 4-env、2-update smoke 成功，并确认产物为 v3 且记录完整 HSV 契约。
+
+### 2026-08-09 CST — 新增 X040-Wide XYZ/no-contact RMA profile
+
+- 类型：RMA task / Teacher-Student 蒸馏 / 安全奖励 / artifact 契约。
+- 修改：新增独立 X040-Wide Teacher 与 direct-action Student-DR：cube 标称 `(0.40,0,0.026)`、reset `x±8 cm/y±10 cm`、无位置 curriculum；视觉 DR 相机平移 `±1 cm`、旋转 `±2°`。Teacher 输入改为 proprio、历史动作、cube XYZ，不再输入接触力；Student 从 RGB ResNet GAP 特征预测 cube XYZ 并加入归一化 MSE。
+- 奖励/兼容性：TCP 低于 world z=`0.011 m` 每步额外 `-10`，不改 done 或动作尺度；接触仅保留为仿真奖励内部信号。profile 使用独立 task、manifest、checkpoint kind/version，旧 XY/force Teacher 与 Student 均拒绝加载，必须重训。
+- 验证：已运行全仓 `compileall`、diff 检查及 X040-Wide 定向 pytest；正式 100k Teacher/Student 训练与真机部署未运行。
+
+### 2026-08-09 CST — X040-Wide Student 底座状态条改为绿色
+
+- 修改：修正 Panda instanceable USD 层级，Student-DR 仅将底座 visual 分支去实例化，再把 `panda_link0/visuals/panda_link0/subset_5` 绑定为绿色自发光材质；腕部 LED、Teacher 与官方 USD 不变。
+- 契约：Student artifact 升至 v2，并记录该视觉覆写；旧 v1 Student 因 RGB 域变化被 fail-closed 拒绝，必须用绿色图像重新蒸馏。Teacher checkpoint 不受影响。
+- 验证：已运行全仓 `compileall`、X040-Wide 定向 pytest；带相机的 1-env reset/step 确认底座绿色且腕部仍蓝色，并以真实 Teacher/encoder checkpoint 完成 4-env、2-update 蒸馏 smoke。
+
+### 2026-08-09 CST — Direct-Action Student 回放支持 MP4
+
+- 类型：回放工具
+- 修改：`rma_direct_action_student/play.py` 新增单环境 `--video --video_length`，通过 Gym `RecordVideo` 写入第三视角 MP4；`--input_video` 则逐帧写出 Student 真正消费的 `wrist_rgb[224,224,3]`。
+- 验证情况：见本次任务汇报；不影响 Student 输入、动作、奖励、done 或 checkpoint 契约。
+
+### 2026-08-09 CST — 新增 PandaHand RMA Direct-Action Visual Student
+
+- 类型：RMA Student 模型 / 蒸馏 / 评估 / 导出 / rollout / task 注册
+- 修改：新增独立 direct-action Student，以现有 Heatmap-DR Student 的 ResNet18 encoder warm start；部署只接收 RGB、本体15维和历史动作4维，经 512+15+4 特征直接输出4维动作，不预测位置或接触。
+- 兼容性：Teacher 仍在仿真中用 cube XY 与双侧接触力生成动作标签，但这两个输入不进入 Student/runtime rollout；新增专用 artifact kind/version，旧 XY/force Student 不能 resume/export，Direct-Action Student 必须重新训练。奖励、done、物理和动作尺度不变。
+- 验证情况：见本次任务汇报；未把 smoke、正式训练、评估或真机部署结果写为已完成实验。
 
 ### 2026-08-08 CST — PandaHand RMA 改为 XY 视觉定位与 1 N 双侧力抓取
 
