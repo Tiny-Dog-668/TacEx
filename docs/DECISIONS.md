@@ -294,6 +294,49 @@
 - 决策：底座 LED 为每个 env 建立独立材质，并在每个 episode reset 时采样 H=`105°–135°`、S=`0.75–1.0`、V=`0.35–1.0`；episode 内固定，腕部蓝灯不参与该随机化。
 - 影响：仅改变 `wrist_rgb` 视觉分布，不改观测 key/shape、动作、奖励或 done；Student artifact 升至 v3，固定绿色的 v2 及更早 Student 均拒绝加载并需重新蒸馏，Teacher/encoder checkpoint 不受影响。
 
+### DEC-040 — 尺寸随机化使用预生成物理桶而非 reset 时缩放
+
+- 决策：X040-Wide Size-Buckets 每个 env 预生成 8 个等间隔 `4–6 cm` 方块，reset 只切换当前目标并停放其余方块；不在 simulation playing 状态修改刚体 scale，因为 Isaac Lab 2.1.1 明确不保证该操作的 PhysX 行为。
+- 接触：每个桶使用独立 cube→双指 one-to-many sensor，按当前桶恢复既有 `[left,right]` 内部接触奖励语义，避免 PhysX 不支持的多方块→多手指过滤。
+- 影响：新 task 显式过滤跨 env 碰撞并保留全局 ground；奖励权重、done/success、Actor/Student 输入与动作维度不变。每 env 刚体和 contact sensor 数量增加 8 倍，训练吞吐与可用 `num_envs` 需通过 smoke/benchmark 再确定。
+
+### DEC-041 — Size-Buckets 的 Franka 初始姿态使用小幅截断高斯随机化
+
+- 决策：仅 Size-Buckets Teacher/Student 的 7 个臂关节在每次 reset 叠加 `N(0, 0.01²) rad` 噪声并截断到 `±0.03 rad`，随后按软关节限位裁剪；夹爪保持真实对齐宽度，全部关节速度清零。
+- 影响：Teacher/Student 共享相同物理随机化，动作、观测 shape、奖励和 done 不变，但初始状态与 `proprio_obs` 分布改变；contract 使用 size-buckets v2 隔离旧 checkpoint，原 X040-Wide task 保持固定初始关节角。
+
+### DEC-042 — 非选中尺寸桶保留物理并停到所有相机后方
+
+- 背景：停车点对本环境相机位于后方，但叠加规则 env origin 后会落到相邻环境的 Franka 底座附近；碰撞过滤不隔离 TiledCamera，全可见 bucket 造成 env-index 相关的视觉泄漏。
+- 决策：停车区局部 X 动态取 env-origin 的 X 跨度、腕部相机局部 X 与相机 X 向 DR 上界之和，再加 `0.5 m` 裕量；因此最靠前 env 的停车方块也在最靠后相机之后。保留 8 个可见刚体及接触传感器，不修改 USD visibility 或 PhysX 属性。
+- 影响：当前选中方块的 Teacher 物理与 checkpoint 不变；Student `wrist_rgb` 分布修正，Size-Buckets Student artifact 必须记录全局安全停车契约，旧 smoke Student 拒绝加载并需重新蒸馏。
+
+### DEC-043 — 三帧 Student 使用共享 ResNet 并将拼接特征压回 512 维
+
+- 决策：新增独立 Size-Buckets Three-Frame Student；三个连续 30 Hz RGB frame 分别通过同一个共享 ResNet18，`3×512` 拼接后用 `1536→512` Linear+ELU 融合，而不是复制三套 ResNet 参数。reset 三槽均复制当前 episode 首帧，历史顺序固定 oldest→newest。
+- 影响：动作头输入仍为 531 维，Teacher、奖励、success/done 和物理不变；运行时 RGB 输入变为 `[3,224,224,3]`，新 artifact 与单帧 checkpoint fail-closed 隔离并必须重新蒸馏。共享 encoder 可继续从原 encoder artifact 初始化；三帧推理计算量约为单帧的三倍。
+- 验证：模型/契约/真实相机时序定向 pytest 3 项，2-env、2-update 蒸馏与保存后 2-step 回放，以及 RTX 3090 上 32-env/1-update smoke 通过；正式训练、真机时序和 TorchScript 导出未运行。
+
+### DEC-044 — Appearance 使用逐环境 PreviewSurface 与真实 done reset
+
+- 决策：每个 env 只拥有三个独立 PreviewSurface 材质，分别控制木板、背景和活动方块；移除 MDL/纹理流送/预热和 stage-global 光照随机化。局部 reset 只修改传入 env，未 done 的 env 不更新外观。
+- 影响：Appearance task 不再使用固定 150-step timeout，只有逐 env 机器人碰地会 done；success 仍非终止。观测/动作维度、奖励、坐标系和物理参数不变；旧 v1 Student 可显式 rollout，但视觉域和终止分布不同，指标不可直接比较，训练 resume 仍 fail closed。
+
+### DEC-045 — Appearance 的尺寸桶按 env 固定并等量分配
+
+- 决策：Appearance task 每个 env 只保留 `/cube` 一个动态刚体，尺寸在 PhysX 启动前按 `env_id % 8` 固定为 4–6 cm 八档；`num_envs` 必须是 8 的倍数，reset 只重置位姿而不改变尺寸。材质关系也在启动前绑定，运行中只改逐 env shader 颜色。
+- 影响：移除每 env 8 个 Cube/8 组传感器及停车区，恢复 GPU dynamics，并显式过滤跨 env 碰撞。动作、观测、奖励、success/done、坐标系不变；旧 Student 权重可 rollout，但尺寸的时间分布和物理后端不同，指标不可直接与原训练横比。
+
+### DEC-046 — Appearance 场景资产必须逐环境空间隔离
+
+- 决策：Appearance task 的 `env_spacing=3.5 m`，大于 3 m 木板最大水平尺寸并保留 0.5 m 间隙；每个 env 只允许一个木板和一个背景板。全局 GroundPlane 仅承担碰撞并强制隐藏，唯一可见地面是 env 自己的 `floor_panel`。
+- 影响：消除相邻 env 木板/背景板重叠和共享网格视觉泄漏；固定全局 DomeLight 仍共享但不随机化。相机视觉分布改变，旧 Student 仅用于 rollout，正式指标不可与旧布局直接比较。
+
+### DEC-047 — Appearance 保留统一 episode horizon，不使用独立相位
+
+- 决策：恢复配置已有的 5 s/150 policy-step 最长 episode；碰地是 `terminated`，到时是 `truncated`，success 继续只记录不终止。不随机化初始计时器或每 env horizon，因此同期启动且均未提前 done 的 env 会在上限自然同时 reset。
+- 影响：某个 env 若提前碰地，其计时器单独归零，之后 reset 自然异步；不再允许未触发物理失败的 episode 无限运行。Appearance profile 升至 v5，旧 Student 可 rollout但评测 done 分布不同。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

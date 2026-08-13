@@ -97,6 +97,10 @@ class _RMATerminalMixin:
 
     def _setup_scene(self) -> None:
         super()._setup_scene()
+        self._setup_rma_cube_contact_sensor()
+
+    def _setup_rma_cube_contact_sensor(self) -> None:
+        """Create the default one-cube/two-finger filtered contact sensor."""
         self.rma_cube_contact_sensor = ContactSensor(self.cfg.rma_cube_contact_sensor)
         self.scene.sensors["rma_cube_contact_sensor"] = self.rma_cube_contact_sensor
 
@@ -395,7 +399,12 @@ class Sim2RealCubeRealAlignmentRMAStudentEnv(
 
         obs.pop("wrist_resnet", None)
         obs["wrist_rgb"] = calibrated_rgb
-        obs["rma_cube_pos"] = self._cube.data.root_pos_w - self.scene.env_origins
+        cube_pos_w = self._cube.data.root_pos_w
+        env_origins = self.scene.env_origins.to(
+            device=cube_pos_w.device,
+            dtype=cube_pos_w.dtype,
+        )
+        obs["rma_cube_pos"] = cube_pos_w - env_origins
         return observations
 
 

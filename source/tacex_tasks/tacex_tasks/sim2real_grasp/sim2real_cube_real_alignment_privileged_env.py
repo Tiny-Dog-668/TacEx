@@ -73,9 +73,7 @@ class Sim2RealCubeRealAlignmentPrivilegedEnv(Sim2RealCubeRealAlignmentEnv):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        self._cube = RigidObject(self.cfg.cube)
-        self._cylinder = self._cube
-        self.scene.rigid_objects["cube"] = self._cube
+        self._setup_cube_target()
 
         self._plate = RigidObject(self.cfg.plate)
         self.scene.rigid_objects["plate"] = self._plate

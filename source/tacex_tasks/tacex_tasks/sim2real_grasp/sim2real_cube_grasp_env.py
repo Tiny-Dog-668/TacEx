@@ -208,7 +208,14 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         )
         cube_state[:, 3:7] = rand_quat
 
-        cube_state[:, :3] += self.scene.env_origins
+        # Input state/origins: [N,13] / [N,3]. With CPU PhysX dynamics,
+        # InteractiveScene may retain origins on CPU while state tensors stay
+        # on the configured CUDA policy device.
+        env_origins = self.scene.env_origins.to(
+            device=cube_state.device,
+            dtype=cube_state.dtype,
+        )
+        cube_state[:, :3] += env_origins
         self._cube.write_root_state_to_sim(cube_state, torch.arange(self.num_envs, device=self.device))
 
     def _compute_cube_upright_cos(self, cube_quat: torch.Tensor) -> torch.Tensor:
@@ -472,7 +479,12 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         )
         cube_state[:, 3:7] = rand_quat
 
-        cube_state[:, :3] += self.scene.env_origins[env_ids]
+        # Input state/origins: [K,13] / [K,3], aligned to the state device.
+        env_origins = self.scene.env_origins.to(
+            device=cube_state.device,
+            dtype=cube_state.dtype,
+        )
+        cube_state[:, :3] += env_origins[env_ids]
         self._cube.write_root_state_to_sim(cube_state, env_ids=env_ids)
 
         self._cylinder_spawn_height_per_env[env_ids] = cube_state[:, 2].clone()

@@ -795,14 +795,18 @@ class Sim2RealCubeRealAlignmentEnv(Sim2RealCubeGraspEnv):
         )
         self._desired_gripper_width[env_ids] = reset_width
 
+    def _setup_cube_target(self) -> None:
+        """Create the task target and expose the legacy single-object interface."""
+        self._cube = RigidObject(self.cfg.cube)
+        self._cylinder = self._cube
+        self.scene.rigid_objects["cube"] = self._cube
+
     def _setup_scene(self):
         """Set up the inherited cube task plus a per-environment visual backdrop."""
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        self._cube = RigidObject(self.cfg.cube)
-        self._cylinder = self._cube
-        self.scene.rigid_objects["cube"] = self._cube
+        self._setup_cube_target()
 
         self._plate = RigidObject(self.cfg.plate)
         self.scene.rigid_objects["plate"] = self._plate
@@ -926,7 +930,11 @@ class Sim2RealCubeRealAlignmentDREnv(Sim2RealCubeRealAlignmentEnv):
         nominal_quat = nominal_quat / torch.linalg.norm(nominal_quat).clamp(min=1e-9)
         self._dr_nominal_camera_pos = nominal_pos
         self._dr_nominal_camera_quat = nominal_quat
-        self._dr_camera_pos_w = nominal_pos.unsqueeze(0) + self.scene.env_origins
+        env_origins = self.scene.env_origins.to(
+            device=nominal_pos.device,
+            dtype=nominal_pos.dtype,
+        )
+        self._dr_camera_pos_w = nominal_pos.unsqueeze(0) + env_origins
         self._dr_camera_quat_w = nominal_quat.unsqueeze(0).repeat(self.num_envs, 1)
 
         self._dr_plate_colors = torch.tensor(
@@ -1056,7 +1064,11 @@ class Sim2RealCubeRealAlignmentDREnv(Sim2RealCubeRealAlignmentEnv):
         if not bool(self.cfg.camera_pose_randomization_enabled) or env_ids.numel() == 0:
             return
         count = int(env_ids.numel())
-        nominal_pos_w = self._dr_nominal_camera_pos.unsqueeze(0) + self.scene.env_origins[env_ids]
+        env_origins = self.scene.env_origins.to(
+            device=self._dr_nominal_camera_pos.device,
+            dtype=self._dr_nominal_camera_pos.dtype,
+        )
+        nominal_pos_w = self._dr_nominal_camera_pos.unsqueeze(0) + env_origins[env_ids]
         nominal_quat = self._dr_nominal_camera_quat.unsqueeze(0).repeat(count, 1)
         delta_rpy = self._dr_camera_delta_rpy_rad[env_ids]
         delta_quat = math_utils.quat_from_euler_xyz(

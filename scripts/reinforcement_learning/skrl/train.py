@@ -52,6 +52,15 @@ parser.add_argument(
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint to resume training.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument(
+    "--save_final_checkpoint",
+    action="store_true",
+    default=False,
+    help=(
+        "Save agent_<trainer_timesteps>.pt after training returns successfully, even when the "
+        "final timestep is not aligned with checkpoint_interval."
+    ),
+)
+parser.add_argument(
     "--save_start_frame",
     action="store_true",
     default=False,
@@ -164,7 +173,7 @@ SIM2REAL_VISION_ENCODER_TASKS = {
 }
 from tacex_tasks.sim2real_grasp.rma_artifacts import RMA_TEACHER_TASKS
 from tacex_tasks.sim2real_grasp.rma_xy_artifacts import RMA_XY_TEACHER_TASK
-from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import RMA_X040_WIDE_TEACHER_TASK
+from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import RMA_X040_WIDE_TEACHER_TASKS
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -364,7 +373,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task == RMA_X040_WIDE_TEACHER_TASK and (
+    if args_cli.task in RMA_X040_WIDE_TEACHER_TASKS and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import (
@@ -373,9 +382,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             write_teacher_manifest,
         )
         if resume_path is not None:
-            source_manifest = load_teacher_manifest(resume_path)
+            source_manifest = load_teacher_manifest(resume_path, expected_task=args_cli.task)
             validate_live_teacher_contract(env.unwrapped.cfg, source_manifest)
-        manifest_path = write_teacher_manifest(env.unwrapped, os.path.join(log_dir, "params"), agent_cfg)
+        manifest_path = write_teacher_manifest(
+            env.unwrapped,
+            os.path.join(log_dir, "params"),
+            agent_cfg,
+            task=args_cli.task,
+        )
         print(f"[INFO] Saved X040-Wide RMA teacher manifest: {manifest_path}")
     elif args_cli.task == RMA_XY_TEACHER_TASK and (
         not args_cli.distributed or app_launcher.local_rank == 0
@@ -517,6 +531,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     agent_class_spec = str(agent_cfg.get("agent", {}).get("class", ""))
     use_custom_agent_class = ":" in agent_class_spec
+    trained_agent = None
 
     if not USE_CUSTOM_POLICY and not use_custom_agent_class:
         # configure and instantiate the skrl runner
@@ -545,6 +560,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         # run training
         runner.run()
+        trained_agent = runner.agent
     else:
         if use_shared_latent:
             print("[INFO] Using custom shared-latent policy with PPO (manual agent/trainer path)")
@@ -620,6 +636,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
             trainer = SequentialTrainer(cfg=agent_cfg["trainer"], env=env, agents=agent)
             trainer.train()
+            trained_agent = agent
         elif use_custom_agent_class:
             print(f"[INFO] Using custom agent class '{agent_class_spec}' (manual agent/trainer path)")
 
@@ -726,6 +743,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 trainer_cls = SequentialTrainer
             trainer = trainer_cls(cfg=trainer_cfg_local, env=env, agents=agent)
             trainer.train()
+            trained_agent = agent
         else:
             print("[INFO] Using custom CylinderFusionLSTM policy with PPO_RNN (manual agent/trainer path)")
 
@@ -815,6 +833,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
             trainer = SequentialTrainer(cfg=agent_cfg["trainer"], env=env, agents=agent)
             trainer.train()
+            trained_agent = agent
+
+    if args_cli.save_final_checkpoint and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        if trained_agent is None:
+            raise RuntimeError("Training completed without an agent available for final checkpointing")
+        final_timestep = int(agent_cfg["trainer"]["timesteps"])
+        final_checkpoint = Path(log_dir) / "checkpoints" / f"agent_{final_timestep}.pt"
+        final_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        trained_agent.save(str(final_checkpoint))
+        print(f"[INFO] Saved explicit final checkpoint: {final_checkpoint}")
 
     # close the simulator
     env.close()

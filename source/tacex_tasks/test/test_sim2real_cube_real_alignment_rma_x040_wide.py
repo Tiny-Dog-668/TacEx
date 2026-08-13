@@ -21,6 +21,8 @@ import tacex_tasks  # noqa: E402,F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402
 from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import (  # noqa: E402
     RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK,
     RMA_X040_WIDE_STUDENT_KIND,
     RMA_X040_WIDE_STUDENT_VERSION,
     direct_action_input_contract,
@@ -88,6 +90,11 @@ def test_x040_wide_artifact_rejects_old_direct_student(tmp_path):
     }
     torch.save(payload, old)
     assert load_student_checkpoint(old)["task"] == RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK
+    payload["task"] = RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK
+    torch.save(payload, old)
+    with pytest.raises(RuntimeError, match="Size-Buckets Student rendering contract mismatch"):
+        load_student_checkpoint(old)
+    payload["task"] = RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK
     payload["version"] = RMA_X040_WIDE_STUDENT_VERSION - 1
     torch.save(payload, old)
     with pytest.raises(RuntimeError, match="Unsupported X040-Wide direct-action Student version"):
@@ -123,6 +130,60 @@ def test_x040_wide_task_configs_isolate_contact_and_set_requested_ranges():
         "hue_deg_range": [105.0, 135.0],
         "saturation_range": [0.75, 1.0],
         "value_range": [0.35, 1.0],
+    }
+
+
+def test_x040_wide_size_bucket_configs_are_separate_and_contract_bound():
+    assert gym.spec(RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK) is not None
+    assert gym.spec(RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK) is not None
+    teacher = parse_env_cfg(
+        RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK,
+        device="cuda:0",
+        num_envs=1,
+    )
+    student = parse_env_cfg(
+        RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK,
+        device="cuda:0",
+        num_envs=1,
+    )
+    expected_sizes = np.linspace(0.04, 0.06, 8)
+    for cfg in (teacher, student):
+        assert cfg.cube_size_buckets_m == pytest.approx(expected_sizes)
+        assert cfg.cube_size_sampling == "uniform_discrete_per_environment_per_reset"
+        assert cfg.cube_bucket_parking_strategy == "beyond_positive_x_env_extent_behind_all_cameras"
+        assert cfg.cube_bucket_parking_camera_margin_m == pytest.approx(0.5)
+        assert cfg.arm_joint_reset_noise_distribution == "normal_clipped_per_environment_per_reset"
+        assert cfg.arm_joint_reset_noise_std_rad == pytest.approx(0.01)
+        assert cfg.arm_joint_reset_noise_clip_rad == pytest.approx(0.03)
+        assert len(cfg.cube_bucket_parking_xy_m) == 8
+        assert cfg.rma_cube_contact_sensor.filter_prim_paths_expr == [
+            "/World/envs/env_.*/Robot/panda_leftfinger",
+            "/World/envs/env_.*/Robot/panda_rightfinger",
+        ]
+        assert cfg.action_space == 4
+        assert cfg.rma_actor_feature_dim == 28
+        assert "rma_contact_state" not in cfg.observation_space
+    contract = student_environment_contract(student)
+    assert contract["profile"] == "rma_x040_wide_xyz_no_contact_size_buckets_v2"
+    assert contract["cube_size_buckets_m"] == pytest.approx(expected_sizes)
+    assert contract["cube_center_z_buckets_root_m"] == pytest.approx(
+        0.001 + 0.5 * expected_sizes
+    )
+    assert contract["arm_joint_reset_noise"] == {
+        "joint_count": 7,
+        "distribution": "normal_clipped_per_environment_per_reset",
+        "mean_rad": 0.0,
+        "std_rad": 0.01,
+        "clip_abs_rad": 0.03,
+        "finger_joint_noise": "none",
+        "joint_velocity_reset_rad_s": 0.0,
+    }
+    assert contract["cube_bucket_rendering"] == {
+        "selection": "selected_bucket_per_environment_per_reset",
+        "inactive_bucket_exclusion": "parked_behind_all_cameras_using_env_x_extent",
+        "usd_visibility_mutation": "none",
+        "parking_strategy": "beyond_positive_x_env_extent_behind_all_cameras",
+        "camera_margin_m": 0.5,
     }
 
 
