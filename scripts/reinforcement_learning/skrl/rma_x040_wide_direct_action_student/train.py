@@ -55,6 +55,9 @@ from torch.utils.tensorboard import SummaryWriter
 import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import (
     RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_STUDENT_TASKS,
+    RMA_X040_WIDE_TEACHER_BY_STUDENT_TASK,
     load_encoder_initialization_checkpoint,
     load_student_checkpoint,
     load_student_model_state,
@@ -87,21 +90,29 @@ def _atomic_json(value: dict, path: Path) -> None:
 
 
 def main() -> None:
-    if args.task != RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK:
-        raise ValueError(f"This trainer only supports {RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK}")
+    if args.task not in RMA_X040_WIDE_STUDENT_TASKS:
+        raise ValueError(f"This trainer only supports {RMA_X040_WIDE_STUDENT_TASKS}")
     if min(args.num_envs, args.timesteps, args.log_interval, args.checkpoint_interval) <= 0:
         raise ValueError("num_envs, timesteps, log_interval and checkpoint_interval must be positive")
     random.seed(args.seed); torch.manual_seed(args.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
     teacher_checkpoint = Path(args.teacher_checkpoint).expanduser().resolve()
     encoder_checkpoint = Path(args.encoder_init_checkpoint).expanduser().resolve()
-    teacher_manifest = load_teacher_manifest(teacher_checkpoint)
+    expected_teacher_task = RMA_X040_WIDE_TEACHER_BY_STUDENT_TASK[args.task]
+    teacher_manifest = load_teacher_manifest(
+        teacher_checkpoint,
+        expected_task=expected_teacher_task,
+    )
     encoder_state, encoder_payload = load_encoder_initialization_checkpoint(encoder_checkpoint)
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.seed = args.seed
     validate_live_teacher_contract(env_cfg, teacher_manifest)
     run_dir = Path(args.log_dir).expanduser().resolve() if args.log_dir else (
-        Path("logs/skrl/sim2real_cube_real_alignment_rma_x040_wide_direct_action_student").resolve() /
+        Path(
+            "logs/skrl/sim2real_cube_real_alignment_rma_x040_wide_size_buckets_direct_action_student"
+            if args.task == RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK
+            else "logs/skrl/sim2real_cube_real_alignment_rma_x040_wide_direct_action_student"
+        ).resolve() /
         f"{datetime.now():%Y-%m-%d_%H-%M-%S}_distillation"
     )
     _atomic_json({**vars(args), "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
@@ -128,7 +139,12 @@ def main() -> None:
                         "backbone_trainable": "resnet18_layer3_layer4", "batch_norm": "eval", "weight_decay": args.weight_decay, "grad_norm_clip": args.grad_norm_clip}
     start_step = 0
     if args.resume:
-        payload = load_student_checkpoint(args.resume, device=device, expected_teacher_checkpoint=teacher_checkpoint)
+        payload = load_student_checkpoint(
+            args.resume,
+            device=device,
+            expected_teacher_checkpoint=teacher_checkpoint,
+            expected_task=args.task,
+        )
         if payload.get("encoder_init_checkpoint_sha256") != sha256_file(encoder_checkpoint) or payload.get("loss") != loss_contract or payload.get("optimizer_config") != optimizer_config:
             raise RuntimeError("Resume checkpoint provenance, loss, or optimizer differs")
         load_student_model_state(student, payload["model"]); optimizer.load_state_dict(payload["optimizer"]); start_step = int(payload["global_step"])
@@ -156,6 +172,7 @@ def main() -> None:
             writer.add_scalar("Optimization/grad_norm", float(grad_norm), step); writer.add_scalar("Reward/mean_step", rewards.mean().item(), step)
             if step % args.log_interval == 0 or step == args.timesteps:
                 stats = base_env._episode_success_statistics()
+                writer.add_scalar("Performance/recent_success_rate", stats["window_rate"].item(), step)
                 print(f"[X040-Wide Student] update={step:,}/{args.timesteps:,} loss(action/smooth/pos)={action_loss.item():.5f}/{smoothness_loss.item():.5f}/{position_loss.item():.5f} pos_rmse_m={position_rmse_m.item():.5f} success={stats['cumulative_rate'].item():.3f} elapsed={time.perf_counter()-started:.1f}s", flush=True)
             if step % args.checkpoint_interval == 0 or step == args.timesteps:
                 payload = make_student_payload(model=student, optimizer=optimizer, global_step=step, task=args.task,

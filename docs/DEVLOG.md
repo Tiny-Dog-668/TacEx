@@ -10,6 +10,96 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-13 CST — 导出三份 X040-Wide Student step 100000 TorchScript
+
+- 产物：分别从三个 run 的不可变 `student_0100000.pt` 导出单帧、三帧 Appearance 和普通三帧 TorchScript/JSON 到各自 `checkpoints/exported/`；第三个实验族唯一 run 为 `2026-08-12_02-09-40_distillation`。
+- 契约：单帧输入为 `RGB[224,224,3]+proprio[15]+history[4]`，两份三帧输入为 `RGB history[3,224,224,3]+proprio[15]+history[4]`，输出均为 `action[4]`；旧 Appearance v1 产物在 JSON 标记为仅评测兼容，无需重训但不可视为当前 v5 视觉分布的正式指标。
+- 验证：三份源 checkpoint 与 `latest.pt` 模型哈希一致；script/reload 最大误差均为 0，JSON/source/artifact SHA-256 复核及 CPU batch 1/3 推理通过；全仓 `compileall` 与三帧 artifact/Appearance 兼容定向 pytest 2 项通过。
+
+### 2026-08-13 CST — Appearance 改为逐环境固定单 Cube 分桶
+
+- 修改：Appearance task 每个 env 只创建一个 Cube，按 `env_id % 8` 等量绑定 4–6 cm 尺寸且 reset 不换桶；环境数须为 8 的倍数，三帧 train/play 默认改为 8 env，跨 env 碰撞显式隔离，并恢复 PhysX GPU dynamics。
+- 契约：动作/观测 key 与维度、奖励、success/done、坐标系不变；物体数量、尺寸时序分布和物理解算后端改变。旧 Appearance v1 Student 可仅用于 rollout，正式新分布评测/训练应生成新 checkpoint，resume 仍 fail closed。
+- 验证：全仓 `compileall`、8-env 定向 pytest（USD/物理尺寸、GPU dynamics、局部 reset/材质隔离）及旧 checkpoint 的 16-env/170-step headless 审计通过（总墙钟 23.75 s，含 Kit/场景启动）；3000-step GUI 与真机评估未运行。
+
+### 2026-08-13 CST — Appearance 木板与背景板空间隔离
+
+- 修改：Appearance 专用 env spacing 从 1.5 m 增至 3.5 m，使 3×3 m 木板间保留至少 0.5 m 间隙；全局 GroundPlane 保留碰撞但强制不可见，消除相邻板重叠和共享网格背景。
+- 契约：每 env 精确拥有一个 `floor_panel` 和一个 `real_alignment_backdrop`，启动时对尺寸/间距/全局地面可见性 fail closed；动作、观测维度、奖励、done/success、Cube 分桶和坐标系不变，Appearance profile 升至 v4。
+- 验证：8-env 实际 USD 路径、origin 非重叠、GroundPlane visibility、材质/reset 隔离定向 pytest 通过；GUI 俯视人工检查和 3000-step 评测未运行。
+
+### 2026-08-13 CST — 恢复 Appearance episode 最长时间
+
+- 修改：恢复既有 `episode_length_s=5.0`（30 Hz 下 150 policy steps）上限；真实机器人碰地返回 `terminated`，达到上限独立返回 `truncated`，两者都会只 reset 对应 env，success 仍非终止。
+- 契约：Appearance profile 升至 v5；观测、动作、奖励、Cube 分桶和坐标系不变，done/外观刷新分布改变。旧 v1 Student 仍仅允许 rollout，正式指标需重新测量。
+- 验证：8-env 定向 pytest 强制仅 env 0 timeout，确认只重置其计时器/颜色；旧 checkpoint 的 16-env/170-step 审计在 step 149 达到现有 horizon 并重置全部同期 env。3000-step 与真机评估未运行。
+
+### 2026-08-13 CST — 重建逐环境独立 Appearance task
+
+- 修改：新增独立 PreviewSurface 实现，每个 env 只保留木板/背景/方块三个独立材质；移除 MDL、纹理流送、预热和共享光照随机化，局部 reset 不触碰其他 env。
+- 契约：profile 升至 v3并禁用固定 150-step timeout，只保留逐 env 碰地 done；动作 `[4]`、三帧观测维度、奖励、success 和物理不变。旧 v1 Student 可显式 rollout，视觉/终止指标不可与旧实验直接横比，训练 resume 不兼容。
+- 验证：全仓 `compileall`、Appearance 契约/实际 USD 绑定/局部 reset 隔离/RGB 变化定向 pytest 通过；16-env/170-step GUI 审计跨过原 step 149 边界，未发生 reset 或材质变化。3000-step 与真机评估未运行。
+
+### 2026-08-13 CST — Size-Buckets 禁用 PhysX GPU dynamics 以兼容 reset
+
+- 修改：在生成八个动态 Cube 前关闭本 task 的 PhysX GPU dynamics，消除 Direct GPU API 场景禁止的 `PxRigidDynamic::set*Velocity` reset 调用；Appearance-DR GUI 回放默认不再无限等待纹理流送，CUDA 策略推理和相机渲染保持启用。
+- 契约：active/parked Cube、尺寸采样、观测、动作、奖励、success/done 与 checkpoint/manifest 格式不变；回放首帧可能尚未完成纹理流送，刚体求解后端改变，旧 checkpoint 可加载但正式评测指标需重新测量。
+- 验证：全仓 `compileall`、静态建场景顺序检查、4-env Size-Buckets 定向 pytest 已运行；16-env/3000-step Student checkpoint 回放待在目标 GPU 主机复验无 Direct GPU 报错且出现 rollout 进度日志。
+
+### 2026-08-12 CST — 新增 X040 三帧外观随机化环境
+
+- 修改：新增独立 Appearance-DR task；木板、背景和当前活动方块在每个 env reset 时从受控 PreviewSurface/MDL 池独立采样并保持整回合，MDL 缺失时 fail closed；训练、回放与三帧 TorchScript 导出链路同步支持新 task。
+- 契约：三帧 RGB、proprio 15 维、history/action 4 维、Teacher、奖励、success/done 与物理不变；旧三帧 checkpoint 继续只加载旧 task，禁止跨 task resume，新外观 Student 复用 Teacher/encoder 初始化但需重新训练。
+- 验证：全仓 `compileall`、X040/Size-Buckets/三帧/DR 定向 pytest、全部材质实际 USD 绑定与 RGB 变化、4-env/2-step 训练、checkpoint reload、1-env/2-step 回放和 batch 1/2 TorchScript script/reload smoke 通过；正式训练与真机评估未运行。
+
+### 2026-08-11 CST — 新增训练进程完成后串行启动器
+
+- 修改：新增通用 `run_after_process.py`，绑定外部 PID/start-time 并轮询；仅在进程退出且指定最终文件存在时，以无 shell 的参数列表启动下一条命令。
+- 契约：不停止或修改被等待进程，不改变训练 task/超参/checkpoint；缺少最终文件、PID 命令不匹配或调度器被中断时 fail closed，不启动后续训练。
+- 验证：脚本 `compileall`、相关 diff 检查和离线成功/缺失完成文件路径 pytest 2 项通过；未运行实际长训练串联。
+
+### 2026-08-11 CST — 新增 Size-Buckets 三帧视觉 Student
+
+- 修改：新增独立三帧 Student task、reset-safe 30 Hz RGB history、共享 ResNet `3×512→512` 融合模型、fail-closed artifact 及训练/评测入口；单帧 task 保持不变。
+- 契约：运行时视觉输入变为 `[3,224,224,3]` oldest→newest，动作头仍为 531 维且动作 `[4]`、Teacher、奖励与 done 不变；单帧 checkpoint 不兼容，新 Student 需重新蒸馏。
+- 验证：相关 `compileall`/diff 检查、定向 pytest 3 项、2-env/2-update 蒸馏与保存后 2-step 回放、RTX 3090 的 32-env/1-update smoke 通过；正式训练、真机时序与 TorchScript 导出未运行。
+
+### 2026-08-11 CST — X040-Wide Student 记录最近窗口成功率
+
+- 修改：蒸馏训练每个日志周期将最近 200 个 policy step 内已完成 episode 的成功率写入 TensorBoard `Performance/recent_success_rate`。
+- 契约：仅增加训练指标，不改变成功判定、观测、动作、奖励、done、张量维度或 checkpoint 格式；旧 checkpoint 兼容且无需重训。
+- 验证：改动脚本 `compileall` 与相关文件 `git diff --check` 通过；仅增加标量日志，未运行 Isaac 训练 smoke。
+
+### 2026-08-11 CST — 新增 Size-Buckets Teacher→Student 自动训练流水线
+
+- 修改：新增独立串联脚本；Teacher 入口按需显式保存 `agent_<trainer_timesteps>.pt`，流水线确认进程成功、唯一新 run、manifest 和最终文件后，才选择 `best/final` checkpoint 启动 Student；视觉 encoder checkpoint 必须显式传入。
+- 契约：复用现有 Size-Buckets task、训练器和 artifact 校验，不改观测、动作、奖励、done、张量维度或 checkpoint 格式；旧 checkpoint 兼容且不要求重训。
+- 验证：全仓 `compileall`、`git diff --check`、离线流水线 pytest 4 项通过；2-env Teacher 1 次 PPO（128 步）→2-env Student 2 update 端到端 smoke 自动切换并生成两个最终 checkpoint。正式训练未运行。
+
+### 2026-08-11 CST — 将 Size-Buckets 停车位移到所有腕部相机后方
+
+- 修改：停车区局部 X 根据 env-origin 的 X 跨度、腕部相机 X 上界和 `0.5 m` 安全裕量动态计算，使所有非选中 bucket 位于全体相机后方；不修改 USD visibility 或 PhysX 属性。
+- 契约：仅修正 Student `wrist_rgb` 分布，动作、观测 shape、选中方块物理、奖励与 done 不变；Teacher checkpoint 兼容，旧 Size-Buckets Student smoke 缺少安全停车契约，需重新蒸馏。
+- 验证：全仓 `compileall`、`git diff --check`、artifact/config 定向 pytest、4-env Student parking/reset/step pytest 与 RGB 前后对比、2-env Teacher parking/reset/step smoke 已通过；正式 Student 训练和真机评估未运行。
+
+### 2026-08-11 CST — Size-Buckets reset 加入 Franka 初始关节角噪声
+
+- 修改：仅 Size-Buckets Teacher/Student 在每次 reset 为 7 个臂关节采样 `N(0, 0.01²) rad` 并截断至 `±0.03 rad`；夹爪角与全部关节速度仍按标定默认值/零值重置。
+- 契约：动作、观测 key/shape、奖励、success/done 不变，但初始物理状态与 `proprio_obs` 分布改变；Size-Buckets contract 升为 v2，旧 smoke Teacher/Student checkpoint 不兼容并需重训/重新蒸馏，原 X040-Wide task 不受影响。
+- 验证：全仓 `compileall`、`git diff --check`、Size-Buckets contract 定向 pytest、4-env Student reset/step pytest 与 2-env Teacher reset/step smoke 已通过；正式训练和真机评估未运行。
+
+### 2026-08-10 CST — 新增 X040-Wide 4–6 cm 八尺寸桶 Teacher/Student
+
+- 修改：新增独立 Teacher 与 Student-DR task；每个环境预生成 8 个等间隔 `4–6 cm` 物理方块，reset 均匀选择一个目标，其余方块停放在相机后方；8 个 one-cube/two-finger sensor 只汇总当前桶接触力。
+- 契约：动作 `[4]`、Teacher 28 维输入、Student 三运行时输入、奖励权重和 done/success 不变；cube XYZ 的 Z 随尺寸为 `0.021–0.031 m`。新 task/manifest 与旧 checkpoint fail-closed 隔离，Teacher 需重训，Student 需从新 Teacher 重新蒸馏。
+- 验证：全仓 Python `compileall`、`git diff --check`、4-env Student 定向 pytest、2-env Teacher reset/step、64-env/1-iteration Teacher PPO+manifest，以及 4-env/2-update Student 蒸馏与 TorchScript 导出 smoke 已通过；正式 100k Teacher/Student 训练和真机评估未运行。
+
+### 2026-08-09 CST — 重新导出 X040-Wide Student step 30000 TorchScript
+
+- 产物：从不可变 `student_0030000.pt` 导出 `checkpoints/exported/rma_x040_wide_student_0030000.pt`（47,301,257 bytes）及同名 JSON；训练仍在继续，未以可变 `latest.pt` 作为最终 provenance。
+- 契约：部署输入仍为 `wrist_rgb[224,224,3] + proprio[15] + history[4]`，输出 `action[4]`；观测、动作、奖励、done 及 Student v3 契约不变。
+- 验证：script/reload 与 eager 最大误差均为 0；CPU batch 1/3 推理通过，TorchScript SHA-256=`79aea3ec...b23538`，源 checkpoint 与产物 hash 均匹配 JSON。
+
 ### 2026-08-09 CST — 导出 X040-Wide Student step 10000 TorchScript
 
 - 产物：从 `2026-08-09_20-37-53_distillation/checkpoints/latest.pt` 导出 `checkpoints/exported/rma_x040_wide_student_latest.pt`（47,301,020 bytes）及同名 JSON provenance。

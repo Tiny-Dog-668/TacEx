@@ -26,6 +26,24 @@ from .rma_x040_wide_models import (
 
 RMA_X040_WIDE_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-X040-Wide-Teacher-v0"
 RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-X040-Wide-Direct-Action-Student-DR-v0"
+RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-X040-Wide-Size-Buckets-Teacher-v0"
+)
+RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK = (
+    "TacEx-Sim2Real-Cube-Real-Alignment-RMA-X040-Wide-Size-Buckets-Direct-Action-Student-DR-v0"
+)
+RMA_X040_WIDE_TEACHER_TASKS = (
+    RMA_X040_WIDE_TEACHER_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK,
+)
+RMA_X040_WIDE_STUDENT_TASKS = (
+    RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK,
+)
+RMA_X040_WIDE_TEACHER_BY_STUDENT_TASK = {
+    RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK: RMA_X040_WIDE_TEACHER_TASK,
+    RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK: RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK,
+}
 RMA_X040_WIDE_MANIFEST_FILENAME = "rma_x040_wide_manifest.json"
 RMA_X040_WIDE_MANIFEST_VERSION = 1
 RMA_X040_WIDE_STUDENT_KIND = "tacex_rma_x040_wide_direct_action_student"
@@ -33,6 +51,18 @@ RMA_X040_WIDE_STUDENT_KIND = "tacex_rma_x040_wide_direct_action_student"
 # per-environment, per-episode HSV randomization. Older fixed-color policies
 # must not be resumed or deployed in the new visual domain.
 RMA_X040_WIDE_STUDENT_VERSION = 3
+_SIZE_BUCKET_RENDERING_CONTRACT = {
+    "selection": "selected_bucket_per_environment_per_reset",
+    "inactive_bucket_exclusion": "parked_behind_all_cameras_using_env_x_extent",
+    "usd_visibility_mutation": "none",
+}
+_STATIC_SIZE_BUCKET_RENDERING_CONTRACT = {
+    "selection": "fixed_bucket_by_environment",
+    "assignment": "env_id_mod_bucket_count",
+    "object_count_per_environment": 1,
+    "requires_num_envs_multiple_of_bucket_count": True,
+    "usd_visibility_mutation": "none",
+}
 
 
 def _checkpoint_run_dir(checkpoint: str | Path) -> Path:
@@ -51,7 +81,7 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 def _shared_environment_contract(cfg: Any) -> dict[str, Any]:
     hand = cfg.robot.actuators["panda_hand"]
-    return {
+    contract = {
         "profile": "rma_x040_wide_xyz_no_contact_v1",
         "robot_profile": "franka_panda_hand",
         "action_dim": int(cfg.action_space),
@@ -70,6 +100,39 @@ def _shared_environment_contract(cfg: Any) -> dict[str, Any]:
         "teacher_actor_feature_dim": int(cfg.rma_actor_feature_dim),
         "teacher_contact_input": "none",
     }
+    if hasattr(cfg, "cube_size_buckets_m"):
+        sizes = [float(value) for value in cfg.cube_size_buckets_m]
+        fixed_assignment = hasattr(cfg, "cube_size_assignment")
+        contract.update({
+            "profile": (
+                "rma_x040_wide_xyz_no_contact_static_size_buckets_v3"
+                if fixed_assignment
+                else "rma_x040_wide_xyz_no_contact_size_buckets_v2"
+            ),
+            "cube_size_buckets_m": sizes,
+            "cube_size_sampling": str(cfg.cube_size_sampling),
+            "cube_center_z_buckets_root_m": [
+                float(cfg.plate_top_height_m) + 0.5 * size for size in sizes
+            ],
+            "arm_joint_reset_noise": {
+                "joint_count": 7,
+                "distribution": str(cfg.arm_joint_reset_noise_distribution),
+                "mean_rad": 0.0,
+                "std_rad": float(cfg.arm_joint_reset_noise_std_rad),
+                "clip_abs_rad": float(cfg.arm_joint_reset_noise_clip_rad),
+                "finger_joint_noise": "none",
+                "joint_velocity_reset_rad_s": 0.0,
+            },
+        })
+        if fixed_assignment:
+            contract["cube_size_assignment"] = str(cfg.cube_size_assignment)
+            contract["cube_size_object_count_per_environment"] = int(
+                cfg.cube_size_object_count_per_environment
+            )
+            contract["cube_size_requires_num_envs_multiple_of_bucket_count"] = bool(
+                cfg.cube_size_requires_num_envs_multiple_of_bucket_count
+            )
+    return contract
 
 
 def student_environment_contract(cfg: Any) -> dict[str, Any]:
@@ -88,15 +151,41 @@ def student_environment_contract(cfg: Any) -> dict[str, Any]:
             "value_range": [float(value) for value in cfg.student_base_led_value_range],
         },
     })
+    if hasattr(cfg, "cube_size_buckets_m"):
+        if hasattr(cfg, "cube_size_assignment"):
+            contract["cube_bucket_rendering"] = {
+                **_STATIC_SIZE_BUCKET_RENDERING_CONTRACT,
+                "assignment": str(cfg.cube_size_assignment),
+                "object_count_per_environment": int(
+                    cfg.cube_size_object_count_per_environment
+                ),
+                "requires_num_envs_multiple_of_bucket_count": bool(
+                    cfg.cube_size_requires_num_envs_multiple_of_bucket_count
+                ),
+            }
+        else:
+            contract["cube_bucket_rendering"] = {
+                **_SIZE_BUCKET_RENDERING_CONTRACT,
+                "parking_strategy": str(cfg.cube_bucket_parking_strategy),
+                "camera_margin_m": float(cfg.cube_bucket_parking_camera_margin_m),
+            }
     return contract
 
 
-def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Mapping[str, Any]) -> Path:
+def write_teacher_manifest(
+    base_env: Any,
+    params_dir: str | Path,
+    agent_cfg: Mapping[str, Any],
+    *,
+    task: str = RMA_X040_WIDE_TEACHER_TASK,
+) -> Path:
+    if task not in RMA_X040_WIDE_TEACHER_TASKS:
+        raise ValueError(f"Unsupported X040-Wide Teacher task: {task}")
     params = Path(params_dir)
     hashes = {name: sha256_file(params / name) for name in ("agent.yaml", "env.yaml")}
     manifest = {
         "kind": "tacex_rma_x040_wide_teacher", "version": RMA_X040_WIDE_MANIFEST_VERSION,
-        "task": RMA_X040_WIDE_TEACHER_TASK, "model_version": RMA_X040_WIDE_MODEL_VERSION,
+        "task": task, "model_version": RMA_X040_WIDE_MODEL_VERSION,
         "actor_inputs": {"proprio_obs": 15, "action_history": 4, "rma_cube_pos": 3},
         "actor_contract": RMAX040WideActorCore().contract(),
         "normalization": RMAX040WideObservationNormalizer().contract(),
@@ -108,7 +197,11 @@ def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Map
     return output
 
 
-def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
+def load_teacher_manifest(
+    checkpoint: str | Path,
+    *,
+    expected_task: str | None = None,
+) -> dict[str, Any]:
     run_dir = _checkpoint_run_dir(checkpoint)
     path = run_dir / "params" / RMA_X040_WIDE_MANIFEST_FILENAME
     if not path.is_file():
@@ -116,8 +209,10 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("kind") != "tacex_rma_x040_wide_teacher" or manifest.get("version") != RMA_X040_WIDE_MANIFEST_VERSION:
         raise RuntimeError("Unsupported X040-Wide Teacher manifest")
-    if manifest.get("task") != RMA_X040_WIDE_TEACHER_TASK or manifest.get("model_version") != RMA_X040_WIDE_MODEL_VERSION:
+    if manifest.get("task") not in RMA_X040_WIDE_TEACHER_TASKS or manifest.get("model_version") != RMA_X040_WIDE_MODEL_VERSION:
         raise RuntimeError("X040-Wide Teacher manifest task/model mismatch")
+    if expected_task is not None and manifest.get("task") != expected_task:
+        raise RuntimeError("X040-Wide Teacher manifest does not match the requested task")
     if manifest.get("actor_contract") != RMAX040WideActorCore().contract() or manifest.get("normalization") != RMAX040WideObservationNormalizer().contract():
         raise RuntimeError("X040-Wide Teacher model contract mismatch")
     for name, expected_hash in manifest.get("run_config_sha256", {}).items():
@@ -127,9 +222,39 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     return manifest
 
 
-def validate_live_teacher_contract(cfg: Any, manifest: Mapping[str, Any]) -> None:
-    if manifest.get("environment_contract") != _shared_environment_contract(cfg):
-        raise RuntimeError("Live X040-Wide environment differs from Teacher contract")
+def validate_live_teacher_contract(
+    cfg: Any,
+    manifest: Mapping[str, Any],
+    *,
+    allow_static_size_bucket_assignment: bool = False,
+) -> None:
+    live_contract = _shared_environment_contract(cfg)
+    manifest_contract = manifest.get("environment_contract")
+    if manifest_contract == live_contract:
+        return
+    if allow_static_size_bucket_assignment and live_contract.get("profile") == (
+        "rma_x040_wide_xyz_no_contact_static_size_buckets_v3"
+    ):
+        # The Teacher policy contract is unchanged: it observes cube XYZ, not
+        # bucket ID. Accept its exact legacy Size-Buckets dynamics contract when
+        # only the Student rollout allocation changes from random-per-reset to
+        # deterministic balanced env assignment.
+        legacy_equivalent = dict(live_contract)
+        legacy_equivalent["profile"] = (
+            "rma_x040_wide_xyz_no_contact_size_buckets_v2"
+        )
+        legacy_equivalent["cube_size_sampling"] = (
+            "uniform_discrete_per_environment_per_reset"
+        )
+        legacy_equivalent.pop("cube_size_assignment", None)
+        legacy_equivalent.pop("cube_size_object_count_per_environment", None)
+        legacy_equivalent.pop(
+            "cube_size_requires_num_envs_multiple_of_bucket_count",
+            None,
+        )
+        if manifest_contract == legacy_equivalent:
+            return
+    raise RuntimeError("Live X040-Wide environment differs from Teacher contract")
 
 
 def load_teacher_policy_state(checkpoint: str | Path, device: str | torch.device) -> dict[str, torch.Tensor]:
@@ -165,14 +290,33 @@ def make_student_payload(*, model: torch.nn.Module, optimizer: torch.optim.Optim
     }
 
 
-def load_student_checkpoint(checkpoint: str | Path, *, device: str | torch.device = "cpu", expected_teacher_checkpoint: str | Path | None = None) -> dict[str, Any]:
+def load_student_checkpoint(
+    checkpoint: str | Path,
+    *,
+    device: str | torch.device = "cpu",
+    expected_teacher_checkpoint: str | Path | None = None,
+    expected_task: str | None = None,
+) -> dict[str, Any]:
     payload = torch.load(Path(checkpoint).expanduser().resolve(), map_location=device, weights_only=False)
     if not isinstance(payload, dict) or payload.get("kind") != RMA_X040_WIDE_STUDENT_KIND:
         raise RuntimeError("Checkpoint is not an X040-Wide direct-action Student artifact")
     if payload.get("version") != RMA_X040_WIDE_STUDENT_VERSION or payload.get("model_version") != RMA_X040_WIDE_DIRECT_STUDENT_MODEL_VERSION:
         raise RuntimeError("Unsupported X040-Wide direct-action Student version")
-    if payload.get("task") != RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK or payload.get("student_input_contract") != direct_action_input_contract():
+    if payload.get("task") not in RMA_X040_WIDE_STUDENT_TASKS or payload.get("student_input_contract") != direct_action_input_contract():
         raise RuntimeError("X040-Wide Student task/input contract mismatch")
+    if expected_task is not None and payload.get("task") != expected_task:
+        raise RuntimeError("X040-Wide Student checkpoint does not match the requested task")
+    if payload.get("task") == RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK:
+        rendering_contract = payload.get("student_environment_contract", {}).get(
+            "cube_bucket_rendering"
+        )
+        expected_rendering_contract = {
+            **_SIZE_BUCKET_RENDERING_CONTRACT,
+            "parking_strategy": "beyond_positive_x_env_extent_behind_all_cameras",
+            "camera_margin_m": 0.5,
+        }
+        if rendering_contract != expected_rendering_contract:
+            raise RuntimeError("Size-Buckets Student rendering contract mismatch")
     model = RMAX040WideDirectActionVisualStudent()
     if payload.get("student_model_contract") != model.contract() or payload.get("normalization") != model.normalizer.contract() or not isinstance(payload.get("model"), Mapping):
         raise RuntimeError("X040-Wide Student model contract mismatch")
@@ -195,6 +339,8 @@ def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, to
 
 __all__ = (
     "RMA_X040_WIDE_TEACHER_TASK", "RMA_X040_WIDE_DIRECT_STUDENT_DR_TASK",
+    "RMA_X040_WIDE_SIZE_BUCKETS_TEACHER_TASK", "RMA_X040_WIDE_SIZE_BUCKETS_DIRECT_STUDENT_DR_TASK",
+    "RMA_X040_WIDE_TEACHER_TASKS", "RMA_X040_WIDE_STUDENT_TASKS", "RMA_X040_WIDE_TEACHER_BY_STUDENT_TASK",
     "RMA_X040_WIDE_MANIFEST_FILENAME", "load_encoder_initialization_checkpoint", "load_teacher_manifest",
     "load_teacher_policy_state", "validate_live_teacher_contract", "student_environment_contract",
     "make_student_payload", "load_student_checkpoint", "load_student_model_state", "sha256_file", "state_dict_sha256",
