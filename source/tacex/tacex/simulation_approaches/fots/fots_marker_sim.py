@@ -203,9 +203,17 @@ class FOTSMarkerSimulator(GelSightSimulator):
 
     #     return self._indentation_depth
 
-    def reset(self):
-        self._indentation_depth = torch.zeros((self._num_envs), device=self._device)
-        self.init_marker_pos = (self.marker_motion_sim.init_marker_x_pos, self.marker_motion_sim.init_marker_y_pos)
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = torch.arange(self._num_envs, device=self._device)
+        else:
+            env_ids = torch.as_tensor(env_ids, device=self._device, dtype=torch.long)
+        self._indentation_depth[env_ids] = 0
+        if env_ids.numel() == self._num_envs:
+            self.init_marker_pos = (
+                self.marker_motion_sim.init_marker_x_pos,
+                self.marker_motion_sim.init_marker_y_pos,
+            )
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         """Creates an USD attribute for the sensor asset, which can visualize the tactile image.

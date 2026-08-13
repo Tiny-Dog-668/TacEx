@@ -337,6 +337,13 @@
 - 决策：恢复配置已有的 5 s/150 policy-step 最长 episode；碰地是 `terminated`，到时是 `truncated`，success 继续只记录不终止。不随机化初始计时器或每 env horizon，因此同期启动且均未提前 done 的 env 会在上限自然同时 reset。
 - 影响：某个 env 若提前碰地，其计时器单独归零，之后 reset 自然异步；不再允许未触发物理失败的 episode 无限运行。Appearance profile 升至 v5，旧 Student 可 rollout但评测 done 分布不同。
 
+### DEC-048 — GelSight 固定尺寸使用逐 env 参考帧和非法碰撞分级
+
+- 状态：已采用
+- 决策：新增独立 GelSight Size-Buckets task，每 env 仅一个固定尺寸 Cube；有效抓取接触只认左右 rigid gelpad。Cube—非 gelpad 机器人或非基座机器人—桌面统一记为 `illegal_collision`，惩罚阈值在0–100k policy step从20 N线性降至5 N，超过当前阈值总计 -10；`>10 N` terminated，Cube—桌面中性，timeout 独立 truncated。
+- Student：每个 episode 首个有效左右触觉帧按 env 锁存，接触头共享左右单侧编码器并输入有符号差值；Actor 只接收 `logit>=0` 的硬二值，动作损失不更新触觉头。
+- 影响：新 Teacher/Student 使用独立 v2 manifest/checkpoint；Teacher 从 `agent_<step>.pt` 续训时自动延续课程步数，非数字 checkpoint 名须显式给 offset。旧 GelSight task 与 checkpoint 保留，但不能用于新蒸馏，新路线需重新训练。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

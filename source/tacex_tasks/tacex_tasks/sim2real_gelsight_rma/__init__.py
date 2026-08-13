@@ -17,6 +17,14 @@ from .sim2real_cube_real_alignment_gelsight_rma_env import (
     Sim2RealCubeRealAlignmentRMAGelSightTeacherEnv,
     Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg,
 )
+from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
+    GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
+    GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsStudentDREnv,
+    Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsStudentDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnvCfg,
+)
 
 
 RMA_GELSIGHT_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
@@ -44,6 +52,33 @@ gym.register(
         "skrl_cfg_entry_point": (
             f"{agents.__name__}:skrl_ppo_cube_real_alignment_gelsight_rma_teacher.yaml"
         ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_size_buckets_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnvCfg,
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:skrl_ppo_cube_real_alignment_gelsight_size_buckets_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_size_buckets_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsStudentDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsStudentDREnvCfg,
     },
 )
 

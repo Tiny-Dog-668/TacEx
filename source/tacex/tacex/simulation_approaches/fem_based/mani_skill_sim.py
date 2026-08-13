@@ -85,8 +85,12 @@ class ManiSkillSimulator(GelSightSimulator):
         self.marker_data[0] = marker_flow
         return self.marker_data
 
-    def reset(self):
-        self._indentation_depth = torch.zeros((self._num_envs), device=self._device)
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = torch.arange(self._num_envs, device=self._device)
+        else:
+            env_ids = torch.as_tensor(env_ids, device=self._device, dtype=torch.long)
+        self._indentation_depth[env_ids] = 0
         # self.init_marker_pos = (self.marker_motion_sim.init_marker_x_pos, self.marker_motion_sim.init_marker_y_pos)
 
     def _set_debug_vis_impl(self, debug_vis: bool):

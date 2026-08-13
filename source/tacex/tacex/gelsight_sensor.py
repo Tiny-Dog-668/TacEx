@@ -154,7 +154,7 @@ class GelSightSensor(SensorBase):
 
         # reset camera
         if self.camera is not None:
-            self.camera.reset()
+            self.camera.reset(env_ids)
 
         # reset the buffer
         # self._data.position = None
@@ -180,18 +180,17 @@ class GelSightSensor(SensorBase):
 
         # simulate optical/marker output, but without indentation
         if (self.optical_simulator is not None) and ("tactile_rgb" in self._data.output):
-            self._data.output["tactile_rgb"][:] = self.optical_simulator.optical_simulation()
-            self.optical_simulator.reset()
+            self.optical_simulator.reset(env_ids)
+            optical_output = self.optical_simulator.optical_simulation()
+            self._data.output["tactile_rgb"][env_ids] = optical_output[env_ids]
 
         if (self.marker_motion_simulator is not None) and ("marker_motion" in self._data.output):
             # height_map_shifted = self.taxim._get_shifted_height_map(self._indentation_depth, self._data.output["height_map"])
-            self._data.output["marker_motion"][
-                :
-            ] = self.marker_motion_simulator.marker_motion_simulation()  # TODO adjust mm2pix value 19.58 #/19.58
+            self.marker_motion_simulator.reset(env_ids)
+            marker_output = self.marker_motion_simulator.marker_motion_simulation()
+            self._data.output["marker_motion"][env_ids] = marker_output[env_ids]
             # (yy_init_pos, xx_init_pos), i.e. along height x width of tactile img
             self._data.output["init_marker_pos"] = ([0], [0])
-
-            self.marker_motion_simulator.reset()
 
         # Reset the frame count
         self._frame[env_ids] = 0

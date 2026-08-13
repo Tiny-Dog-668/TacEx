@@ -161,7 +161,7 @@ class _RMATerminalMixin:
             f"lift={float(self.cfg.lift_weight) * log['reward/lift'].item():.3f}, "
             f"success={float(self.cfg.success_reward_weight) * log['reward/success'].item():.3f}, "
             f"contact={log['reward/rma_contact'].item():.3f}, "
-            f"table={log['reward/table_collision'].item():.3f}, "
+            f"{self._rma_collision_reward_print_fields(log)}"
             f"smooth={log['reward/rma_action_rate'].item():.3f}, "
             f"total={log['reward/total'].item():.3f}, "
             f"avg_reward_{print_interval}={average_reward.item():.3f}, "
@@ -172,6 +172,12 @@ class _RMATerminalMixin:
         )
         self._reset_reward_print_window()
         return rewards
+
+    def _rma_collision_reward_print_fields(
+        self, log: dict[str, torch.Tensor]
+    ) -> str:
+        """Return the collision fragment used by the compact RMA summary."""
+        return f"table={log['reward/table_collision'].item():.3f}, "
 
     def _compute_rma_action_rate_penalty(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Penalize command jumps in normalized environment-action units."""

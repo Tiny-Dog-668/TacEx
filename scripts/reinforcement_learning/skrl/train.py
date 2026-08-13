@@ -50,6 +50,15 @@ parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint to resume training.")
+parser.add_argument(
+    "--gelsight_collision_curriculum_step_offset",
+    type=int,
+    default=None,
+    help=(
+        "Override the GelSight Size-Buckets illegal-collision curriculum policy-step offset. "
+        "Numeric agent_<step>.pt checkpoints are inferred automatically on resume."
+    ),
+)
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument(
     "--save_final_checkpoint",
@@ -174,6 +183,9 @@ SIM2REAL_VISION_ENCODER_TASKS = {
 from tacex_tasks.sim2real_grasp.rma_artifacts import RMA_TEACHER_TASKS
 from tacex_tasks.sim2real_grasp.rma_xy_artifacts import RMA_XY_TEACHER_TASK
 from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import RMA_X040_WIDE_TEACHER_TASKS
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+    GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+)
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -343,6 +355,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
     env_cfg.seed = agent_cfg["seed"]
 
+    # Resolve before writing env.yaml so a resumed collision curriculum is recorded
+    # in the new run configuration rather than silently restarting from 20 N.
+    resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
+    if args_cli.task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK:
+        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+            infer_teacher_checkpoint_policy_step,
+        )
+
+        curriculum_offset = args_cli.gelsight_collision_curriculum_step_offset
+        if curriculum_offset is not None:
+            if curriculum_offset < 0:
+                raise ValueError(
+                    "--gelsight_collision_curriculum_step_offset must be non-negative"
+                )
+        elif resume_path is not None:
+            curriculum_offset = infer_teacher_checkpoint_policy_step(resume_path)
+        else:
+            curriculum_offset = 0
+        env_cfg.illegal_collision_curriculum_step_offset = int(curriculum_offset)
+        print(
+            "[INFO] GelSight illegal-collision curriculum policy-step offset: "
+            f"{curriculum_offset}"
+        )
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "skrl", agent_cfg["agent"]["experiment"]["directory"])
     log_root_path = os.path.abspath(log_root_path)
@@ -365,15 +401,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
     write_training_summary(log_dir, env_cfg, agent_cfg, args_cli, hydra_args, algorithm, original_argv)
 
-    # get checkpoint path (to resume training)
-    resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
-
     # create isaac environment
     print(f"[INFO] Creating gym environment: task={args_cli.task}, num_envs={env_cfg.scene.num_envs}, device={env_cfg.sim.device}")
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task in RMA_X040_WIDE_TEACHER_TASKS and (
+    if args_cli.task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+            load_teacher_manifest,
+            validate_live_env_contract,
+            write_teacher_manifest,
+        )
+        if resume_path is not None:
+            source_manifest = load_teacher_manifest(resume_path)
+            validate_live_env_contract(env.unwrapped.cfg, source_manifest)
+        manifest_path = write_teacher_manifest(
+            env.unwrapped, os.path.join(log_dir, "params"), agent_cfg
+        )
+        print(f"[INFO] Saved GelSight Size-Buckets Teacher manifest: {manifest_path}")
+    elif args_cli.task in RMA_X040_WIDE_TEACHER_TASKS and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import (

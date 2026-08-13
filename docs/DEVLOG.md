@@ -10,6 +10,12 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-13 CST — 新增 GelSight 固定尺寸与参考触觉 RMA 路线
+
+- 修改：新增固定按 `env_id % 8` 分配 4–6 cm 单 Cube 的 GelSight Teacher/Student-DR task；正接触仅认左右 gelpad，`illegal_collision` 惩罚阈值在0–100k policy step从20 N线性降至5 N，触发仍单步 -10，`>10 N` terminated，5 s timeout 仅 truncated。
+- 契约：Student 增加左右 current/reference 触觉输入，逐 env reset 后首帧独立锁存，模型使用 `(current-reference)/255` 和硬二值接触；动作 `[4]`、Teacher 30维 Actor 和惩罚权重不变。新 manifest/checkpoint 升至v2并与旧 GelSight checkpoint fail closed，Teacher/Student 均需重训。
+- 验证：全仓 `compileall`/diff check、8项离线契约测试、Teacher/Student 各8-env reset/step 与局部 reference reset、旧 GelSight Student 回归测试通过；另以 v2 契约完成128步 Teacher、断点课程 offset 续训、2-update Student、2-step play 和 CPU/CUDA batch 1/8 TorchScript smoke。正式训练与策略性能评估未运行。
+
 ### 2026-08-13 CST — 导出三份 X040-Wide Student step 100000 TorchScript
 
 - 产物：分别从三个 run 的不可变 `student_0100000.pt` 导出单帧、三帧 Appearance 和普通三帧 TorchScript/JSON 到各自 `checkpoints/exported/`；第三个实验族唯一 run 为 `2026-08-12_02-09-40_distillation`。

@@ -142,9 +142,46 @@ class _RMAGelSightStudentObservationMixin:
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         observations = super()._get_observations()
         obs = observations["policy"]
-        obs["gsmini_left_rgb"] = self._tactile_rgb_or_zeros("gsmini_left")
-        obs["gsmini_right_rgb"] = self._tactile_rgb_or_zeros("gsmini_right")
+        left = self._tactile_rgb_or_zeros("gsmini_left")
+        right = self._tactile_rgb_or_zeros("gsmini_right")
+        if bool(getattr(self.cfg, "rma_gelsight_reference_enabled", False)):
+            self._ensure_gelsight_reference_buffers()
+            pending = self._gelsight_reference_pending
+            if pending.any():
+                # SensorBase.data above forces the first valid post-reset update.
+                # Copy only pending rows so asynchronous resets cannot replace
+                # another environment's episode reference.
+                self._gelsight_left_reference_rgb[pending] = left[pending]
+                self._gelsight_right_reference_rgb[pending] = right[pending]
+                self._gelsight_reference_pending[pending] = False
+            obs["gsmini_left_reference_rgb"] = self._gelsight_left_reference_rgb.clone()
+            obs["gsmini_right_reference_rgb"] = self._gelsight_right_reference_rgb.clone()
+        obs["gsmini_left_rgb"] = left
+        obs["gsmini_right_rgb"] = right
         return observations
+
+    def _ensure_gelsight_reference_buffers(self) -> None:
+        shape = (self.num_envs, *_GELSIGHT_TACTILE_RGB_SHAPE)
+        if hasattr(self, "_gelsight_left_reference_rgb"):
+            return
+        self._gelsight_left_reference_rgb = torch.zeros(
+            shape, device=self.device, dtype=torch.uint8
+        )
+        self._gelsight_right_reference_rgb = torch.zeros(
+            shape, device=self.device, dtype=torch.uint8
+        )
+        self._gelsight_reference_pending = torch.ones(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+
+    def _reset_idx(self, env_ids: torch.Tensor) -> None:
+        super()._reset_idx(env_ids)
+        if bool(getattr(self.cfg, "rma_gelsight_reference_enabled", False)):
+            self._ensure_gelsight_reference_buffers()
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+            self._gelsight_left_reference_rgb[env_ids] = 0
+            self._gelsight_right_reference_rgb[env_ids] = 0
+            self._gelsight_reference_pending[env_ids] = True
 
 
 _GELSIGHT_TACTILE_OBSERVATION_SPACE = {
@@ -159,6 +196,15 @@ _GELSIGHT_TACTILE_OBSERVATION_SPACE = {
         high=255,
         shape=_GELSIGHT_TACTILE_RGB_SHAPE,
         dtype=np.uint8,
+    ),
+}
+
+_GELSIGHT_REFERENCE_OBSERVATION_SPACE = {
+    "gsmini_left_reference_rgb": gym.spaces.Box(
+        low=0, high=255, shape=_GELSIGHT_TACTILE_RGB_SHAPE, dtype=np.uint8
+    ),
+    "gsmini_right_reference_rgb": gym.spaces.Box(
+        low=0, high=255, shape=_GELSIGHT_TACTILE_RGB_SHAPE, dtype=np.uint8
     ),
 }
 
@@ -184,6 +230,7 @@ class _RMAGelSightCfgMixin:
     rma_gelsight_contact_filter_prims = _GELSIGHT_CONTACT_FILTER_PRIMS
     rma_cube_contact_sensor = _make_gelsight_cube_contact_sensor_cfg()
     rma_gelsight_tactile_sensor_enabled = False
+    rma_gelsight_reference_enabled = False
     gsmini_left = _make_gelsight_sensor_cfg(_GELSIGHT_SENSOR_PRIMS[0])
     gsmini_right = _make_gelsight_sensor_cfg(_GELSIGHT_SENSOR_PRIMS[1])
 

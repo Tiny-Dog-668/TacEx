@@ -7,7 +7,10 @@ Each simulation method class should inherit from this class and implement the ab
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
+
+import torch
 
 if TYPE_CHECKING:
     from ..gelsight_sensor import GelSightSensor
@@ -51,7 +54,8 @@ class GelSightSimulator(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def reset(self):
+    def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
+        """Reset only the requested environments when the simulator is batched."""
         raise NotImplementedError
 
     """
