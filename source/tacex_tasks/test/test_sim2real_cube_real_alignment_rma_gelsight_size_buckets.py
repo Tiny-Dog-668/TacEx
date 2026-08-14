@@ -35,6 +35,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
     RMAGelSightReferenceStudent,
     ReferenceDeltaTactileEncoder,
 )
+from tacex_tasks.sim2real_gelsight_rma.gelsight_geometry import geometry_contract
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_M,
     GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
@@ -67,6 +68,7 @@ def test_new_tasks_and_fixed_size_contract_are_registered():
     assert student.observation_space["gsmini_left_reference_rgb"].shape == (96, 128, 3)
     assert student.observation_space["gsmini_right_reference_rgb"].shape == (96, 128, 3)
     assert environment_contract(teacher) == environment_contract(student)
+    assert environment_contract(teacher)["gelsight_geometry"] == geometry_contract()
     assert teacher.rma_contact_force_threshold_n == pytest.approx(0.2)
     assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
     assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)

@@ -344,6 +344,18 @@
 - Student：每个 episode 首个有效左右触觉帧按 env 锁存；腕部 ResNet18 GAP 的512维视觉特征、共享 CNN 提取的左右各256维连续触觉特征及归一化 proprio/history 拼成1043维直接动作输入。cube XYZ、`14×14` heatmap 与左右 physics contact 只作辅助监督，动作蒸馏梯度可进入视觉和触觉编码器，不再经过3维位置/硬接触瓶颈。
 - 影响：Teacher manifest 仍为v2且现有 Teacher 可复用；Student checkpoint 升至v3、model升至v2，部署七输入 key/shape 与4维动作不变。旧 v2/model-v1 Student 和 TorchScript fail closed，必须重新蒸馏并导出。
 
+### DEC-049 — X040 GelSight 使用逐 env 静态尺寸而非 reset 选桶
+
+- 状态：已采用
+- 决策：X040 GelSight Teacher/三帧 Student 每个 env 仅保留一个 `/cube`，PhysX 启动前按 `env_id % 8` 等量写入 4–6 cm 八档 scale；reset 只重置位姿并保留尺寸，同时保持臂关节截断高斯噪声。异构场景使用 `replicate_physics=false`、3.5 m spacing、隐藏共享 GroundPlane、显式跨 env 碰撞过滤和 GPU dynamics。
+- 影响：删除每 env 八刚体/八组传感器与停车区，尺寸分布从逐回合随机改为 batch 内固定等量。观测/动作、奖励、碰撞阈值课程和 done 不变；X040 Teacher manifest/Student checkpoint 升至v3，旧 selected-bucket checkpoint 不兼容并需重新训练/蒸馏。
+
+### DEC-050 — X040 GelSight 底座 LED 仅作为 Student 视觉 DR
+
+- 状态：已撤回
+- 原因：GelSight robot 的该 visual branch 在场景构建期解除 instance 后会使 Kit 在创建训练日志前直接退出，不能作为可复现实验路径。
+- 影响：Teacher、物理、动作、奖励、done 和 Student 输入 key/shape 不变；Student 恢复 v3 契约。需在专用可编辑 Student USD/material authoring 层实现后，才能重新引入该视觉 DR。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

@@ -186,6 +186,9 @@ from tacex_tasks.sim2real_grasp.rma_x040_wide_artifacts import RMA_X040_WIDE_TEA
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
     GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
+    GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+)
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -358,10 +361,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Resolve before writing env.yaml so a resumed collision curriculum is recorded
     # in the new run configuration rather than silently restarting from 20 N.
     resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
-    if args_cli.task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK:
-        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
-            infer_teacher_checkpoint_policy_step,
-        )
+    if args_cli.task in {
+        GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+    }:
+        if args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
+            from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
+                infer_teacher_checkpoint_policy_step,
+            )
+        else:
+            from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+                infer_teacher_checkpoint_policy_step,
+            )
 
         curriculum_offset = args_cli.gelsight_collision_curriculum_step_offset
         if curriculum_offset is not None:
@@ -406,7 +417,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK and (
+    if args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
+            load_teacher_manifest,
+            validate_live_teacher_contract,
+            write_teacher_manifest,
+        )
+
+        if resume_path is not None:
+            source_manifest = load_teacher_manifest(resume_path)
+            validate_live_teacher_contract(env.unwrapped.cfg, source_manifest)
+        manifest_path = write_teacher_manifest(
+            env.unwrapped, os.path.join(log_dir, "params"), agent_cfg
+        )
+        print(f"[INFO] Saved GelSight X040 DR Teacher manifest: {manifest_path}")
+    elif args_cli.task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (

@@ -3,7 +3,7 @@ seed: 42
 models:
   separate: True
   policy:
-    class: tacex_tasks.sim2real_grasp.rma_models:RMAPrivilegedTeacherPolicy
+    class: tacex_tasks.sim2real_gelsight_rma.rma_gelsight_models:RMAGelSightPrivilegedTeacherPolicy
     clip_actions: False
     clip_log_std: True
     min_log_std: -20.0

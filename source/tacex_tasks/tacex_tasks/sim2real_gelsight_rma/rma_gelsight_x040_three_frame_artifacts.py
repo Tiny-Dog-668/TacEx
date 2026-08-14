@@ -1,0 +1,394 @@
+"""Fail-closed Teacher and three-frame Student artifacts for GelSight X040 DR."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import torch
+
+from tacex_tasks.sim2real_grasp.rma_models import (
+    RMA_MODEL_VERSION,
+    RMAObservationNormalizer,
+)
+
+from .gelsight_geometry import geometry_contract
+from .rma_gelsight_models import RMAGelSightActorCore
+from .rma_gelsight_x040_three_frame_models import (
+    GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
+    RMAGelSightX040ThreeFrameStudent,
+    gelsight_x040_three_frame_model_contract,
+)
+from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
+    GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+    GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+)
+
+
+MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
+TEACHER_MANIFEST_VERSION = 3
+STUDENT_CHECKPOINT_VERSION = 3
+STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
+TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def state_dict_sha256(state_dict: Mapping[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for key in sorted(state_dict):
+        value = state_dict[key].detach().cpu().contiguous()
+        digest.update(key.encode())
+        digest.update(str(value.dtype).encode())
+        digest.update(str(tuple(value.shape)).encode())
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _run_dir(checkpoint: str | Path) -> Path:
+    path = Path(checkpoint).expanduser().resolve()
+    if path.parent.name != "checkpoints":
+        raise RuntimeError(f"Expected checkpoint under checkpoints/: {path}")
+    return path.parent.parent
+
+
+def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
+    hand = cfg.robot.actuators["panda_hand"]
+    return {
+        "profile": "rma_gelsight_x040_dr_static_size_buckets_v3",
+        "robot_profile": str(cfg.rma_robot_profile),
+        "action_dim": int(cfg.action_space),
+        "action_scales": [float(cfg.action_scale)] * 3
+        + [float(cfg.gripper_width_delta_scale)],
+        "gripper_actuator": {
+            "effort_limit_sim": float(hand.effort_limit_sim),
+            "stiffness": float(hand.stiffness),
+            "damping": float(hand.damping),
+        },
+        "teacher_actor_feature_dim": int(cfg.rma_actor_feature_dim),
+        "teacher_actor_contact_input": "physics_contact_label[2]",
+        "position_frame": str(cfg.rma_position_frame),
+        "gelsight_geometry": geometry_contract(),
+        "cube_nominal_position_root_m": [float(value) for value in cfg.cube.init_state.pos],
+        "cube_reset_half_range_xy_m": [
+            float(cfg.cube_x_pos_range),
+            float(cfg.cube_y_pos_range),
+        ],
+        "cube_position_curriculum_enabled": bool(cfg.cube_position_curriculum_enabled),
+        "cube_size_buckets_m": [float(value) for value in cfg.cube_size_buckets_m],
+        "cube_size_sampling": str(cfg.cube_size_sampling),
+        "cube_size_assignment": str(cfg.cube_size_assignment),
+        "cube_size_object_count_per_environment": int(
+            cfg.cube_size_object_count_per_environment
+        ),
+        "cube_size_requires_num_envs_multiple_of_bucket_count": bool(
+            cfg.cube_size_requires_num_envs_multiple_of_bucket_count
+        ),
+        "cube_scale_authoring": "usd_before_physx_start",
+        "physics_layout": {
+            "gpu_dynamics": bool(cfg.enable_gpu_dynamics),
+            "replicate_physics": bool(cfg.scene.replicate_physics),
+            "env_spacing_m": float(cfg.scene.env_spacing),
+        },
+        "cube_center_z_buckets_root_m": [
+            float(cfg.plate_top_height_m) + 0.5 * float(value)
+            for value in cfg.cube_size_buckets_m
+        ],
+        "arm_joint_reset_noise": {
+            "joint_count": 7,
+            "distribution": str(cfg.arm_joint_reset_noise_distribution),
+            "std_rad": float(cfg.arm_joint_reset_noise_std_rad),
+            "clip_abs_rad": float(cfg.arm_joint_reset_noise_clip_rad),
+            "finger_joint_noise": "none",
+        },
+        "gelpad_contact_filters": list(cfg.rma_cube_contact_sensor.filter_prim_paths_expr),
+        "illegal_collision_scope": str(cfg.illegal_collision_scope),
+        "cube_illegal_filters": list(
+            cfg.cube_illegal_contact_sensor.filter_prim_paths_expr
+        ),
+        "table_illegal_filters": list(
+            cfg.table_contact_sensor.filter_prim_paths_expr
+        ),
+        "illegal_collision_penalty": float(cfg.illegal_collision_penalty),
+        "illegal_collision_penalty_threshold_n": {
+            "schedule": "linear_clamped_global_policy_step",
+            "start_n": float(cfg.illegal_collision_penalty_threshold_start_n),
+            "end_n": float(cfg.illegal_collision_penalty_threshold_end_n),
+            "start_step": int(cfg.illegal_collision_curriculum_start_step),
+            "end_step": int(cfg.illegal_collision_curriculum_end_step),
+        },
+        "illegal_collision_termination_threshold_n": {
+            "schedule": "linear_clamped_global_policy_step",
+            "start_n": float(cfg.illegal_collision_termination_threshold_start_n),
+            "end_n": float(cfg.illegal_collision_termination_threshold_end_n),
+            "start_step": int(cfg.illegal_collision_curriculum_start_step),
+            "end_step": int(cfg.illegal_collision_curriculum_end_step),
+        },
+        "ground_collision": "terminated",
+        "illegal_collision_threshold_comparison": "strictly_greater_than",
+        "success_terminates_episode": bool(cfg.rma_success_terminates_episode),
+        "timeout_semantics": "truncated_only",
+    }
+
+
+def student_environment_contract(cfg: Any) -> dict[str, Any]:
+    contract = teacher_environment_contract(cfg)
+    contract.update(
+        {
+            "camera_position_delta_max_m": [
+                float(value) for value in cfg.camera_position_delta_max_m
+            ],
+            "camera_rotation_delta_max_deg": [
+                float(value) for value in cfg.camera_rotation_delta_max_deg
+            ],
+            "dr_curriculum_enabled": bool(cfg.dr_curriculum_enabled),
+            "wrist_rgb_history": {
+                "shape": [3, 224, 224, 3],
+                "dtype": "uint8",
+                "order": str(cfg.wrist_rgb_history_order),
+                "stride_policy_steps": int(cfg.wrist_rgb_history_stride_policy_steps),
+                "policy_frequency_hz": 30,
+                "reset_fill": str(cfg.wrist_rgb_history_reset_fill),
+            },
+            "gelsight_reference": "first_post_reset_frame_per_environment",
+        }
+    )
+    return contract
+
+
+def student_input_contract() -> dict[str, Any]:
+    return {
+        "input_order": [
+            "wrist_rgb_history",
+            "proprio_obs",
+            "action_history",
+            "gsmini_left_rgb",
+            "gsmini_right_rgb",
+            "gsmini_left_reference_rgb",
+            "gsmini_right_reference_rgb",
+        ],
+        "wrist_rgb_history": [3, 224, 224, 3],
+        "proprio_obs": [15],
+        "action_history": [4],
+        "tactile_rgb": [96, 128, 3],
+        "tactile_delta": "signed_float32_current_minus_reference_div_255",
+        "runtime_output": {
+            "action": [4],
+            "left_right_contact_probability": [2],
+            "cube_position_root_m": [3],
+        },
+        "training_only_labels": ["rma_cube_pos", "rma_contact_state"],
+    }
+
+
+def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Mapping[str, Any]) -> Path:
+    params = Path(params_dir)
+    hashes = {}
+    for name in ("agent.yaml", "env.yaml"):
+        path = params / name
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing Teacher run config: {path}")
+        hashes[name] = sha256_file(path)
+    manifest = {
+        "kind": TEACHER_KIND,
+        "version": TEACHER_MANIFEST_VERSION,
+        "task": GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        "model_version": RMA_MODEL_VERSION,
+        "actor_inputs": {
+            "proprio_obs": 15,
+            "action_history": 4,
+            "rma_cube_pos": 3,
+            "rma_contact_state": 2,
+        },
+        "actor_contract": RMAGelSightActorCore().contract(),
+        "normalization": RMAObservationNormalizer().contract(),
+        "environment_contract": teacher_environment_contract(base_env.cfg),
+        "curriculum_policy_step_offset": int(base_env.cfg.illegal_collision_curriculum_step_offset),
+        "run_config_sha256": hashes,
+        "trainer_timesteps": int(agent_cfg["trainer"]["timesteps"]),
+    }
+    output = params / MANIFEST_FILENAME
+    _atomic_json_dump(manifest, output)
+    return output
+
+
+def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
+    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Teacher checkpoint not found: {checkpoint_path}")
+    path = _run_dir(checkpoint_path) / "params" / MANIFEST_FILENAME
+    if not path.is_file():
+        raise FileNotFoundError(f"GelSight X040 DR Teacher manifest not found: {path}")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != TEACHER_KIND or manifest.get("version") != TEACHER_MANIFEST_VERSION:
+        raise RuntimeError("Unsupported GelSight X040 DR Teacher manifest")
+    if manifest.get("task") != GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
+        raise RuntimeError("GelSight X040 DR Teacher task mismatch")
+    if manifest.get("model_version") != RMA_MODEL_VERSION:
+        raise RuntimeError("GelSight X040 DR Teacher model mismatch")
+    if manifest.get("actor_contract") != RMAGelSightActorCore().contract():
+        raise RuntimeError("GelSight X040 DR Teacher Actor contract mismatch")
+    if manifest.get("normalization") != RMAObservationNormalizer().contract():
+        raise RuntimeError("GelSight X040 DR Teacher normalization mismatch")
+    offset = manifest.get("curriculum_policy_step_offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise RuntimeError("GelSight X040 DR Teacher curriculum offset is invalid")
+    for name, expected_hash in manifest.get("run_config_sha256", {}).items():
+        path = _run_dir(checkpoint_path) / "params" / name
+        if not path.is_file() or sha256_file(path) != expected_hash:
+            raise RuntimeError(f"Teacher run config hash mismatch: {path}")
+    return manifest
+
+
+def validate_live_teacher_contract(cfg: Any, manifest: Mapping[str, Any]) -> None:
+    if manifest.get("environment_contract") != teacher_environment_contract(cfg):
+        raise RuntimeError("Live GelSight X040 DR environment differs from Teacher contract")
+
+
+def load_teacher_policy_state(checkpoint: str | Path, device: str | torch.device) -> dict[str, torch.Tensor]:
+    load_teacher_manifest(checkpoint)
+    payload = torch.load(checkpoint, map_location=device, weights_only=False)
+    policy = payload.get("policy") if isinstance(payload, Mapping) else None
+    if not isinstance(policy, Mapping):
+        raise RuntimeError("Teacher checkpoint has no policy state_dict")
+    return dict(policy)
+
+
+def infer_teacher_checkpoint_policy_step(checkpoint: str | Path) -> int:
+    path = Path(checkpoint).expanduser().resolve()
+    suffix = path.stem.removeprefix("agent_")
+    if not suffix.isdigit():
+        raise RuntimeError("Teacher checkpoint must be named agent_<step>.pt")
+    return int(load_teacher_manifest(path)["curriculum_policy_step_offset"]) + int(suffix)
+
+
+def make_student_payload(
+    *,
+    model: RMAGelSightX040ThreeFrameStudent,
+    optimizer: torch.optim.Optimizer,
+    global_step: int,
+    teacher_checkpoint: str | Path,
+    teacher_manifest: Mapping[str, Any],
+    teacher_actor_state_dict: Mapping[str, torch.Tensor],
+    student_env_contract: Mapping[str, Any],
+    loss: Mapping[str, Any],
+    optimizer_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = model.state_dict()
+    component_hashes = {}
+    for prefix, name in (
+        ("vision_encoder.", "vision_encoder"),
+        ("temporal_fusion.", "temporal_fusion"),
+        ("tactile_encoder.", "tactile_encoder"),
+        ("position_head.", "position_head"),
+        ("action_head.", "action_head"),
+    ):
+        component = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+        component_hashes[f"{name}_state_dict_sha256"] = state_dict_sha256(component)
+    return {
+        "kind": STUDENT_KIND,
+        "version": STUDENT_CHECKPOINT_VERSION,
+        "model_version": GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
+        "task": GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        "global_step": int(global_step),
+        "model": state,
+        "optimizer": optimizer.state_dict(),
+        "student_input_contract": student_input_contract(),
+        "student_model_contract": gelsight_x040_three_frame_model_contract(),
+        "normalization": model.normalizer.contract(),
+        "student_environment_contract": dict(student_env_contract),
+        "teacher_checkpoint": str(Path(teacher_checkpoint).expanduser().resolve()),
+        "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
+        "teacher_manifest": dict(teacher_manifest),
+        "teacher_actor_state_dict_sha256": state_dict_sha256(teacher_actor_state_dict),
+        "loss": dict(loss),
+        "optimizer_config": dict(optimizer_config),
+        "training_privileged_inputs": {
+            "rma_cube_pos": [3],
+            "rma_contact_state": [2],
+        },
+        **component_hashes,
+    }
+
+
+def load_student_checkpoint(
+    checkpoint: str | Path,
+    *,
+    device: str | torch.device = "cpu",
+    expected_teacher_checkpoint: str | Path | None = None,
+) -> dict[str, Any]:
+    payload = torch.load(Path(checkpoint).expanduser().resolve(), map_location=device, weights_only=False)
+    if not isinstance(payload, dict) or payload.get("kind") != STUDENT_KIND:
+        raise RuntimeError("Not a GelSight X040 DR three-frame Student checkpoint")
+    if payload.get("version") != STUDENT_CHECKPOINT_VERSION or payload.get("model_version") != GELSIGHT_X040_THREE_FRAME_MODEL_VERSION:
+        raise RuntimeError("GelSight X040 DR Student version mismatch")
+    if payload.get("task") != GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK:
+        raise RuntimeError("GelSight X040 DR Student task mismatch")
+    if payload.get("student_input_contract") != student_input_contract():
+        raise RuntimeError("GelSight X040 DR Student input contract mismatch")
+    if payload.get("student_model_contract") != gelsight_x040_three_frame_model_contract():
+        raise RuntimeError("GelSight X040 DR Student model contract mismatch")
+    if payload.get("normalization") != RMAObservationNormalizer().contract():
+        raise RuntimeError("GelSight X040 DR Student normalization mismatch")
+    state = payload.get("model")
+    if not isinstance(state, Mapping):
+        raise RuntimeError("GelSight X040 DR Student has no model state_dict")
+    for prefix, name in (
+        ("vision_encoder.", "vision_encoder"),
+        ("temporal_fusion.", "temporal_fusion"),
+        ("tactile_encoder.", "tactile_encoder"),
+        ("position_head.", "position_head"),
+        ("action_head.", "action_head"),
+    ):
+        component = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+        if not component or payload.get(f"{name}_state_dict_sha256") != state_dict_sha256(component):
+            raise RuntimeError(f"GelSight X040 DR Student component hash mismatch: {name}")
+    if not isinstance(payload.get("teacher_actor_state_dict_sha256"), str):
+        raise RuntimeError("GelSight X040 DR Student Teacher Actor provenance is missing")
+    if expected_teacher_checkpoint is not None:
+        if payload.get("teacher_checkpoint_sha256") != sha256_file(expected_teacher_checkpoint):
+            raise RuntimeError("Student was distilled from a different Teacher checkpoint")
+        if payload.get("teacher_manifest") != load_teacher_manifest(expected_teacher_checkpoint):
+            raise RuntimeError("Student Teacher manifest mismatch")
+    return payload
+
+
+def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]) -> None:
+    model.load_state_dict(dict(state_dict), strict=True)
+
+
+__all__ = (
+    "GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK",
+    "GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK",
+    "MANIFEST_FILENAME",
+    "load_student_checkpoint",
+    "load_student_model_state",
+    "load_teacher_manifest",
+    "load_teacher_policy_state",
+    "infer_teacher_checkpoint_policy_step",
+    "make_student_payload",
+    "sha256_file",
+    "state_dict_sha256",
+    "student_environment_contract",
+    "student_input_contract",
+    "teacher_environment_contract",
+    "validate_live_teacher_contract",
+    "write_teacher_manifest",
+)

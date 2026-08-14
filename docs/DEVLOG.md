@@ -10,6 +10,50 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-14 CST — 撤回 X040 GelSight Student 底座 LED 外观 DR
+
+- 修改：移除会在场景创建时对 GelSight robot instance 执行 `make_uninstanceable` 和 stage-local 材质绑定的 LED DR；该路径使 Student 在训练日志创建前直接退出。
+- 契约：Student 恢复静态底座视觉，runtime 输入 key/shape、4维动作、奖励、done 和 Teacher manifest 均不变；Student checkpoint 回到 v3，未完成的 v4 产物不得恢复或部署。
+- 验证：使用 Teacher `agent_60000.pt` 的带相机 Student 8-env/1-step smoke 与配置契约 pytest 已通过；完整带相机场景 pytest 待 Teacher 训练结束后运行，避免争用 GPU。
+
+### 2026-08-14 CST — X040 GelSight 改为逐 env 固定单 Cube
+
+- 修改：Teacher/三帧 Student 每个 env 仅创建一个 Cube，启动前按 `env_id % 8` 等量绑定 4–6 cm 尺寸，reset 不换尺寸；恢复 GPU dynamics，并以 3.5 m spacing、隐藏共享 GroundPlane 和显式碰撞过滤隔离 3 m 木板。
+- 契约：物体数从8降为1、尺寸时序从逐回合随机改为逐 env 固定；观测/动作、奖励、碰撞阈值课程、success/done 和关节 reset 噪声不变。Teacher manifest/Student checkpoint 升至v3，旧错误分布 checkpoint 拒绝加载，必须重训/重新蒸馏。
+- 验证：全仓 `compileall`/diff check、配置/artifact 定向 pytest、Teacher+Student 8-env reset/step 与局部 reset 固定尺寸 smoke、Teacher 8-env/256-step PPO 通过；1024-env 吞吐 benchmark 未运行。
+
+### 2026-08-14 CST — 修复 X040 GelSight RMA 第 200 步奖励汇总崩溃
+
+- 修改：X040 unified collision profile 增加专用 RMA 汇总格式，读取实际存在的 illegal-collision reward、惩罚/终止阈值和最大力，不再读取已被该 profile 替换的 `reward/table_collision`。
+- 契约：仅修复控制台日志；观测、4维动作、奖励值/权重、success/done、阈值课程和 manifest/checkpoint 均不变，旧 checkpoint 可加载且无需重训。
+- 验证：全仓 `compileall`、`git diff --check`、定向 pytest，以及 X040 GelSight Teacher 8-env/256-step PPO smoke 均通过；step 200 正常打印并继续至结束。
+
+### 2026-08-14 CST — 修复 privileged/RMA root-frame 观测设备不一致
+
+- 修改：privileged 基类在 world→robot-root 平移前，将 `scene.env_origins[N,3]` 对齐到 Cube state 的 device/dtype，修复 CPU PhysX origins 与 CUDA asset state 相减导致的首次 reset 失败。
+- 契约：观测 key、维度、数值与坐标系不变；动作、奖励、success/done、manifest/checkpoint 均不受影响，旧 checkpoint 可继续加载且无需因此重训。
+- 验证：全仓 `compileall`、`git diff --check`、privileged 定向 pytest，以及 GelSight Teacher 1-env/128-step PPO smoke 均通过。
+
+### 2026-08-14 CST — GelSight 夹爪中心、最低端与桌面安全契约
+
+- 修改：所有已注册 GelSight RMA task 统一以 `panda_hand +Z 0.1182 m` 作为左右 GelPad 中心，以 `+Z 0.1353 m` 作为 `panda_fingertip_centered` 近似最低端；IK、reach、critic 和 Teacher FK 同步切换。
+- 安全：最低端距板面严格小于 `0.010 m` 时每个 policy step 额外 `-10`；仅增加奖励，不截断动作，既有非法接触惩罚和 done 保持独立。
+- 兼容：GelSight Teacher manifest、Size-Buckets/X040 Student artifact 与三条 Teacher YAML 升为新几何契约；旧 GelSight Teacher/Student checkpoint 拒绝加载，必须重训和重新蒸馏，非 GelSight task 不受影响。
+- 验证：全仓 `compileall`、diff 检查、GelSight 配置/FK/阈值定向 pytest、单环境 Teacher 接触与几何 smoke 已运行；共享的 CPU origins/CUDA state reset 问题已修复，普通 GelSight Teacher 与 X040 Teacher 短 PPO 均通过。
+
+### 2026-08-14 CST — 新增 GelSight X040-DR 三帧 Teacher/Student 实验族
+
+- 修改：新增配套 Teacher 与三帧 Student task；复用 X040 的 4–6 cm 八 Cube reset 选桶、`x=[0.32,0.48] m/y=[-0.10,0.10] m`、相机 DR 与停车策略，并叠加 GelSight reference-delta 输入和左右接触头。
+- 契约：Student runtime 输入为三帧 RGB、proprio/history、左右 current/reference tactile；输出 `action[4]`、左右接触概率 `[2]` 和 root 米制 Cube XYZ `[3]`。位置头以无界归一化 XYZ 表示 X040 的 `x=0.32 m` 下界；Student model v2，旧 checkpoint 不兼容且需重训。
+- 安全：非法碰撞惩罚阈值在 0–100k policy step 从20 N线性收紧至5 N（每步-10）；终止阈值从200 N收紧至20 N，ground collision 仍终止、timeout 仅 truncated。
+- 验证：相关模块 `compileall` 与 `git diff --check` 通过；Isaac 下 task 注册/配置契约与 TorchScript 三输出隔离 pytest、Teacher 8-env/256-step PPO smoke 通过。完整定向 pytest 曾在8分钟无输出后中止，Student 8-env smoke、训练、回放和导出仍待目标 GPU 主机复验。
+
+### 2026-08-14 CST — 新增 GelSight Teacher 键盘几何检查脚本
+
+- 修改：新增单环境 GUI 键盘遥操作脚本，沿用 Teacher 的 4 维 Cartesian action，并输出双指尖中点与由 PhysX body pose 变换的 GelSight case/gelpad 局部包围盒最低角点。
+- 契约：不修改 task 注册、观测、动作维度、奖励、done、资产或 checkpoint；Teacher 默认不渲染 GelSight tactile RGB。
+- 验证：脚本 `compileall` 与 `git diff --check` 通过；GUI Isaac smoke 待在带图形界面的 Isaac Lab 会话中人工运行。
+
 ### 2026-08-13 CST — GelSight Size-Buckets Student 改为视觉触觉连续融合
 
 - 修改：腕部 ResNet18 GAP 保留512维，左右 reference-delta GelSight 共享 CNN 各输出256维，与15维 proprio/4维 history 拼成1043维直接动作输入；XYZ、14×14 heatmap、左右接触及 Teacher action 提供辅助/蒸馏监督。

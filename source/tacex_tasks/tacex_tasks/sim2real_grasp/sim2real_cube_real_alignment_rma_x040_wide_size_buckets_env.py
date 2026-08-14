@@ -64,14 +64,21 @@ class _SelectedBucketContactSensorBank:
 
 
 class _SelectedCubeData:
-    """Expose the selected object in a collection as one rigid-object data view."""
+    """Expose the selected object in a collection as one rigid-object data view.
+
+    CPU PhysX can return collection state on CPU while the DirectRLEnv policy
+    tensors remain on CUDA.  This facade is the collection-to-environment
+    boundary, so selected state is always returned on the environment device.
+    """
 
     def __init__(self, owner: "_SelectedCube") -> None:
         self._owner = owner
 
     def _selected(self, values: torch.Tensor) -> torch.Tensor:
         rows = torch.arange(self._owner.num_envs, device=values.device)
-        return values[rows, self._owner.active_bucket_ids]
+        bucket_ids = self._owner.active_bucket_ids.to(device=values.device)
+        selected = values[rows, bucket_ids]
+        return selected.to(device=self._owner.environment_device, non_blocking=True)
 
     @property
     def default_root_state(self) -> torch.Tensor:
@@ -106,11 +113,13 @@ class _SelectedCube:
         active_bucket_ids: torch.Tensor,
         env_origins: torch.Tensor,
         nominal_xy: tuple[float, float],
+        environment_device: torch.device,
     ) -> None:
         self.collection = collection
         self.active_bucket_ids = active_bucket_ids
         self.env_origins = env_origins
         self.nominal_xy = nominal_xy
+        self.environment_device = environment_device
         self.num_envs = int(active_bucket_ids.shape[0])
         self.data = _SelectedCubeData(self)
 
@@ -233,7 +242,6 @@ class _CubeSizeBucketMixin:
             low=0,
             high=len(self.cfg.cube_size_buckets_m),
             size=(self.num_envs,),
-            device=self.device,
         )
         self._cube_size_bucket_values = torch.tensor(
             self.cfg.cube_size_buckets_m,
@@ -245,6 +253,7 @@ class _CubeSizeBucketMixin:
             active_bucket_ids=self._active_cube_bucket_ids,
             env_origins=self.scene.env_origins,
             nominal_xy=(float(self.cfg.cube.init_state.pos[0]), float(self.cfg.cube.init_state.pos[1])),
+            environment_device=self.device,
         )
         self._cube = selected_cube
         self._cylinder = selected_cube

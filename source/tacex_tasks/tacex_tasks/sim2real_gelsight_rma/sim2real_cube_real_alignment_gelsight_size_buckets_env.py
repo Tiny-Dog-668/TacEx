@@ -111,8 +111,8 @@ def linear_illegal_collision_penalty_threshold(
     return start_n + progress * (end_n - start_n)
 
 
-class _GelSightFixedSizeCollisionMixin:
-    """One fixed physical Cube per env plus the GelSight collision contract."""
+class _GelSightFixedSizeCubeMixin:
+    """Assign one fixed physical Cube size to each environment before PhysX starts."""
 
     def _setup_scene(self) -> None:
         bucket_count = len(self.cfg.cube_size_buckets_m)
@@ -139,10 +139,6 @@ class _GelSightFixedSizeCollisionMixin:
             self.cfg.cube_size_buckets_m, device=self.device, dtype=torch.float32
         )
         super()._setup_scene()
-        self.cube_illegal_contact_sensor = ContactSensor(
-            self.cfg.cube_illegal_contact_sensor
-        )
-        self.scene.sensors["cube_illegal_contact_sensor"] = self.cube_illegal_contact_sensor
         self._hide_shared_ground()
         self._author_fixed_cube_scales()
         self.scene.filter_collisions(global_prim_paths=[self.cfg.ground.prim_path])
@@ -218,6 +214,17 @@ class _GelSightFixedSizeCollisionMixin:
             self.num_envs, 8, 3
         )
         return (rotated + cube_pos[:, None, :])[:, :, 2].amin(dim=1)
+
+
+class _GelSightFixedSizeCollisionMixin(_GelSightFixedSizeCubeMixin):
+    """Add the fixed-size GelSight collision contract to the shared Cube layout."""
+
+    def _setup_scene(self) -> None:
+        super()._setup_scene()
+        self.cube_illegal_contact_sensor = ContactSensor(
+            self.cfg.cube_illegal_contact_sensor
+        )
+        self.scene.sensors["cube_illegal_contact_sensor"] = self.cube_illegal_contact_sensor
 
     @staticmethod
     def _max_filtered_contact_force(sensor: ContactSensor) -> torch.Tensor:

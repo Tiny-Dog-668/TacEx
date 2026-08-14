@@ -51,6 +51,32 @@ RMA_TEACHER_MANIFEST_VERSION = 10
 RMA_STUDENT_CHECKPOINT_VERSION = 6
 
 
+def _is_gelsight_task(task: str) -> bool:
+    return task in {
+        RMA_GELSIGHT_TEACHER_TASK,
+        RMA_GELSIGHT_STUDENT_TASK,
+        RMA_GELSIGHT_STUDENT_DR_TASK,
+        RMA_GELSIGHT_STUDENT_HEATMAP_TASK,
+        RMA_GELSIGHT_STUDENT_HEATMAP_DR_TASK,
+    }
+
+
+def _actor_core_for_task(task: str) -> RMAActorCore:
+    """Select the FK contract without changing non-GelSight RMA artifacts."""
+    if _is_gelsight_task(task):
+        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_models import (
+            RMAGelSightActorCore,
+        )
+
+        return RMAGelSightActorCore()
+    return RMAActorCore()
+
+
+def _actor_core_for_cfg(cfg: Any) -> RMAActorCore:
+    task = str(getattr(cfg, "rma_task_id", RMA_TEACHER_TASK))
+    return _actor_core_for_task(task)
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as file:
@@ -90,7 +116,7 @@ def _env_contract(cfg: Any) -> dict[str, Any]:
     def optional_float(value: Any) -> float | None:
         return None if value is None else float(value)
 
-    return {
+    contract = {
         "robot_profile": str(getattr(cfg, "rma_robot_profile", "franka_panda_hand")),
         "gelsight_enabled": bool(getattr(cfg, "rma_gelsight_enabled", False)),
         "gelsight_sensor_names": [
@@ -147,6 +173,11 @@ def _env_contract(cfg: Any) -> dict[str, Any]:
         "success_hold_steps": int(cfg.success_hold_steps),
         "success_terminates_episode": bool(cfg.rma_success_terminates_episode),
     }
+    if bool(getattr(cfg, "rma_gelsight_enabled", False)):
+        from tacex_tasks.sim2real_gelsight_rma.gelsight_geometry import geometry_contract
+
+        contract["gelsight_geometry"] = geometry_contract()
+    return contract
 
 
 def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Mapping[str, Any]) -> Path:
@@ -169,7 +200,7 @@ def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Map
             "rma_cube_pos": 3,
             "rma_contact_state": 2,
         },
-        "actor_contract": RMAActorCore().contract(),
+        "actor_contract": _actor_core_for_cfg(base_env.cfg).contract(),
         "actor_output": {"mean_actions": 4, "transform": "tanh"},
         "normalization": normalizer.contract(),
         "environment_contract": _env_contract(base_env.cfg),
@@ -203,7 +234,7 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     expected_contract = RMAObservationNormalizer().contract()
     if manifest.get("normalization") != expected_contract:
         raise RuntimeError("Teacher normalization contract differs from the current RMA model")
-    if manifest.get("actor_contract") != RMAActorCore().contract():
+    if manifest.get("actor_contract") != _actor_core_for_task(str(manifest["task"])).contract():
         raise RuntimeError("Teacher Actor feature/FK contract differs from the current RMA model")
     return manifest
 
@@ -267,6 +298,13 @@ def load_student_checkpoint(
         raise RuntimeError(f"RMA student model version mismatch: {payload.get('model_version')}")
     if payload.get("normalization") != RMAObservationNormalizer().contract():
         raise RuntimeError("Student normalization contract differs from the current RMA model")
+    task = str(payload["task"])
+    if _is_gelsight_task(task):
+        teacher_manifest = payload.get("teacher_manifest")
+        if not isinstance(teacher_manifest, Mapping) or teacher_manifest.get(
+            "actor_contract"
+        ) != _actor_core_for_task(task).contract():
+            raise RuntimeError("GelSight Student checkpoint uses the obsolete Panda FK contract")
     if not isinstance(payload.get("model"), Mapping):
         raise RuntimeError("Student checkpoint has no model state_dict")
     if expected_teacher_checkpoint is not None:

@@ -13,10 +13,11 @@ import torch
 
 from tacex_tasks.sim2real_grasp.rma_models import (
     RMA_MODEL_VERSION,
-    RMAActorCore,
     RMAObservationNormalizer,
 )
 
+from .gelsight_geometry import geometry_contract
+from .rma_gelsight_models import RMAGelSightActorCore
 from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
     GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
@@ -25,8 +26,8 @@ from .rma_gelsight_size_buckets_models import gelsight_student_model_contract
 
 
 MANIFEST_FILENAME = "rma_gelsight_size_buckets_manifest.json"
-TEACHER_MANIFEST_VERSION = 2
-STUDENT_CHECKPOINT_VERSION = 3
+TEACHER_MANIFEST_VERSION = 3
+STUDENT_CHECKPOINT_VERSION = 4
 STUDENT_MODEL_VERSION = 2
 
 
@@ -120,12 +121,13 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 def environment_contract(cfg: Any) -> dict[str, Any]:
     return {
-        "profile": "rma_gelsight_fixed_size_buckets_v1",
+        "profile": "rma_gelsight_fixed_size_buckets_v2",
         "robot_profile": str(cfg.rma_robot_profile),
         "action_dim": int(cfg.action_space),
         "action_scales": [float(cfg.action_scale)] * 3
         + [float(cfg.gripper_width_delta_scale)],
         "position_frame": str(cfg.rma_position_frame),
+        "gelsight_geometry": geometry_contract(),
         "actor_feature_dim": int(cfg.rma_actor_feature_dim),
         "cube_sizes_m": [float(value) for value in cfg.cube_size_buckets_m],
         "cube_size_assignment": str(cfg.cube_size_assignment),
@@ -192,7 +194,7 @@ def write_teacher_manifest(
             "rma_cube_pos": 3,
             "rma_contact_state": 2,
         },
-        "actor_contract": RMAActorCore().contract(),
+        "actor_contract": RMAGelSightActorCore().contract(),
         "normalization": RMAObservationNormalizer().contract(),
         "environment_contract": environment_contract(base_env.cfg),
         "curriculum_policy_step_offset": int(
@@ -223,7 +225,7 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
         raise RuntimeError("GelSight Size-Buckets Teacher task mismatch")
     if manifest.get("model_version") != RMA_MODEL_VERSION:
         raise RuntimeError("Teacher RMA model version mismatch")
-    if manifest.get("actor_contract") != RMAActorCore().contract():
+    if manifest.get("actor_contract") != RMAGelSightActorCore().contract():
         raise RuntimeError("Teacher Actor contract mismatch")
     if manifest.get("normalization") != RMAObservationNormalizer().contract():
         raise RuntimeError("Teacher normalization contract mismatch")

@@ -54,14 +54,19 @@ def test_privileged_task_has_no_camera_and_consistent_position_observations():
         assert policy_obs["privileged_cube_pos"].shape == (2, 3)
         assert policy_obs["privileged_gripper_pos"].shape == (2, 3)
         assert policy_obs["privileged_target_pos"].shape == (2, 3)
+        assert policy_obs["privileged_cube_pos"].device == base_env._cube.data.root_pos_w.device
 
         torch.testing.assert_close(
             policy_obs["privileged_target_pos"],
             policy_obs["privileged_cube_pos"] - policy_obs["privileged_gripper_pos"],
         )
+        env_origins = base_env.scene.env_origins.to(
+            device=base_env._cube.data.root_pos_w.device,
+            dtype=base_env._cube.data.root_pos_w.dtype,
+        )
         torch.testing.assert_close(
             policy_obs["privileged_cube_pos"],
-            base_env._cube.data.root_pos_w - base_env.scene.env_origins,
+            base_env._cube.data.root_pos_w - env_origins,
         )
 
         actions = torch.zeros((2, env_cfg.action_space), device=base_env.device)

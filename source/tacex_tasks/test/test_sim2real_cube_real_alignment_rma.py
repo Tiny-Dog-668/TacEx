@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from isaaclab.utils import math as math_utils
 
 import tacex_tasks  # noqa: F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
@@ -52,6 +53,17 @@ from tacex_tasks.sim2real_grasp.rma_models import (
     make_gaussian_heatmaps,
     project_points_root_to_image,
     RMAVisualStudent,
+)
+from tacex_tasks.sim2real_gelsight_rma.gelsight_geometry import (
+    GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M,
+    GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M,
+    GELSIGHT_TABLE_CLEARANCE_MIN_M,
+    GELSIGHT_TABLE_CLEARANCE_PENALTY,
+    table_clearance_penalty,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_models import (
+    RMAGelSightActorCore,
+    RMAGelSightPrivilegedTeacherPolicy,
 )
 from tacex_tasks.sim2real_grasp.rma_xy_models import (
     RMA_XY_ACTOR_FEATURE_DIM,
@@ -308,6 +320,21 @@ def test_rma_gelsight_configs_use_separate_robot_profile():
         assert cfg.robot.actuators["panda_hand"].effort_limit_sim == pytest.approx(40.0)
         assert cfg.robot.actuators["panda_hand"].stiffness == pytest.approx(400.0)
         assert cfg.robot.actuators["panda_hand"].damping == pytest.approx(40.0)
+        assert cfg.arm_ik_tcp_offset_m == pytest.approx(
+            (0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M)
+        )
+        assert cfg.gelsight_center_offset_hand_m == pytest.approx(
+            (0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M)
+        )
+        assert cfg.gelsight_fingertip_bottom_offset_hand_m == pytest.approx(
+            (0.0, 0.0, GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M)
+        )
+        assert cfg.gelsight_table_clearance_min_m == pytest.approx(
+            GELSIGHT_TABLE_CLEARANCE_MIN_M
+        )
+        assert cfg.gelsight_table_clearance_penalty == pytest.approx(
+            GELSIGHT_TABLE_CLEARANCE_PENALTY
+        )
 
     assert gelsight_teacher.rma_gelsight_tactile_sensor_enabled is False
     for cfg in (
@@ -327,12 +354,19 @@ def test_rma_gelsight_configs_use_separate_robot_profile():
     assert gelsight_contract == student_contract
     assert gelsight_contract["robot_profile"] == "franka_gsmini_gripper_rigid_left_right"
     assert gelsight_contract["gelsight_enabled"] is True
+    assert gelsight_contract["gelsight_geometry"]["center_offset_hand_m"] == pytest.approx(
+        [0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M]
+    )
+    assert gelsight_contract["gelsight_geometry"]["lowest_point_offset_hand_m"] == pytest.approx(
+        [0.0, 0.0, GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M]
+    )
     assert gelsight_contract["contact_filter_prim_paths"] == [
         "/World/envs/env_.*/Robot/gelpad_left",
         "/World/envs/env_.*/Robot/gelpad_right",
     ]
     assert legacy_contract["robot_profile"] == "franka_panda_hand"
     assert legacy_contract["gelsight_enabled"] is False
+    assert "gelsight_geometry" not in legacy_contract
     assert legacy_contract["contact_filter_prim_paths"] == [
         "/World/envs/env_.*/Robot/panda_leftfinger",
         "/World/envs/env_.*/Robot/panda_rightfinger",
@@ -349,6 +383,48 @@ def test_rma_gelsight_configs_use_separate_robot_profile():
     assert gelsight_student_dr.dr_curriculum_enabled is False
     assert gelsight_student_heatmap_dr.rma_heatmap_supervision_enabled is True
     assert gelsight_student_heatmap_dr.dr_curriculum_enabled is False
+
+
+def test_gelsight_fk_and_table_clearance_contract_are_distinct_from_panda():
+    gelsight_actor = RMAGelSightActorCore()
+    panda_actor = RMAActorCore()
+    assert gelsight_actor.contract()["kinematics"]["panda_hand_to_fingertip_midpoint_m"] == pytest.approx(
+        GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M
+    )
+    assert panda_actor.contract()["kinematics"]["panda_hand_to_fingertip_midpoint_m"] == pytest.approx(
+        0.1034
+    )
+    proprio = torch.zeros((1, 15))
+    root_cube = torch.tensor([[0.40, 0.0, 0.026]])
+    contact = torch.zeros((1, 2))
+    with torch.no_grad():
+        panda_tip = panda_actor.kinematics(proprio[:, :7])
+        gelsight_tip = gelsight_actor.kinematics(proprio[:, :7])
+    assert torch.linalg.vector_norm(gelsight_tip - panda_tip).item() == pytest.approx(
+        GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M - 0.1034
+    )
+    assert gelsight_actor(proprio, torch.zeros((1, 4)), root_cube, contact).shape == (1, 4)
+
+    clearance = torch.tensor([0.0100, 0.009999, -0.001, 0.011])
+    below, penalty = table_clearance_penalty(clearance)
+    assert below.tolist() == [False, True, True, False]
+    torch.testing.assert_close(penalty, torch.tensor([0.0, -10.0, -10.0, 0.0]))
+
+
+def test_gelsight_teacher_policy_constructs_the_gelsight_fk_core():
+    policy = RMAGelSightPrivilegedTeacherPolicy(
+        gym.spaces.Dict(
+            {
+                "proprio_obs": gym.spaces.Box(-1.0, 1.0, (15,)),
+                "action_history": gym.spaces.Box(-1.0, 1.0, (4,)),
+                "rma_cube_pos": gym.spaces.Box(-1.0, 1.0, (3,)),
+                "rma_contact_state": gym.spaces.Box(-1.0, 1.0, (2,)),
+            }
+        ),
+        gym.spaces.Box(-1.0, 1.0, (4,)),
+        "cpu",
+    )
+    assert isinstance(policy.actor_core, RMAGelSightActorCore)
 
 
 def test_rma_gelsight_teacher_runtime_uses_gelpad_contact_filter():
@@ -370,6 +446,25 @@ def test_rma_gelsight_teacher_runtime_uses_gelpad_contact_filter():
             1,
             2,
             3,
+        )
+
+        hand_pos = base_env._robot.data.body_link_pos_w[:, base_env._body_idx]
+        hand_quat = base_env._robot.data.body_link_quat_w[:, base_env._body_idx]
+        expected_center, _ = math_utils.combine_frame_transforms(
+            hand_pos,
+            hand_quat,
+            base_env._gelsight_center_offset_hand,
+            base_env._offset_rot,
+        )
+        expected_bottom, _ = math_utils.combine_frame_transforms(
+            hand_pos,
+            hand_quat,
+            base_env._gelsight_bottom_offset_hand,
+            base_env._offset_rot,
+        )
+        torch.testing.assert_close(base_env._compute_reach_center_world(), expected_center)
+        torch.testing.assert_close(
+            base_env._compute_gelsight_fingertip_bottom_world(), expected_bottom
         )
 
         actions = torch.zeros((1, int(cfg.action_space)), device=base_env.device)
@@ -405,6 +500,8 @@ def test_rma_gelsight_teacher_runtime_uses_gelpad_contact_filter():
         assert torch.max(max_forces).item() >= cfg.rma_contact_force_threshold_n
         assert torch.max(max_contact_state).item() == pytest.approx(1.0)
         assert torch.max(max_contact_reward).item() > 0.0
+        assert "reward/gelsight_table_clearance" in base_env.extras["log"]
+        assert "info/gelsight_fingertip_bottom_clearance_m" in base_env.extras["log"]
     finally:
         env.close()
 
@@ -517,7 +614,7 @@ def test_legacy_rollout_policy_accepts_only_archived_v5_contract():
 
 
 def test_gelsight_student_contact_head_uses_tactile_rgb():
-    actor = RMAActorCore()
+    actor = RMAGelSightActorCore()
     student = RMAVisualStudent(
         actor,
         pretrained_backbone=False,

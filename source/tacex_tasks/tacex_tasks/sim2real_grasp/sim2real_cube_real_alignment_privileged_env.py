@@ -150,8 +150,15 @@ class Sim2RealCubeRealAlignmentPrivilegedEnv(Sim2RealCubeRealAlignmentEnv):
         # The robot base is fixed at each environment origin with identity
         # orientation in this task. Removing env_origins therefore expresses
         # positions in the same robot-root-aligned frame for every environment.
-        cube_pos_root = cube_pos_w - self.scene.env_origins
-        gripper_pos_root = gripper_center_w - self.scene.env_origins
+        # Input/output shapes: [N, 3] world positions -> [N, 3] root positions.
+        # CPU PhysX can retain scene origins on CPU while asset state stays on
+        # the configured CUDA policy device, so align both device and dtype.
+        env_origins = self.scene.env_origins.to(
+            device=cube_pos_w.device,
+            dtype=cube_pos_w.dtype,
+        )
+        cube_pos_root = cube_pos_w - env_origins
+        gripper_pos_root = gripper_center_w - env_origins
         target_pos_root = cube_pos_root - gripper_pos_root
 
         left_quat_w = self._robot.data.body_link_quat_w[:, self._left_finger_body_idx]

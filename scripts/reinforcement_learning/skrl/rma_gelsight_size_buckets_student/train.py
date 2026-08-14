@@ -82,8 +82,10 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
     RMAGelSightReferenceStudent,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_models import (
+    RMAGelSightActorCore,
+)
 from tacex_tasks.sim2real_grasp.rma_models import (
-    RMAActorCore,
     extract_actor_core_state_dict,
     heatmap_soft_argmax,
     make_gaussian_heatmaps,
@@ -135,7 +137,7 @@ def _student_payload(
     step: int,
     teacher_checkpoint: Path,
     teacher_manifest: dict,
-    teacher_actor: RMAActorCore,
+    teacher_actor: RMAGelSightActorCore,
 ) -> dict:
     return {
         "kind": "tacex_rma_gelsight_size_buckets_student",
@@ -313,7 +315,7 @@ def main() -> None:
     env = gym.make(args.task, cfg=env_cfg)
     device = torch.device(env.unwrapped.device)
 
-    teacher_actor = RMAActorCore().to(device)
+    teacher_actor = RMAGelSightActorCore().to(device)
     teacher_actor.load_state_dict(
         extract_actor_core_state_dict(
             load_teacher_policy_state(teacher_checkpoint, device)

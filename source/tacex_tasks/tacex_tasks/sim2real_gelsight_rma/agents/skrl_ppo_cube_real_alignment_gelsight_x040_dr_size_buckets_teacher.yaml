@@ -15,11 +15,7 @@ models:
     clip_actions: False
     network:
       - name: net
-        input: "concatenate([STATES['proprio_obs'], STATES['action_history'], \
-STATES['critic_cube_pos'], STATES['critic_cube_quat'], STATES['critic_cube_lin_vel'], \
-STATES['critic_cube_ang_vel'], STATES['critic_gripper_pos'], STATES['critic_gripper_quat'], \
-STATES['critic_gripper_lin_vel'], STATES['critic_gripper_ang_vel'], \
-STATES['critic_target_pos'], STATES['critic_target_distance']])"
+        input: "concatenate([STATES['proprio_obs'], STATES['action_history'], STATES['critic_cube_pos'], STATES['critic_cube_quat'], STATES['critic_cube_lin_vel'], STATES['critic_cube_ang_vel'], STATES['critic_gripper_pos'], STATES['critic_gripper_quat'], STATES['critic_gripper_lin_vel'], STATES['critic_gripper_ang_vel'], STATES['critic_target_pos'], STATES['critic_target_distance']])"
         layers: [512, 256, 128, 64]
         activations: elu
     output: ONE
@@ -57,15 +53,14 @@ agent:
   rewards_shaper_scale: 1.0
   time_limit_bootstrap: False
   experiment:
-    directory: "sim2real_cube_real_alignment_rma_gelsight_teacher"
-    experiment_name: "rma_gelsight_privileged_position"
+    directory: "sim2real_cube_real_alignment_rma_gelsight_x040_dr_size_buckets_teacher"
+    experiment_name: "rma_gelsight_x040_dr_privileged_position_contact"
     write_interval: 500
     checkpoint_interval: 10000
     wandb: False
-    wandb_kwargs: {
-      "sync_tensorboard": True,
-      "project": "sim2real_cube_real_alignment_rma_gelsight_teacher"
-    }
+    wandb_kwargs:
+      sync_tensorboard: True
+      project: "sim2real_cube_real_alignment_rma_gelsight_x040_dr_size_buckets_teacher"
 
 trainer:
   class: SequentialTrainer

@@ -1,10 +1,8 @@
 """GelSight-equipped RMA variants of the Real-Alignment cube task.
 
-These tasks intentionally keep the existing RMA Actor contract unchanged. The
-GelSight Mini geometry is part of the simulated robot profile. Teacher does not
-render tactile RGB. Student uses third-person RGB for cube position and left/right
-GelSight tactile RGB for contact prediction; the frozen Actor contract remains
-unchanged.
+The GelSight Mini geometry defines its own hand-frame center and lowest-point
+contract. Teacher does not render tactile RGB. Student uses third-person RGB for
+cube position and left/right GelSight tactile RGB for contact prediction.
 """
 
 from __future__ import annotations
@@ -15,6 +13,7 @@ import torch
 from isaaclab.assets import ArticulationCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
+from isaaclab.utils import math as math_utils
 
 from tacex import GelSightSensor
 from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
@@ -36,6 +35,14 @@ from tacex_tasks.sim2real_grasp.sim2real_cube_real_alignment_rma_env import (
     Sim2RealCubeRealAlignmentRMAStudentHeatmapEnvCfg,
     Sim2RealCubeRealAlignmentRMATeacherEnv,
     Sim2RealCubeRealAlignmentRMATeacherEnvCfg,
+)
+
+from .gelsight_geometry import (
+    GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M,
+    GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M,
+    GELSIGHT_TABLE_CLEARANCE_MIN_M,
+    GELSIGHT_TABLE_CLEARANCE_PENALTY,
+    table_clearance_penalty,
 )
 
 
@@ -116,6 +123,99 @@ class _RMAGelSightSensorMixin:
             "gsmini_left": self.gsmini_left.data.output.get("tactile_rgb"),
             "gsmini_right": self.gsmini_right.data.output.get("tactile_rgb"),
         }
+
+
+class _RMAGelSightGeometryMixin:
+    """Use the rigid dual-GelSight geometry for reward, critic, and safety."""
+
+    def __init__(self, cfg, render_mode: str | None = None, **kwargs) -> None:
+        super().__init__(cfg, render_mode, **kwargs)
+        self._gelsight_center_offset_hand = torch.tensor(
+            self.cfg.gelsight_center_offset_hand_m,
+            device=self.device,
+            dtype=torch.float32,
+        ).unsqueeze(0).repeat(self.num_envs, 1)
+        self._gelsight_bottom_offset_hand = torch.tensor(
+            self.cfg.gelsight_fingertip_bottom_offset_hand_m,
+            device=self.device,
+            dtype=torch.float32,
+        ).unsqueeze(0).repeat(self.num_envs, 1)
+
+    def _hand_offset_world(self, offset_hand_m: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Transform batched ``panda_hand`` local offsets into world coordinates."""
+        hand_pos = self._robot.data.body_link_pos_w[:, self._body_idx]
+        hand_quat = self._robot.data.body_link_quat_w[:, self._body_idx]
+        return math_utils.combine_frame_transforms(
+            hand_pos,
+            hand_quat,
+            offset_hand_m,
+            self._offset_rot,
+        )
+
+    def _compute_reach_center_world(self) -> torch.Tensor:
+        """Return the midpoint of the two GelSight contact faces in world coordinates."""
+        center, _ = self._hand_offset_world(self._gelsight_center_offset_hand)
+        return center
+
+    def _compute_gelsight_fingertip_bottom_world(self) -> torch.Tensor:
+        """Return panda_fingertip_centered's hand-frame reference in world coordinates."""
+        bottom, _ = self._hand_offset_world(self._gelsight_bottom_offset_hand)
+        return bottom
+
+    def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Add a geometry-only penalty before the lowest gripper point reaches the table."""
+        reward, log = super()._compute_additional_reward()
+        clearance = (
+            self._compute_gelsight_fingertip_bottom_world()[:, 2]
+            - float(self.cfg.plate_top_height_m)
+        )
+        below_clearance, penalty = table_clearance_penalty(
+            clearance,
+            min_clearance_m=float(self.cfg.gelsight_table_clearance_min_m),
+            penalty_value=float(self.cfg.gelsight_table_clearance_penalty),
+        )
+        self._last_gelsight_table_clearance_m = clearance.detach().clone()
+        self._last_gelsight_table_clearance_penalty = penalty.detach().clone()
+        log.update(
+            {
+                "reward/gelsight_table_clearance": penalty.mean().detach(),
+                "info/gelsight_fingertip_bottom_clearance_m": clearance.mean().detach(),
+                "info/gelsight_table_clearance_fraction": below_clearance.float().mean().detach(),
+            }
+        )
+        return reward + penalty, log
+
+    def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
+        """Keep privileged gripper state aligned with the GelSight reward center."""
+        observations = super()._get_observations()
+        obs = observations["policy"]
+        hand_pos = self._robot.data.body_link_pos_w[:, self._body_idx]
+        hand_quat = self._robot.data.body_link_quat_w[:, self._body_idx]
+        hand_lin_vel = self._robot.data.body_link_lin_vel_w[:, self._body_idx]
+        hand_ang_vel = self._robot.data.body_link_ang_vel_w[:, self._body_idx]
+        center = self._compute_reach_center_world()
+        center_offset_w = math_utils.quat_apply(hand_quat, self._gelsight_center_offset_hand)
+        center_lin_vel = hand_lin_vel + torch.cross(hand_ang_vel, center_offset_w, dim=-1)
+        target_pos = self._cube.data.root_pos_w - center
+        obs["critic_gripper_pos"] = center
+        obs["critic_gripper_quat"] = hand_quat
+        obs["critic_gripper_lin_vel"] = center_lin_vel
+        obs["critic_gripper_ang_vel"] = hand_ang_vel
+        obs["critic_target_pos"] = target_pos
+        obs["critic_target_distance"] = torch.norm(target_pos, dim=-1, keepdim=True)
+        return observations
+
+    def _additional_reward_print_fields(self) -> str:
+        fields = super()._additional_reward_print_fields()
+        if not hasattr(self, "_last_gelsight_table_clearance_m"):
+            return fields
+        return (
+            fields
+            + "gelsight_tip_clearance="
+            + f"{self._last_gelsight_table_clearance_m.mean().item():.4f} m, "
+            + "gelsight_tip_penalty="
+            + f"{self._last_gelsight_table_clearance_penalty.mean().item():.3f}, "
+        )
 
 
 class _RMAGelSightStudentObservationMixin:
@@ -223,6 +323,13 @@ class _RMAGelSightCfgMixin:
     robot = _make_gelsight_robot_cfg()
     rma_robot_profile = _GELSIGHT_PROFILE
     rma_gelsight_enabled = True
+    arm_ik_tcp_source = "panda_hand_fixed_offset_gelpad_midpoint"
+    arm_ik_tcp_offset_m = (0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M)
+    reach_center_source = "panda_hand_plus_z_gelpad_left_right_midpoint"
+    gelsight_center_offset_hand_m = (0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M)
+    gelsight_fingertip_bottom_offset_hand_m = (0.0, 0.0, GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M)
+    gelsight_table_clearance_min_m = GELSIGHT_TABLE_CLEARANCE_MIN_M
+    gelsight_table_clearance_penalty = GELSIGHT_TABLE_CLEARANCE_PENALTY
     rma_gelsight_sensor_names = _GELSIGHT_SENSOR_NAMES
     rma_gelsight_sensor_prims = _GELSIGHT_SENSOR_PRIMS
     rma_gelsight_actor_observation = "none"
@@ -247,6 +354,7 @@ class Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg(
 
 
 class Sim2RealCubeRealAlignmentRMAGelSightTeacherEnv(
+    _RMAGelSightGeometryMixin,
     _RMAGelSightSensorMixin,
     Sim2RealCubeRealAlignmentRMATeacherEnv,
 ):
@@ -274,6 +382,7 @@ class Sim2RealCubeRealAlignmentRMAGelSightStudentEnvCfg(
 class Sim2RealCubeRealAlignmentRMAGelSightStudentEnv(
     _RMAGelSightStudentObservationMixin,
     _RMAGelSightSensorMixin,
+    _RMAGelSightGeometryMixin,
     Sim2RealCubeRealAlignmentRMAStudentEnv,
 ):
     """GelSight-equipped RMA visual Student environment."""
@@ -300,6 +409,7 @@ class Sim2RealCubeRealAlignmentRMAGelSightStudentHeatmapEnvCfg(
 class Sim2RealCubeRealAlignmentRMAGelSightStudentHeatmapEnv(
     _RMAGelSightStudentObservationMixin,
     _RMAGelSightSensorMixin,
+    _RMAGelSightGeometryMixin,
     Sim2RealCubeRealAlignmentRMAStudentHeatmapEnv,
 ):
     """GelSight-equipped heatmap Student environment."""
@@ -326,6 +436,7 @@ class Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg(
 class Sim2RealCubeRealAlignmentRMAGelSightStudentDREnv(
     _RMAGelSightStudentObservationMixin,
     _RMAGelSightSensorMixin,
+    _RMAGelSightGeometryMixin,
     Sim2RealCubeRealAlignmentRMAStudentDREnv,
 ):
     """GelSight-equipped DR Student environment."""
@@ -354,6 +465,7 @@ class Sim2RealCubeRealAlignmentRMAGelSightStudentHeatmapDREnvCfg(
 class Sim2RealCubeRealAlignmentRMAGelSightStudentHeatmapDREnv(
     _RMAGelSightStudentObservationMixin,
     _RMAGelSightSensorMixin,
+    _RMAGelSightGeometryMixin,
     Sim2RealCubeRealAlignmentRMAStudentHeatmapDREnv,
 ):
     """GelSight-equipped heatmap DR Student environment."""

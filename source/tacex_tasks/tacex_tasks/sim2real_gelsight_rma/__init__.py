@@ -25,6 +25,14 @@ from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnv,
     Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsTeacherEnvCfg,
 )
+from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
+    GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+    GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsTeacherEnvCfg,
+    Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnv,
+    Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnvCfg,
+)
 
 
 RMA_GELSIGHT_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
@@ -79,6 +87,37 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightSizeBucketsStudentDREnvCfg,
+    },
+)
+
+gym.register(
+    id=GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_x040_three_frame_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsTeacherEnvCfg
+        ),
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:skrl_ppo_cube_real_alignment_gelsight_x040_dr_size_buckets_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_x040_three_frame_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnvCfg
+        ),
     },
 )
 
