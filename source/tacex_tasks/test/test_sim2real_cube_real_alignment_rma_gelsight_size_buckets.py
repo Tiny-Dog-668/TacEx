@@ -22,12 +22,18 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 import tacex_tasks  # noqa: F401
 from tacex.simulation_approaches.gpu_taxim.taxim_sim import TaximSimulator
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+    STUDENT_CHECKPOINT_VERSION,
+    STUDENT_MODEL_VERSION,
     environment_contract,
     infer_teacher_checkpoint_policy_step,
+    load_student_checkpoint,
+    student_input_contract,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
+    GELSIGHT_STUDENT_FUSION_DIM,
+    GELSIGHT_STUDENT_TACTILE_SIDE_DIM,
     RMAGelSightReferenceStudent,
-    ReferenceDeltaTactileContactHead,
+    ReferenceDeltaTactileEncoder,
 )
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_M,
@@ -37,7 +43,6 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_siz
     illegal_collision_response,
     linear_illegal_collision_penalty_threshold,
 )
-from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -104,6 +109,23 @@ def test_teacher_checkpoint_policy_step_is_inferred_fail_closed(tmp_path):
         infer_teacher_checkpoint_policy_step("/run/checkpoints/best_agent.pt")
 
 
+def test_old_bottleneck_student_checkpoint_fails_closed(tmp_path):
+    checkpoint = tmp_path / "old_student.pt"
+    torch.save(
+        {
+            "kind": "tacex_rma_gelsight_size_buckets_student",
+            "version": STUDENT_CHECKPOINT_VERSION - 1,
+            "model_version": STUDENT_MODEL_VERSION - 1,
+        },
+        checkpoint,
+    )
+    with pytest.raises(RuntimeError, match="checkpoint version"):
+        load_student_checkpoint(checkpoint)
+    contract = student_input_contract()
+    assert contract["actor_fusion_dim"] == 1043
+    assert contract["tactile_feature"] == "shared_cnn_256_per_side"
+
+
 def test_non_multiple_of_eight_fails_before_scene_creation():
     dummy = SimpleNamespace(
         num_envs=4,
@@ -131,29 +153,32 @@ def test_taxim_partial_reset_preserves_other_environment():
 
 
 def test_signed_delta_and_shared_side_encoder_are_independent():
-    head = ReferenceDeltaTactileContactHead()
+    encoder = ReferenceDeltaTactileEncoder()
     current = torch.full((2, 96, 128, 3), 200, dtype=torch.uint8)
     reference = torch.full_like(current, 100)
-    delta = head.signed_delta(current, reference)
+    delta = encoder.signed_delta(current, reference)
     assert delta.shape == (2, 3, 96, 128)
     torch.testing.assert_close(delta.mean(), torch.tensor(100.0 / 255.0))
-    zero = head.signed_delta(reference, reference)
+    zero = encoder.signed_delta(reference, reference)
     assert torch.count_nonzero(zero) == 0
 
     with torch.no_grad():
-        head.side_output[-1].weight.fill_(0.1)
+        encoder.contact_output[-1].weight.fill_(0.1)
     zeros = torch.zeros((1, 96, 128, 3), dtype=torch.uint8)
     changed = torch.full_like(zeros, 255)
-    logits_a = head(changed, zeros, zeros, zeros)
-    logits_b = head(changed, changed, zeros, zeros)
+    left_a, right_a, logits_a = encoder(changed, zeros, zeros, zeros)
+    left_b, right_b, logits_b = encoder(changed, changed, zeros, zeros)
+    assert left_a.shape == right_a.shape == (1, GELSIGHT_STUDENT_TACTILE_SIDE_DIM)
+    assert logits_a.shape == (1, 2)
+    torch.testing.assert_close(left_a, left_b)
     torch.testing.assert_close(logits_a[:, 0], logits_b[:, 0])
+    assert not torch.equal(right_a, right_b)
 
 
-def test_hard_actor_contact_blocks_action_gradient_but_bce_trains_tactile_head():
+def test_continuous_visual_tactile_fusion_and_auxiliary_gradients():
     device = torch.device("cuda:0")
-    model = RMAGelSightReferenceStudent(
-        RMAActorCore(), pretrained_backbone=False
-    ).to(device)
+    model = RMAGelSightReferenceStudent(pretrained_backbone=False).to(device)
+    model.unfreeze_backbone_after_layer2()
     wrist = torch.randint(
         0, 256, (1, 224, 224, 3), dtype=torch.uint8, device=device
     )
@@ -164,18 +189,58 @@ def test_hard_actor_contact_blocks_action_gradient_but_bce_trains_tactile_head()
     proprio = torch.zeros((1, 15), device=device)
     proprio[:, -1] = 0.04
     history = torch.zeros((1, 4), device=device)
-    action = model(wrist, proprio, history, tactile, tactile, reference, reference)
+    action, position, contact_logits, heatmap = model.forward_with_auxiliary(
+        wrist, proprio, history, tactile, tactile, reference, reference
+    )
     action.square().mean().backward()
-    assert all(parameter.grad is None for parameter in model.tactile_contact_head.parameters())
+    assert any(
+        parameter.grad is not None
+        for parameter in model.tactile_encoder.side_encoder.parameters()
+    )
+    assert any(parameter.grad is not None for parameter in model.vision_encoder[7].parameters())
+    assert all(
+        parameter.grad is None
+        for parameter in model.tactile_encoder.contact_output.parameters()
+    )
 
     model.zero_grad(set_to_none=True)
-    _, logits = model.predict_reference_adaptation(
-        wrist, tactile, tactile, reference, reference
+    _, position, contact_logits, heatmap = model.forward_with_auxiliary(
+        wrist, proprio, history, tactile, tactile, reference, reference
     )
-    F.binary_cross_entropy_with_logits(logits, torch.ones_like(logits)).backward()
-    assert any(parameter.grad is not None for parameter in model.tactile_contact_head.parameters())
+    auxiliary_loss = (
+        F.smooth_l1_loss(position, torch.zeros_like(position))
+        + F.mse_loss(heatmap, torch.zeros_like(heatmap))
+        + F.binary_cross_entropy_with_logits(
+            contact_logits, torch.ones_like(contact_logits)
+        )
+    )
+    auxiliary_loss.backward()
+    assert any(parameter.grad is not None for parameter in model.position_head.parameters())
+    assert any(parameter.grad is not None for parameter in model.heatmap_head.parameters())
+    assert any(
+        parameter.grad is not None
+        for parameter in model.tactile_encoder.contact_output.parameters()
+    )
     assert action.shape == (1, 4)
+    assert position.shape == (1, 3)
+    assert contact_logits.shape == (1, 2)
+    assert heatmap.shape == (1, 1, 14, 14)
     assert torch.all(action.abs() <= 1.0)
+    assert model.contract()["actor_feature_dim"] == GELSIGHT_STUDENT_FUSION_DIM
+
+
+def test_fusion_student_torchscript_runtime_signature():
+    model = RMAGelSightReferenceStudent(pretrained_backbone=False).eval()
+    scripted = torch.jit.script(model)
+    wrist = torch.zeros((1, 224, 224, 3), dtype=torch.uint8)
+    proprio = torch.zeros((1, 15))
+    history = torch.zeros((1, 4))
+    tactile = torch.zeros((1, 96, 128, 3), dtype=torch.uint8)
+    with torch.inference_mode():
+        eager = model(wrist, proprio, history, tactile, tactile, tactile, tactile)
+        actual = scripted(wrist, proprio, history, tactile, tactile, tactile, tactile)
+    torch.testing.assert_close(actual, eager)
+    assert actual.shape == (1, 4)
 
 
 def test_teacher_eight_env_runtime_has_fixed_sizes_and_steps():

@@ -10,6 +10,12 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-13 CST — GelSight Size-Buckets Student 改为视觉触觉连续融合
+
+- 修改：腕部 ResNet18 GAP 保留512维，左右 reference-delta GelSight 共享 CNN 各输出256维，与15维 proprio/4维 history 拼成1043维直接动作输入；XYZ、14×14 heatmap、左右接触及 Teacher action 提供辅助/蒸馏监督。
+- 契约：环境七输入 key/shape、4维动作、奖励/done 和 Teacher manifest 不变；Student checkpoint/model 升至v3/v2，旧 XYZ/硬接触瓶颈 Student 不兼容并需重新训练、重新导出。
+- 验证：全仓 compileall/diff check、4项新架构 pytest、batch-2 eager/TorchScript、8-env 1-update训练、resume至step 2、1-step play及CPU/CUDA batch 1/8导出通过；完整测试在Teacher smoke后连续创建Student场景超过10分钟未返回而中止，另有既存10 N断言与当前10000 N配置不一致。
+
 ### 2026-08-13 CST — 新增 GelSight 固定尺寸与参考触觉 RMA 路线
 
 - 修改：新增固定按 `env_id % 8` 分配 4–6 cm 单 Cube 的 GelSight Teacher/Student-DR task；正接触仅认左右 gelpad，`illegal_collision` 惩罚阈值在0–100k policy step从20 N线性降至5 N，触发仍单步 -10，`>10 N` terminated，5 s timeout 仅 truncated。

@@ -37,7 +37,6 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
     RMAGelSightReferenceStudent,
 )
-from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore
 
 
 def _atomic_json_dump(value: dict, path: Path) -> None:
@@ -61,9 +60,7 @@ def _probe(batch: int) -> tuple[torch.Tensor, ...]:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint)
-    model = RMAGelSightReferenceStudent(
-        RMAActorCore(), pretrained_backbone=False
-    ).cpu().eval()
+    model = RMAGelSightReferenceStudent(pretrained_backbone=False).cpu().eval()
     load_student_model_state(model, payload["model"])
     output = (
         Path(args.output).expanduser().resolve()
@@ -98,7 +95,7 @@ def main() -> None:
         cuda_validation = True
     metadata = {
         "kind": "tacex_rma_gelsight_size_buckets_student_torchscript",
-        "version": 1,
+        "version": 2,
         "student_checkpoint": str(checkpoint),
         "student_checkpoint_sha256": sha256_file(checkpoint),
         "torchscript_sha256": sha256_file(output),
@@ -114,7 +111,14 @@ def main() -> None:
         },
         "output_signature": {"mean_actions": [4]},
         "tactile_delta": "signed_float32_current_minus_reference_div_255",
-        "contact_to_actor": "hard_binary_logit_ge_0",
+        "student_model_contract": payload["student_model_contract"],
+        "actor_fusion": "visual_512+left_tactile_256+right_tactile_256+proprio_15+history_4",
+        "contact_to_actor": "continuous_tactile_features; logits_are_auxiliary_only",
+        "training_only_auxiliary_labels": [
+            "cube_position_xyz",
+            "projected_cube_center_heatmap_14x14",
+            "left_right_physics_contact",
+        ],
         "validation": validation,
         "cuda_validation": cuda_validation,
     }

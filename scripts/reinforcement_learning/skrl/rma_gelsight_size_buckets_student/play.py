@@ -48,7 +48,6 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
     RMAGelSightReferenceStudent,
 )
-from tacex_tasks.sim2real_grasp.rma_models import RMAActorCore
 
 
 def main() -> None:
@@ -62,18 +61,16 @@ def main() -> None:
     validate_live_env_contract(env_cfg, payload["teacher_manifest"])
     env = gym.make(args.task, cfg=env_cfg)
     device = torch.device(env.unwrapped.device)
-    model = RMAGelSightReferenceStudent(
-        RMAActorCore(), pretrained_backbone=False
-    ).to(device).eval()
+    model = RMAGelSightReferenceStudent(pretrained_backbone=False).to(device).eval()
     load_student_model_state(model, payload["model"])
-    if state_dict_sha256(model.actor_core.state_dict()) != payload[
-        "teacher_actor_state_dict_sha256"
+    if state_dict_sha256(model.tactile_encoder.state_dict()) != payload[
+        "tactile_encoder_state_dict_sha256"
     ]:
-        raise RuntimeError("Student Teacher Actor hash mismatch")
-    if state_dict_sha256(model.tactile_contact_head.state_dict()) != payload[
-        "tactile_contact_head_state_dict_sha256"
+        raise RuntimeError("Student tactile encoder hash mismatch")
+    if state_dict_sha256(model.action_head.state_dict()) != payload[
+        "action_head_state_dict_sha256"
     ]:
-        raise RuntimeError("Student tactile head hash mismatch")
+        raise RuntimeError("Student action head hash mismatch")
 
     observations, _ = env.reset()
     reward_sum = 0.0

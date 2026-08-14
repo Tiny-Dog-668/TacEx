@@ -341,8 +341,8 @@
 
 - 状态：已采用
 - 决策：新增独立 GelSight Size-Buckets task，每 env 仅一个固定尺寸 Cube；有效抓取接触只认左右 rigid gelpad。Cube—非 gelpad 机器人或非基座机器人—桌面统一记为 `illegal_collision`，惩罚阈值在0–100k policy step从20 N线性降至5 N，超过当前阈值总计 -10；`>10 N` terminated，Cube—桌面中性，timeout 独立 truncated。
-- Student：每个 episode 首个有效左右触觉帧按 env 锁存，接触头共享左右单侧编码器并输入有符号差值；Actor 只接收 `logit>=0` 的硬二值，动作损失不更新触觉头。
-- 影响：新 Teacher/Student 使用独立 v2 manifest/checkpoint；Teacher 从 `agent_<step>.pt` 续训时自动延续课程步数，非数字 checkpoint 名须显式给 offset。旧 GelSight task 与 checkpoint 保留，但不能用于新蒸馏，新路线需重新训练。
+- Student：每个 episode 首个有效左右触觉帧按 env 锁存；腕部 ResNet18 GAP 的512维视觉特征、共享 CNN 提取的左右各256维连续触觉特征及归一化 proprio/history 拼成1043维直接动作输入。cube XYZ、`14×14` heatmap 与左右 physics contact 只作辅助监督，动作蒸馏梯度可进入视觉和触觉编码器，不再经过3维位置/硬接触瓶颈。
+- 影响：Teacher manifest 仍为v2且现有 Teacher 可复用；Student checkpoint 升至v3、model升至v2，部署七输入 key/shape 与4维动作不变。旧 v2/model-v1 Student 和 TorchScript fail closed，必须重新蒸馏并导出。
 
 ## 第二部分 已知问题
 

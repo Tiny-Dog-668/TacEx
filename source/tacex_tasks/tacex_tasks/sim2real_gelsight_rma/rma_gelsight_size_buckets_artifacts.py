@@ -21,12 +21,39 @@ from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
     GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
 )
+from .rma_gelsight_size_buckets_models import gelsight_student_model_contract
 
 
 MANIFEST_FILENAME = "rma_gelsight_size_buckets_manifest.json"
 TEACHER_MANIFEST_VERSION = 2
-STUDENT_CHECKPOINT_VERSION = 2
-STUDENT_MODEL_VERSION = 1
+STUDENT_CHECKPOINT_VERSION = 3
+STUDENT_MODEL_VERSION = 2
+
+
+def student_input_contract() -> dict[str, Any]:
+    return {
+        "input_order": [
+            "wrist_rgb",
+            "proprio_obs",
+            "action_history",
+            "gsmini_left_rgb",
+            "gsmini_right_rgb",
+            "gsmini_left_reference_rgb",
+            "gsmini_right_reference_rgb",
+        ],
+        "wrist_rgb": [224, 224, 3],
+        "tactile_rgb": [96, 128, 3],
+        "tactile_delta": "signed_float32_current_minus_reference_div_255",
+        "reference_capture": "first_post_reset_frame_per_environment",
+        "visual_feature": "resnet18_layer4_global_average_pool_512",
+        "tactile_feature": "shared_cnn_256_per_side",
+        "actor_fusion_dim": 1043,
+        "training_only_labels": [
+            "rma_cube_pos",
+            "rma_contact_state",
+            "projected_cube_center_heatmap",
+        ],
+    }
 
 
 def infer_teacher_checkpoint_policy_step(checkpoint: str | Path) -> int:
@@ -252,8 +279,30 @@ def load_student_checkpoint(
         raise RuntimeError("Selected task differs from Student checkpoint")
     if payload.get("normalization") != RMAObservationNormalizer().contract():
         raise RuntimeError("Student normalization contract mismatch")
+    if payload.get("student_input_contract") != student_input_contract():
+        raise RuntimeError("Student runtime input contract mismatch")
+    if payload.get("student_model_contract") != gelsight_student_model_contract():
+        raise RuntimeError("Student fusion model contract mismatch")
     if not isinstance(payload.get("model"), Mapping):
         raise RuntimeError("Student checkpoint has no model state_dict")
+    state = payload["model"]
+    state_prefix_hashes = {
+        "vision_encoder.": "vision_encoder_state_dict_sha256",
+        "tactile_encoder.": "tactile_encoder_state_dict_sha256",
+        "action_head.": "action_head_state_dict_sha256",
+        "position_head.": "position_head_state_dict_sha256",
+        "heatmap_head.": "heatmap_head_state_dict_sha256",
+    }
+    for prefix, hash_key in state_prefix_hashes.items():
+        component = {
+            key[len(prefix) :]: value
+            for key, value in state.items()
+            if key.startswith(prefix)
+        }
+        if not component or payload.get(hash_key) != state_dict_sha256(component):
+            raise RuntimeError(f"Student component hash mismatch: {prefix[:-1]}")
+    if not isinstance(payload.get("teacher_actor_state_dict_sha256"), str):
+        raise RuntimeError("Student Teacher Actor provenance is missing")
     return payload
 
 
@@ -261,3 +310,23 @@ def load_student_model_state(
     model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]
 ) -> None:
     model.load_state_dict(state_dict, strict=True)
+
+
+__all__ = (
+    "GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK",
+    "GELSIGHT_SIZE_BUCKETS_TEACHER_TASK",
+    "MANIFEST_FILENAME",
+    "STUDENT_CHECKPOINT_VERSION",
+    "STUDENT_MODEL_VERSION",
+    "environment_contract",
+    "infer_teacher_checkpoint_policy_step",
+    "load_student_checkpoint",
+    "load_student_model_state",
+    "load_teacher_manifest",
+    "load_teacher_policy_state",
+    "sha256_file",
+    "state_dict_sha256",
+    "student_input_contract",
+    "validate_live_env_contract",
+    "write_teacher_manifest",
+)
