@@ -166,7 +166,11 @@ def environment_contract(cfg: Any) -> dict[str, Any]:
         ),
         "cube_table_contact": "neutral",
         "success_terminates_episode": bool(cfg.rma_success_terminates_episode),
+        "policy_frequency_hz": 1.0 / (float(cfg.sim.dt) * int(cfg.decimation)),
         "episode_length_s": float(cfg.episode_length_s),
+        "max_episode_length_steps": int(
+            round(float(cfg.episode_length_s) / (float(cfg.sim.dt) * int(cfg.decimation)))
+        ),
         "timeout_semantics": "truncated_only",
     }
 

@@ -176,7 +176,7 @@ def test_clean_and_dr_randomization_profiles_are_separated():
     assert dr_cfg.wrist_brightness_range == (0.90, 1.10)
     assert dr_cfg.wrist_contrast_range == (0.90, 1.10)
     assert dr_cfg.wrist_saturation_range == (0.90, 1.05)
-    assert dr_cfg.wrist_gamma_range == (0.92, 1.08)
+    assert dr_cfg.wrist_gamma_range == (0.85, 1.20)
     assert dr_cfg.wrist_hue_max_deg == pytest.approx(2.0)
     assert dr_cfg.wrist_white_balance_shift_max == pytest.approx(0.04)
     assert dr_cfg.wrist_blur_probability == pytest.approx(0.08)
@@ -194,8 +194,8 @@ def test_clean_and_dr_randomization_profiles_are_separated():
     )
     assert dr_cfg.plate_color_min == pytest.approx((0.003, 0.003, 0.003))
     assert dr_cfg.plate_color_max == pytest.approx((0.012, 0.012, 0.012))
-    assert dr_cfg.backdrop_color_min == pytest.approx((0.002, 0.002, 0.002))
-    assert dr_cfg.backdrop_color_max == pytest.approx((0.008, 0.008, 0.008))
+    assert dr_cfg.backdrop_color_min == pytest.approx((0.00045, 0.00045, 0.00045))
+    assert dr_cfg.backdrop_color_max == pytest.approx((0.0018, 0.0018, 0.0018))
 
 
 def test_nominal_intrinsic_compensation_places_native_optical_axis_at_calibrated_principal_point(

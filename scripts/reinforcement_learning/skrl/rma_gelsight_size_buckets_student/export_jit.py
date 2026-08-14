@@ -93,6 +93,21 @@ def main() -> None:
         if not torch.isfinite(cuda_output).all():
             raise RuntimeError("CUDA TorchScript returned non-finite actions")
         cuda_validation = True
+    teacher_environment = payload["teacher_manifest"]["environment_contract"]
+    policy_frequency_hz = float(teacher_environment.get("policy_frequency_hz", 30.0))
+    episode_length_s = float(teacher_environment["episode_length_s"])
+    max_episode_length_steps = int(
+        teacher_environment.get(
+            "max_episode_length_steps",
+            round(policy_frequency_hz * episode_length_s),
+        )
+    )
+    if (
+        policy_frequency_hz != 30.0
+        or episode_length_s != 5.0
+        or max_episode_length_steps != 150
+    ):
+        raise RuntimeError("GelSight Size-Buckets deployment requires 30 Hz and 150 steps")
     metadata = {
         "kind": "tacex_rma_gelsight_size_buckets_student_torchscript",
         "version": 2,
@@ -119,6 +134,11 @@ def main() -> None:
             "projected_cube_center_heatmap_14x14",
             "left_right_physics_contact",
         ],
+        "deployment_contract": {
+            "policy_frequency_hz": policy_frequency_hz,
+            "episode_length_s": episode_length_s,
+            "max_episode_length_steps": max_episode_length_steps,
+        },
         "validation": validation,
         "cuda_validation": cuda_validation,
     }
