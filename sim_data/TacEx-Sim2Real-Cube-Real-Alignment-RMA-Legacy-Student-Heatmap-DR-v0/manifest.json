@@ -1,0 +1,221 @@
+{
+  "kind": "tacex_rma_student_rollout_dataset",
+  "version": 1,
+  "task": "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Legacy-Student-Heatmap-DR-v0",
+  "task_seed": 42,
+  "episodes": 5,
+  "frame_stride": 5,
+  "policy_frequency_hz": 30.0,
+  "student_checkpoint": "/home/tinydog/Projects/TacEx/logs/skrl/sim2real_cube_real_alignment_rma_student/2026-08-03_16-14-11_distillation/checkpoints/latest.pt",
+  "student_checkpoint_sha256": "8e877c4795a6247d55bf5d9262a17c17b23e6b5c6a18802814972306488475b7",
+  "student_input_contract": {
+    "wrist_rgb": [
+      224,
+      224,
+      3
+    ],
+    "proprio_obs": [
+      15
+    ],
+    "action_history": [
+      4
+    ],
+    "contact": "visual_left_right_probability[2]"
+  },
+  "teacher_manifest": {
+    "kind": "tacex_rma_teacher",
+    "version": 7,
+    "task": "TacEx-Sim2Real-Cube-Real-Alignment-RMA-Teacher-v0",
+    "model_version": 3,
+    "actor_inputs": {
+      "proprio_obs": 15,
+      "action_history": 4,
+      "rma_cube_pos": 3,
+      "rma_contact_state": 2
+    },
+    "actor_contract": {
+      "feature_dim": 30,
+      "feature_order": [
+        "normalized_proprio_obs[15]",
+        "normalized_action_history[4]",
+        "normalized_cube_position_root[3]",
+        "normalized_gripper_position_root_from_fk[3]",
+        "normalized_cube_minus_gripper_position_root[3]",
+        "left_right_cube_finger_contact[2]"
+      ],
+      "object_pose_components": "position_xyz_only",
+      "end_effector_pose_components": "position_xyz_only",
+      "contact_components": "left_right_cube_finger_binary",
+      "kinematics": {
+        "source": "panda_urdf_joint_origins",
+        "joint_order": [
+          "panda_joint1",
+          "panda_joint2",
+          "panda_joint3",
+          "panda_joint4",
+          "panda_joint5",
+          "panda_joint6",
+          "panda_joint7"
+        ],
+        "joint_axis": "local_z",
+        "output": "mean_of_left_and_right_fingertip_centers",
+        "output_frame": "robot_root",
+        "panda_link7_to_link8_m": 0.107,
+        "panda_hand_to_fingertip_midpoint_m": 0.1034
+      }
+    },
+    "actor_output": {
+      "mean_actions": 4,
+      "transform": "tanh"
+    },
+    "normalization": {
+      "joint_lower": [
+        -2.8973000049591064,
+        -1.7627999782562256,
+        -2.8973000049591064,
+        -3.0717999935150146,
+        -2.8973000049591064,
+        -0.017500000074505806,
+        -2.8973000049591064
+      ],
+      "joint_upper": [
+        2.8973000049591064,
+        1.7627999782562256,
+        2.8973000049591064,
+        -0.0697999969124794,
+        2.8973000049591064,
+        3.752500057220459,
+        2.8973000049591064
+      ],
+      "joint_velocity_scale": [
+        2.174999952316284,
+        2.174999952316284,
+        2.174999952316284,
+        2.174999952316284,
+        2.609999895095825,
+        2.609999895095825,
+        2.609999895095825
+      ],
+      "gripper_width_center_scale": [
+        0.04,
+        0.04
+      ],
+      "history_scale": [
+        0.02500000037252903,
+        0.02500000037252903,
+        0.02500000037252903,
+        0.004999999888241291
+      ],
+      "cube_position_center": [
+        0.5,
+        0.0,
+        0.026000000536441803
+      ],
+      "cube_position_scale": [
+        0.05000000074505806,
+        0.05000000074505806,
+        0.10000000149011612
+      ],
+      "gripper_position_center": [
+        0.5,
+        0.0,
+        0.17499999701976776
+      ],
+      "gripper_position_scale": [
+        0.10000000149011612,
+        0.10000000149011612,
+        0.15000000596046448
+      ],
+      "target_position_center": [
+        0.0,
+        0.0,
+        -0.15000000596046448
+      ],
+      "target_position_scale": [
+        0.10000000149011612,
+        0.10000000149011612,
+        0.15000000596046448
+      ],
+      "position_frame": "robot_root"
+    },
+    "environment_contract": {
+      "action_dim": 4,
+      "action_scales": [
+        0.05,
+        0.05,
+        0.05,
+        0.01
+      ],
+      "gripper_control_mode": "total_width_delta_cached_target",
+      "gripper_actuator": {
+        "joint_names_expr": [
+          "panda_finger_joint.*"
+        ],
+        "effort_limit_sim": 40.0,
+        "velocity_limit_sim": null,
+        "stiffness": 400.0,
+        "damping": 40.0
+      },
+      "robot_base_world_position_m": [
+        0.0,
+        0.0,
+        0.02
+      ],
+      "camera_base_position_m": [
+        1.166091088407,
+        0.035901608197,
+        0.514200335898
+      ],
+      "camera_world_position_m": [
+        1.166091088407,
+        0.035901608197,
+        0.534200335898
+      ],
+      "camera_rotation_wxyz": [
+        0.378248136306,
+        -0.604227000834,
+        -0.586824979121,
+        0.384024117374
+      ],
+      "camera_convention": "ros",
+      "cube_nominal_position": [
+        0.5,
+        0.0,
+        0.026000000000000002
+      ],
+      "cube_xy_half_ranges": [
+        0.05,
+        0.05
+      ],
+      "position_frame": "robot_root",
+      "actor_feature_dim": 30,
+      "end_effector_position_source": "embedded_panda_fk_from_proprio_joint_position",
+      "object_pose_components": "position_xyz_only",
+      "contact_components": "left_right_cube_finger_binary",
+      "contact_force_threshold_n": 0.2,
+      "contact_reward_weight": 3.0,
+      "single_contact_reward_fraction": 1.0,
+      "action_rate_penalty_weight": 0.05,
+      "action_rate_penalty_scales": "environment_action_scales",
+      "policy_frequency_hz": 30.0,
+      "episode_length_s": 5.0,
+      "success_lift_delta_m": 0.035,
+      "success_hold_steps": 5,
+      "success_terminates_episode": false
+    },
+    "run_config_sha256": {
+      "agent.yaml": "e2c42ac15ef178d5609e327c46575166c7ca855cc4263bd9c510b1d185f3cee4",
+      "env.yaml": "abc1b94512ce4960bba838821148307ab2e7e9d04c88a89af79c709e0ca2916d"
+    },
+    "trainer_timesteps": 200000
+  },
+  "transition_alignment": "pre_action_observation_and_predictions; post_action_reward_and_diagnostics",
+  "image_alignment": "image arrays index policy steps through frame_step_indices",
+  "episode_files": [
+    "episode_0000.npz",
+    "episode_0001.npz",
+    "episode_0002.npz",
+    "episode_0003.npz",
+    "episode_0004.npz"
+  ]
+}

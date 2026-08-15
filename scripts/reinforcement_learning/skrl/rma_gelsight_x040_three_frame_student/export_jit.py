@@ -93,6 +93,16 @@ def main() -> None:
         if not all(torch.isfinite(value).all() for value in cuda_output):
             raise RuntimeError("CUDA TorchScript returned non-finite output")
         cuda_validation = True
+    input_signature = dict(payload["student_input_contract"])
+    tactile_shape = input_signature.pop("tactile_rgb")
+    input_signature.update(
+        {
+            "gsmini_left_rgb": tactile_shape,
+            "gsmini_right_rgb": tactile_shape,
+            "gsmini_left_reference_rgb": tactile_shape,
+            "gsmini_right_reference_rgb": tactile_shape,
+        }
+    )
     _atomic_json_dump(
         {
             "kind": "tacex_rma_gelsight_x040_dr_three_frame_student_torchscript",
@@ -101,7 +111,7 @@ def main() -> None:
             "student_checkpoint_sha256": sha256_file(checkpoint),
             "torchscript_sha256": sha256_file(output),
             "input_order": payload["student_input_contract"]["input_order"],
-            "input_signature": payload["student_input_contract"],
+            "input_signature": input_signature,
             "output_signature": payload["student_input_contract"]["runtime_output"],
             "student_model_contract": payload["student_model_contract"],
             "validation": validation,
