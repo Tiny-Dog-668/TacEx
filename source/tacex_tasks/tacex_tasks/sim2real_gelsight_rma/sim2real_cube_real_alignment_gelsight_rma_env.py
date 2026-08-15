@@ -18,6 +18,7 @@ from isaaclab.utils import math as math_utils
 from tacex import GelSightSensor
 from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
     FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG,
+    create_gelsight_standard_franka_arm_visual_usd,
 )
 from tacex_assets.sensors.gelsight_mini.gsmini_cfg import GelSightMiniCfg
 
@@ -58,14 +59,17 @@ _GELSIGHT_CONTACT_FILTER_PRIMS = (
     "/World/envs/env_.*/Robot/gelpad_right",
 )
 
-
-def _make_gelsight_robot_cfg() -> ArticulationCfg:
+def _make_gelsight_robot_cfg(
+    *, align_standard_franka_visuals: bool = False
+) -> ArticulationCfg:
     """Return the Real-Alignment initial state on the two-GelSight Franka asset."""
     reference_robot = Sim2RealCubeRealAlignmentEnvCfg().robot
     robot_cfg = FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG.replace(
         prim_path="/World/envs/env_.*/Robot",
         init_state=reference_robot.init_state,
     )
+    if align_standard_franka_visuals:
+        robot_cfg.spawn.usd_path = create_gelsight_standard_franka_arm_visual_usd()
     hand_actuator = robot_cfg.actuators["panda_hand"]
     hand_actuator.effort_limit_sim = 40.0
     hand_actuator.stiffness = 400.0
@@ -81,6 +85,7 @@ def _make_gelsight_sensor_cfg(prim_path: str) -> GelSightMiniCfg:
         resolution=(128, 96),
         data_types=["depth"],
         clipping_range=(0.024, 0.034),
+        update_latest_camera_pose=False,
     )
     sensor_cfg.data_types = ["tactile_rgb"]
     sensor_cfg.marker_motion_sim_cfg = None
@@ -232,8 +237,10 @@ class _RMAGelSightStudentObservationMixin:
             )
         image = tactile[..., :3]
         if image.dtype.is_floating_point:
-            if image.numel() > 0 and image.max().item() <= 1.0 + 1.0e-6:
-                image = image * 255.0
+            # The configured GPU Taxim backend returns float RGB in [0,1].
+            # Use the explicit task contract instead of a per-step GPU->CPU
+            # max().item() range probe for each sensor.
+            image = image * float(self.cfg.rma_gelsight_tactile_rgb_float_scale)
             image = image.round().clamp(0, 255).to(torch.uint8)
         else:
             image = image.clamp(0, 255).to(torch.uint8)
@@ -338,8 +345,17 @@ class _RMAGelSightCfgMixin:
     rma_cube_contact_sensor = _make_gelsight_cube_contact_sensor_cfg()
     rma_gelsight_tactile_sensor_enabled = False
     rma_gelsight_reference_enabled = False
+    rma_gelsight_tactile_rgb_float_scale = 255.0
     gsmini_left = _make_gelsight_sensor_cfg(_GELSIGHT_SENSOR_PRIMS[0])
     gsmini_right = _make_gelsight_sensor_cfg(_GELSIGHT_SENSOR_PRIMS[1])
+
+    def __post_init__(self) -> None:
+        # configclass injects a non-forwarding __post_init__ into field-only
+        # mixins. Forward explicitly so the Real-Alignment base can align RTX
+        # rendering with the 30 Hz policy cadence.
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
 
 
 @configclass

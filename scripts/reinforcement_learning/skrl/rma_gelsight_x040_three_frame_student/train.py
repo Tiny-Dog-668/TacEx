@@ -32,6 +32,11 @@ parser.add_argument(
     ),
 )
 parser.add_argument("--teacher_checkpoint", required=True)
+parser.add_argument(
+    "--encoder_init_checkpoint",
+    required=True,
+    help="Approved RMA XY Heatmap-DR Student checkpoint used to initialize ResNet18.",
+)
 parser.add_argument("--resume", default=None)
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--timesteps", type=int, default=100_000)
@@ -68,6 +73,8 @@ from torch.utils.tensorboard import SummaryWriter
 import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    STUDENT_CHECKPOINT_VERSION,
+    load_encoder_initialization_checkpoint,
     load_student_checkpoint,
     load_student_model_state,
     load_teacher_manifest,
@@ -154,7 +161,11 @@ def main() -> None:
         torch.cuda.manual_seed_all(args.seed)
 
     teacher_checkpoint = Path(args.teacher_checkpoint).expanduser().resolve()
+    encoder_checkpoint = Path(args.encoder_init_checkpoint).expanduser().resolve()
     teacher_manifest = load_teacher_manifest(teacher_checkpoint)
+    encoder_state, encoder_payload = load_encoder_initialization_checkpoint(
+        encoder_checkpoint
+    )
     resume_payload = None
     if args.resume:
         resume_payload = load_student_checkpoint(
@@ -162,6 +173,14 @@ def main() -> None:
             device="cpu",
             expected_teacher_checkpoint=teacher_checkpoint,
         )
+        if resume_payload.get("version") != STUDENT_CHECKPOINT_VERSION:
+            raise RuntimeError(
+                "Older GelSight Student checkpoints cannot resume the current visual contract"
+            )
+        if resume_payload.get("encoder_init_checkpoint_sha256") != sha256_file(
+            encoder_checkpoint
+        ):
+            raise RuntimeError("Resume checkpoint used a different encoder initialization")
         if resume_payload.get("loss") != _loss_contract():
             raise RuntimeError("Resume loss contract differs from current arguments")
         if resume_payload.get("optimizer_config") != _optimizer_contract():
@@ -184,7 +203,8 @@ def main() -> None:
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
 
-    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=True).to(device)
+    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False).to(device)
+    model.load_vision_encoder_state(encoder_state)
     head_parameters = (
         list(model.temporal_fusion.parameters())
         + list(model.tactile_encoder.parameters())
@@ -203,7 +223,10 @@ def main() -> None:
     run_dir = (
         Path(args.log_dir).expanduser().resolve()
         if args.log_dir
-        else Path("logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_student")
+        else Path(
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_"
+            "student_x040_normalized_heatmap_init"
+        )
         / f"{datetime.now():%Y-%m-%d_%H-%M-%S}_distillation"
     )
     _atomic_json_dump(
@@ -211,6 +234,12 @@ def main() -> None:
             **vars(args),
             "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
             "teacher_actor_state_dict_sha256": state_dict_sha256(teacher.state_dict()),
+            "encoder_init_checkpoint_sha256": sha256_file(encoder_checkpoint),
+            "encoder_init_task": encoder_payload.get("task"),
+            "encoder_init_state_dict_sha256": encoder_payload.get(
+                "vision_encoder_state_dict_sha256"
+            ),
+            "position_normalization": model.normalizer.contract(),
             "runtime_inputs": [
                 "wrist_rgb_history",
                 "proprio_obs",
@@ -329,6 +358,8 @@ def main() -> None:
                     teacher_checkpoint=teacher_checkpoint,
                     teacher_manifest=teacher_manifest,
                     teacher_actor_state_dict=teacher.state_dict(),
+                    encoder_init_checkpoint=encoder_checkpoint,
+                    encoder_init_payload=encoder_payload,
                     student_env_contract=student_environment_contract(env_cfg),
                     loss=_loss_contract(),
                     optimizer_config=_optimizer_contract(),

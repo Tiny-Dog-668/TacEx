@@ -65,6 +65,10 @@ def test_new_tasks_and_fixed_size_contract_are_registered():
     assert teacher.scene.replicate_physics is False
     assert teacher.ground.spawn.visible is False
     assert student.rma_gelsight_reference_enabled is True
+    assert teacher.sim.render_interval == teacher.decimation == 2
+    assert student.sim.render_interval == student.decimation == 2
+    assert student.gsmini_left.sensor_camera_cfg.update_latest_camera_pose is False
+    assert student.gsmini_right.sensor_camera_cfg.update_latest_camera_pose is False
     assert student.observation_space["gsmini_left_reference_rgb"].shape == (96, 128, 3)
     assert student.observation_space["gsmini_right_reference_rgb"].shape == (96, 128, 3)
     assert environment_contract(teacher) == environment_contract(student)

@@ -8,11 +8,15 @@ import torch.nn.functional as F
 from torchvision.models import ResNet18_Weights, resnet18
 
 from tacex_tasks.sim2real_grasp.rma_models import RMAObservationNormalizer
+from tacex_tasks.sim2real_grasp.rma_x040_wide_models import (
+    RMAX040WideObservationNormalizer,
+)
 
 from .rma_gelsight_size_buckets_models import ReferenceDeltaTactileEncoder
 
 
-GELSIGHT_X040_THREE_FRAME_MODEL_VERSION = 2
+GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION = 2
+GELSIGHT_X040_THREE_FRAME_MODEL_VERSION = 3
 GELSIGHT_X040_THREE_FRAME_VISUAL_DIM = 512
 GELSIGHT_X040_THREE_FRAME_TACTILE_SIDE_DIM = 256
 GELSIGHT_X040_THREE_FRAME_PROPRIO_DIM = 15
@@ -21,9 +25,15 @@ GELSIGHT_X040_THREE_FRAME_ACTION_DIM = 4
 GELSIGHT_X040_THREE_FRAME_FUSION_DIM = 1043
 
 
-def gelsight_x040_three_frame_model_contract() -> dict[str, object]:
-    return {
-        "model_version": GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
+def gelsight_x040_three_frame_model_contract(
+    *, legacy_position_normalization: bool = False
+) -> dict[str, object]:
+    contract = {
+        "model_version": (
+            GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION
+            if legacy_position_normalization
+            else GELSIGHT_X040_THREE_FRAME_MODEL_VERSION
+        ),
         "runtime_input_order": [
             "wrist_rgb_history",
             "proprio_obs",
@@ -57,19 +67,32 @@ def gelsight_x040_three_frame_model_contract() -> dict[str, object]:
         "heatmap": "absent",
         "runtime_privileged_inputs": [],
     }
+    if not legacy_position_normalization:
+        contract["position_normalization"] = "x040_wide_robot_root_xyz"
+    return contract
 
 
 class RMAGelSightX040ThreeFrameStudent(nn.Module):
     """Output action, contact probability, and robot-root Cube position in metres."""
 
-    def __init__(self, *, pretrained_backbone: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        pretrained_backbone: bool = True,
+        legacy_position_normalization: bool = False,
+    ) -> None:
         super().__init__()
+        self._legacy_position_normalization = legacy_position_normalization
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained_backbone else None
         backbone = resnet18(weights=weights)
         self.vision_encoder = nn.Sequential(*list(backbone.children())[:-2])
         self.temporal_fusion = nn.Sequential(nn.Linear(3 * 512, 512), nn.ELU())
         self.tactile_encoder = ReferenceDeltaTactileEncoder()
-        self.normalizer = RMAObservationNormalizer()
+        self.normalizer = (
+            RMAObservationNormalizer()
+            if legacy_position_normalization
+            else RMAX040WideObservationNormalizer()
+        )
         self.position_head = nn.Sequential(
             nn.Linear(512, 256),
             nn.ELU(),
@@ -107,6 +130,15 @@ class RMAGelSightX040ThreeFrameStudent(nn.Module):
             for parameter in module.parameters():
                 parameter.requires_grad_(index >= 6)
         self.vision_encoder.eval()
+
+    @torch.jit.unused
+    def load_vision_encoder_state(self, state_dict: dict[str, torch.Tensor]) -> None:
+        result = self.vision_encoder.load_state_dict(state_dict, strict=True)
+        if result.missing_keys or result.unexpected_keys:
+            raise RuntimeError(
+                "GelSight X040 vision encoder state mismatch: "
+                f"missing={result.missing_keys}, unexpected={result.unexpected_keys}"
+            )
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -146,9 +178,9 @@ class RMAGelSightX040ThreeFrameStudent(nn.Module):
         left_feature, right_feature, contact_logits = self.tactile_encoder(
             left_current, right_current, left_reference, right_reference
         )
-        # X040 resets Cube X in [0.32, 0.48] m while the inherited RMA
-        # normalizer is centred at 0.50 m. Do not bound this auxiliary output:
-        # tanh would make valid labels below 0.45 m unreachable.
+        # Input [N,512] -> normalized robot-root Cube XYZ [N,3]. Keep this
+        # auxiliary output unbounded so evaluation outside the reset box remains
+        # representable; the X040-Wide training labels themselves lie near [-1,1].
         normalized_position = self.position_head(visual_feature)
         actor_features = torch.cat(
             (
@@ -190,11 +222,14 @@ class RMAGelSightX040ThreeFrameStudent(nn.Module):
 
     @torch.jit.unused
     def contract(self) -> dict[str, object]:
-        return gelsight_x040_three_frame_model_contract()
+        return gelsight_x040_three_frame_model_contract(
+            legacy_position_normalization=self._legacy_position_normalization
+        )
 
 
 __all__ = (
     "GELSIGHT_X040_THREE_FRAME_FUSION_DIM",
+    "GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION",
     "GELSIGHT_X040_THREE_FRAME_MODEL_VERSION",
     "RMAGelSightX040ThreeFrameStudent",
     "gelsight_x040_three_frame_model_contract",

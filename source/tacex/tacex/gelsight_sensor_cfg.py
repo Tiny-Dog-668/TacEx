@@ -33,6 +33,9 @@ class GelSightSensorCfg(SensorBaseCfg):
         resolution: tuple[int, int] = (32, 24)
         data_types: list[str] = ["depth"]
         clipping_range: tuple[float, float] = (0.0, 1.0)
+        # Keep the historical default for marker/FEM users. Tasks that only
+        # consume rendered depth may disable this expensive pose readback.
+        update_latest_camera_pose: bool = True
 
     sensor_camera_cfg: SensorCameraCfg = SensorCameraCfg()
 

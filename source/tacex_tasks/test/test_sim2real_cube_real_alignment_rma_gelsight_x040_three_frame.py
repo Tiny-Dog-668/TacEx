@@ -16,12 +16,16 @@ import gymnasium as gym
 import pytest
 import torch
 import torch.nn.functional as F
+import isaaclab.sim as sim_utils
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
+from pxr import Usd, UsdGeom, UsdShade
 
 import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    LEGACY_STUDENT_CHECKPOINT_VERSION,
+    PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_KIND,
     load_student_checkpoint,
@@ -47,6 +51,8 @@ def close_app():
 
 
 def test_task_registration_and_shared_x040_contract():
+    assert PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION == 5
+    assert STUDENT_CHECKPOINT_VERSION == 6
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK) is not None
     teacher = parse_env_cfg(
@@ -77,6 +83,36 @@ def test_task_registration_and_shared_x040_contract():
         "policy_frequency_hz": 30,
         "reset_fill": "repeat_first_post_reset_frame",
     }
+    assert student_environment_contract(student)["render_timing"] == {
+        "physics_decimation": 2,
+        "render_interval": 2,
+    }
+    assert student_environment_contract(student)["visual_alignment"] == {
+        "shared_ground_visible": True,
+        "shared_ground_color_rgb": [0.0, 0.0, 0.0],
+        "franka_body_visual_profile": (
+            "gelsight_physics_isaaclab_panda_arm_link0_7_visuals_green_base_led_usd_v5"
+        ),
+        "base_status_led": {
+            "subset_path": "panda_link0/standard_visuals/panda_link0/subset_5",
+            "color_rgb": [0.0, 1.0, 0.0],
+            "material": "UsdPreviewSurface_emissive",
+        },
+        "gelsight_case_and_gelpad_visuals": "preserved_from_gelsight_asset",
+        "floor_panel_size_m": [3.5, 3.5, 0.001],
+        "backdrop_size_m": [0.02, 3.5, 2.5],
+    }
+    assert teacher.ground.spawn.visible is True
+    assert student.ground.spawn.visible is True
+    assert student.robot.spawn.func.__name__ == "spawn_from_usd"
+    assert "franka_gsmini_standard_arm_visuals_" in student.robot.spawn.usd_path
+    assert student_environment_contract(student)["gelsight_depth_camera"] == {
+        "left_update_latest_camera_pose": False,
+        "right_update_latest_camera_pose": False,
+        "tactile_rgb_float_to_uint8_scale": 255.0,
+    }
+    assert teacher.sim.render_interval == teacher.decimation == 2
+    assert student.sim.render_interval == student.decimation == 2
     assert tuple(student.cube.init_state.pos[:2]) == pytest.approx((0.40, 0.0))
     assert student.cube_x_pos_range == pytest.approx(0.08)
     assert student.cube_y_pos_range == pytest.approx(0.10)
@@ -141,6 +177,33 @@ def test_three_frame_model_outputs_and_has_no_heatmap_head():
     assert model.contract()["actor_feature_dim"] == GELSIGHT_X040_THREE_FRAME_FUSION_DIM
 
 
+def test_position_normalization_matches_x040_reset_box():
+    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False)
+    positions = torch.tensor(
+        [[0.32, -0.10, 0.026], [0.40, 0.00, 0.026], [0.48, 0.10, 0.026]]
+    )
+    expected = torch.tensor(
+        [[-1.0, -1.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 0.0]]
+    )
+    normalized = model.normalizer.normalize_position(positions)
+    torch.testing.assert_close(normalized, expected)
+    torch.testing.assert_close(
+        model.normalizer.denormalize_position(normalized), positions
+    )
+    assert model.contract()["position_normalization"] == "x040_wide_robot_root_xyz"
+
+
+def test_legacy_position_normalization_remains_constructible_for_replay():
+    model = RMAGelSightX040ThreeFrameStudent(
+        pretrained_backbone=False, legacy_position_normalization=True
+    )
+    assert model.contract()["model_version"] == 2
+    assert "position_normalization" not in model.contract()
+    torch.testing.assert_close(
+        model.normalizer.cube_position_center, torch.tensor([0.50, 0.00, 0.026])
+    )
+
+
 def test_position_and_contact_tasks_reach_their_expected_heads():
     model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False)
     history = torch.randint(0, 256, (1, 3, 224, 224, 3), dtype=torch.uint8)
@@ -202,7 +265,7 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
     torch.save(
         {
             "kind": STUDENT_KIND,
-            "version": STUDENT_CHECKPOINT_VERSION - 1,
+            "version": LEGACY_STUDENT_CHECKPOINT_VERSION - 1,
         },
         checkpoint,
     )
@@ -210,51 +273,97 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
         load_student_checkpoint(checkpoint)
 
 
-def test_teacher_and_student_eight_env_smoke():
-    teacher_cfg = parse_env_cfg(
-        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK, device="cuda:0", num_envs=8
-    )
+def test_student_eight_env_visual_alignment_smoke():
     student_cfg = parse_env_cfg(
         GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
         device="cuda:0",
         num_envs=8,
     )
-    teacher = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK, cfg=teacher_cfg)
+    expected_bucket_ids = torch.arange(8, device=student_cfg.sim.device, dtype=torch.long)
+    expected_sizes = torch.tensor(
+        student_cfg.cube_size_buckets_m,
+        device=student_cfg.sim.device,
+        dtype=torch.float32,
+    )
+
     student = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK, cfg=student_cfg)
     try:
-        teacher_obs, _ = teacher.reset()
         student_obs, _ = student.reset()
-        teacher_base = teacher.unwrapped
         student_base = student.unwrapped
-        assert teacher_base._cube.data.root_pos_w.device == teacher_base.device
-        assert student_base._cube.data.root_pos_w.device == student_base.device
-        assert teacher_base.sim.get_physics_context().is_gpu_dynamics_enabled()
-        expected_bucket_ids = torch.arange(8, device=teacher_base.device, dtype=torch.long)
-        torch.testing.assert_close(teacher_base._active_cube_bucket_ids, expected_bucket_ids)
+        assert str(student_base._cube.data.root_pos_w.device) == str(student_base.device)
+        assert student_base.gsmini_left.camera.cfg.update_latest_camera_pose is False
+        assert student_base.gsmini_right.camera.cfg.update_latest_camera_pose is False
         torch.testing.assert_close(student_base._active_cube_bucket_ids, expected_bucket_ids)
-        expected_sizes = torch.tensor(
-            teacher_base.cfg.cube_size_buckets_m,
-            device=teacher_base.device,
-            dtype=torch.float32,
-        )
-        torch.testing.assert_close(teacher_base.active_cube_size_m, expected_sizes)
         torch.testing.assert_close(student_base.active_cube_size_m, expected_sizes)
-        assert "cube_size_buckets" not in teacher_base.scene.rigid_object_collections
         assert "cube_size_buckets" not in student_base.scene.rigid_object_collections
-        teacher_actions = torch.zeros((8, 4), device=teacher_base.device)
+
+        stage = sim_utils.stage_utils.get_current_stage()
+        ground = stage.GetPrimAtPath(student_base.cfg.ground.prim_path)
+        assert UsdGeom.Imageable(ground).ComputeVisibility() == UsdGeom.Tokens.inherited
+        assert stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/gelsight_mini_case_left"
+        ).IsValid()
+        assert stage.GetPrimAtPath("/World/envs/env_0/Robot/gelpad_left").IsValid()
+        aligned_visual = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_link0/standard_visuals"
+        )
+        assert aligned_visual.GetTypeName() == "Xform"
+        assert not aligned_visual.IsInstanceable()
+        aligned_mesh_names = {
+            prim.GetName()
+            for prim in Usd.PrimRange(aligned_visual)
+            if prim.GetTypeName() == "Mesh"
+        }
+        assert aligned_mesh_names == {"panda_link0"}
+        base_led = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_link0/standard_visuals/"
+            "panda_link0/subset_5"
+        )
+        assert base_led.IsValid()
+        assert not base_led.IsInstanceProxy()
+        base_led_material, _ = UsdShade.MaterialBindingAPI(
+            base_led
+        ).ComputeBoundMaterial()
+        assert base_led_material.GetPath().pathString.endswith(
+            "/Looks/TacExBaseStatusGreen"
+        )
+        base_led_shader = stage.GetPrimAtPath(
+            f"{base_led_material.GetPath()}/Shader"
+        )
+        assert tuple(
+            base_led_shader.GetAttribute("inputs:diffuseColor").Get()
+        ) == pytest.approx((0.0, 1.0, 0.0))
+        assert tuple(
+            base_led_shader.GetAttribute("inputs:emissiveColor").Get()
+        ) == pytest.approx((0.0, 1.0, 0.0))
+        wrist_led = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_link6/standard_visuals/"
+            "panda_link6/subset_5"
+        )
+        wrist_led_material, _ = UsdShade.MaterialBindingAPI(
+            wrist_led
+        ).ComputeBoundMaterial()
+        assert wrist_led_material.GetPath().pathString.endswith("/Looks/EmissiveBlue")
+        original_arm_visual = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_link0/visuals"
+        )
+        assert original_arm_visual.IsActive() is False
+        hand_visual = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_hand/visuals"
+        )
+        finger_visual = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/panda_leftfinger/visuals"
+        )
+        assert hand_visual.GetTypeName() == ""
+        assert finger_visual.GetTypeName() == ""
+        assert student_base.cfg.robot.spawn.articulation_props.enabled_self_collisions is True
+
         student_actions = torch.zeros((8, 4), device=student_base.device)
-        teacher_next, teacher_rewards, teacher_terminated, teacher_truncated, _ = teacher.step(teacher_actions)
         student_next, student_rewards, student_terminated, student_truncated, _ = student.step(student_actions)
-        assert teacher_obs["policy"]["rma_contact_state"].shape == (8, 2)
-        assert teacher_next["policy"]["rma_cube_pos"].shape == (8, 3)
         assert student_obs["policy"]["wrist_rgb_history"].shape == (8, 3, 224, 224, 3)
         assert student_next["policy"]["gsmini_left_reference_rgb"].shape == (8, 96, 128, 3)
-        assert teacher_rewards.shape == teacher_terminated.shape == teacher_truncated.shape == (8,)
+        assert student_next["policy"]["gsmini_left_rgb"].dtype == torch.uint8
+        assert student_next["policy"]["gsmini_right_rgb"].dtype == torch.uint8
         assert student_rewards.shape == student_terminated.shape == student_truncated.shape == (8,)
-        fixed_teacher_sizes = teacher_base.active_cube_size_m.clone()
-        teacher_base._reset_idx(torch.tensor([0], device=teacher_base.device))
-        torch.testing.assert_close(teacher_base._active_cube_bucket_ids, expected_bucket_ids)
-        torch.testing.assert_close(teacher_base.active_cube_size_m, fixed_teacher_sizes)
     finally:
-        teacher.close()
         student.close()

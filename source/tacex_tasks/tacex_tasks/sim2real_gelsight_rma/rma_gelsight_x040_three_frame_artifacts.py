@@ -15,10 +15,20 @@ from tacex_tasks.sim2real_grasp.rma_models import (
     RMA_MODEL_VERSION,
     RMAObservationNormalizer,
 )
+from tacex_tasks.sim2real_grasp.rma_direct_action_student.artifacts import (
+    load_encoder_initialization_checkpoint,
+)
+from tacex_tasks.sim2real_grasp.rma_x040_wide_models import (
+    RMAX040WideObservationNormalizer,
+)
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
+    RMA_XY_STUDENT_HEATMAP_DR_TASK,
+)
 
 from .gelsight_geometry import geometry_contract
 from .rma_gelsight_models import RMAGelSightActorCore
 from .rma_gelsight_x040_three_frame_models import (
+    GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION,
     GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
     RMAGelSightX040ThreeFrameStudent,
     gelsight_x040_three_frame_model_contract,
@@ -31,7 +41,10 @@ from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
 
 MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
 TEACHER_MANIFEST_VERSION = 3
-STUDENT_CHECKPOINT_VERSION = 3
+LEGACY_STUDENT_CHECKPOINT_VERSION = 3
+# v4 was assigned to the withdrawn LED-DR experiment and must not be reused.
+PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION = 5
+STUDENT_CHECKPOINT_VERSION = 6
 STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
 TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
 
@@ -159,6 +172,23 @@ def student_environment_contract(cfg: Any) -> dict[str, Any]:
                 float(value) for value in cfg.camera_rotation_delta_max_deg
             ],
             "dr_curriculum_enabled": bool(cfg.dr_curriculum_enabled),
+            "visual_alignment": {
+                "shared_ground_visible": bool(cfg.ground.spawn.visible),
+                "shared_ground_color_rgb": [
+                    float(value) for value in cfg.ground.spawn.color
+                ],
+                "franka_body_visual_profile": str(cfg.rma_franka_visual_profile),
+                "base_status_led": {
+                    "subset_path": str(cfg.rma_base_status_led_subset_path),
+                    "color_rgb": [
+                        float(value) for value in cfg.rma_base_status_led_color_rgb
+                    ],
+                    "material": "UsdPreviewSurface_emissive",
+                },
+                "gelsight_case_and_gelpad_visuals": "preserved_from_gelsight_asset",
+                "floor_panel_size_m": [float(value) for value in cfg.plate.spawn.size],
+                "backdrop_size_m": [float(value) for value in cfg.backdrop.spawn.size],
+            },
             "wrist_rgb_history": {
                 "shape": [3, 224, 224, 3],
                 "dtype": "uint8",
@@ -166,6 +196,21 @@ def student_environment_contract(cfg: Any) -> dict[str, Any]:
                 "stride_policy_steps": int(cfg.wrist_rgb_history_stride_policy_steps),
                 "policy_frequency_hz": 30,
                 "reset_fill": str(cfg.wrist_rgb_history_reset_fill),
+            },
+            "render_timing": {
+                "physics_decimation": int(cfg.decimation),
+                "render_interval": int(cfg.sim.render_interval),
+            },
+            "gelsight_depth_camera": {
+                "left_update_latest_camera_pose": bool(
+                    cfg.gsmini_left.sensor_camera_cfg.update_latest_camera_pose
+                ),
+                "right_update_latest_camera_pose": bool(
+                    cfg.gsmini_right.sensor_camera_cfg.update_latest_camera_pose
+                ),
+                "tactile_rgb_float_to_uint8_scale": float(
+                    cfg.rma_gelsight_tactile_rgb_float_scale
+                ),
             },
             "gelsight_reference": "first_post_reset_frame_per_environment",
         }
@@ -287,6 +332,8 @@ def make_student_payload(
     teacher_checkpoint: str | Path,
     teacher_manifest: Mapping[str, Any],
     teacher_actor_state_dict: Mapping[str, torch.Tensor],
+    encoder_init_checkpoint: str | Path,
+    encoder_init_payload: Mapping[str, Any],
     student_env_contract: Mapping[str, Any],
     loss: Mapping[str, Any],
     optimizer_config: Mapping[str, Any],
@@ -318,6 +365,14 @@ def make_student_payload(
         "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
         "teacher_manifest": dict(teacher_manifest),
         "teacher_actor_state_dict_sha256": state_dict_sha256(teacher_actor_state_dict),
+        "encoder_init_checkpoint": str(
+            Path(encoder_init_checkpoint).expanduser().resolve()
+        ),
+        "encoder_init_checkpoint_sha256": sha256_file(encoder_init_checkpoint),
+        "encoder_init_task": encoder_init_payload.get("task"),
+        "encoder_init_state_dict_sha256": encoder_init_payload.get(
+            "vision_encoder_state_dict_sha256"
+        ),
         "loss": dict(loss),
         "optimizer_config": dict(optimizer_config),
         "training_privileged_inputs": {
@@ -337,15 +392,35 @@ def load_student_checkpoint(
     payload = torch.load(Path(checkpoint).expanduser().resolve(), map_location=device, weights_only=False)
     if not isinstance(payload, dict) or payload.get("kind") != STUDENT_KIND:
         raise RuntimeError("Not a GelSight X040 DR three-frame Student checkpoint")
-    if payload.get("version") != STUDENT_CHECKPOINT_VERSION or payload.get("model_version") != GELSIGHT_X040_THREE_FRAME_MODEL_VERSION:
+    version = payload.get("version")
+    legacy = version == LEGACY_STUDENT_CHECKPOINT_VERSION
+    if version not in (
+        LEGACY_STUDENT_CHECKPOINT_VERSION,
+        PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
+        STUDENT_CHECKPOINT_VERSION,
+    ):
         raise RuntimeError("GelSight X040 DR Student version mismatch")
+    expected_model_version = (
+        GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION
+        if legacy
+        else GELSIGHT_X040_THREE_FRAME_MODEL_VERSION
+    )
+    if payload.get("model_version") != expected_model_version:
+        raise RuntimeError("GelSight X040 DR Student model version mismatch")
     if payload.get("task") != GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK:
         raise RuntimeError("GelSight X040 DR Student task mismatch")
     if payload.get("student_input_contract") != student_input_contract():
         raise RuntimeError("GelSight X040 DR Student input contract mismatch")
-    if payload.get("student_model_contract") != gelsight_x040_three_frame_model_contract():
+    if payload.get("student_model_contract") != gelsight_x040_three_frame_model_contract(
+        legacy_position_normalization=legacy
+    ):
         raise RuntimeError("GelSight X040 DR Student model contract mismatch")
-    if payload.get("normalization") != RMAObservationNormalizer().contract():
+    expected_normalization = (
+        RMAObservationNormalizer().contract()
+        if legacy
+        else RMAX040WideObservationNormalizer().contract()
+    )
+    if payload.get("normalization") != expected_normalization:
         raise RuntimeError("GelSight X040 DR Student normalization mismatch")
     state = payload.get("model")
     if not isinstance(state, Mapping):
@@ -362,12 +437,35 @@ def load_student_checkpoint(
             raise RuntimeError(f"GelSight X040 DR Student component hash mismatch: {name}")
     if not isinstance(payload.get("teacher_actor_state_dict_sha256"), str):
         raise RuntimeError("GelSight X040 DR Student Teacher Actor provenance is missing")
+    if not legacy and (
+        not isinstance(payload.get("encoder_init_checkpoint_sha256"), str)
+        or not isinstance(payload.get("encoder_init_state_dict_sha256"), str)
+        or payload.get("encoder_init_task") != RMA_XY_STUDENT_HEATMAP_DR_TASK
+    ):
+        raise RuntimeError("GelSight X040 DR Student encoder initialization provenance is missing")
     if expected_teacher_checkpoint is not None:
         if payload.get("teacher_checkpoint_sha256") != sha256_file(expected_teacher_checkpoint):
             raise RuntimeError("Student was distilled from a different Teacher checkpoint")
         if payload.get("teacher_manifest") != load_teacher_manifest(expected_teacher_checkpoint):
             raise RuntimeError("Student Teacher manifest mismatch")
     return payload
+
+
+def make_student_model_for_checkpoint(
+    payload: Mapping[str, Any], *, pretrained_backbone: bool = False
+) -> RMAGelSightX040ThreeFrameStudent:
+    """Construct the matching normalization profile for a validated checkpoint."""
+    version = payload.get("version")
+    if version not in (
+        LEGACY_STUDENT_CHECKPOINT_VERSION,
+        PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
+        STUDENT_CHECKPOINT_VERSION,
+    ):
+        raise RuntimeError("GelSight X040 DR Student version mismatch")
+    return RMAGelSightX040ThreeFrameStudent(
+        pretrained_backbone=pretrained_backbone,
+        legacy_position_normalization=version == LEGACY_STUDENT_CHECKPOINT_VERSION,
+    )
 
 
 def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]) -> None:
@@ -377,13 +475,17 @@ def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, to
 __all__ = (
     "GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK",
     "GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK",
+    "LEGACY_STUDENT_CHECKPOINT_VERSION",
+    "PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION",
     "MANIFEST_FILENAME",
     "load_student_checkpoint",
+    "load_encoder_initialization_checkpoint",
     "load_student_model_state",
     "load_teacher_manifest",
     "load_teacher_policy_state",
     "infer_teacher_checkpoint_policy_step",
     "make_student_payload",
+    "make_student_model_for_checkpoint",
     "sha256_file",
     "state_dict_sha256",
     "student_environment_contract",

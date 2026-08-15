@@ -1,6 +1,8 @@
 from .franka_gsmini_gripper_rigid import (
     FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG,
     FRANKA_PANDA_ARM_GSMINI_GRIPPER_RIGID_CFG,
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE,
+    create_gelsight_standard_franka_arm_visual_usd,
 )
 from .franka_gsmini_gripper_uipc import (
     FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_UIPC_CFG,

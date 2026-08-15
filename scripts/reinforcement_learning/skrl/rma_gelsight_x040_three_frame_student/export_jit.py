@@ -32,10 +32,8 @@ import torch
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     load_student_checkpoint,
     load_student_model_state,
+    make_student_model_for_checkpoint,
     sha256_file,
-)
-from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
-    RMAGelSightX040ThreeFrameStudent,
 )
 
 
@@ -60,7 +58,9 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint)
-    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False).cpu().eval()
+    model = make_student_model_for_checkpoint(
+        payload, pretrained_backbone=False
+    ).cpu().eval()
     load_student_model_state(model, payload["model"])
     output = (
         Path(args.output).expanduser().resolve()

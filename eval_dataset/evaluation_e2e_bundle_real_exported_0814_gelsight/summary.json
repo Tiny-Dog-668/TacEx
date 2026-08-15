@@ -1,0 +1,182 @@
+{
+  "kind": "policy_vs_apriltag_evaluation",
+  "dataset": "/home/td/franka/eval_dataset",
+  "manifest": "/home/td/franka/eval_dataset/manifest.csv",
+  "output_dir": "/home/td/franka/eval_dataset/evaluation_e2e_bundle_real_exported_0814_gelsight",
+  "frame_count": 30,
+  "original_frame_count": 30,
+  "frame_stride": 1,
+  "max_frames_per_position": 0,
+  "position_count": 30,
+  "tag_detection_count": 30,
+  "tag_detection_fraction": 1.0,
+  "frame_error_policy_minus_apriltag": {
+    "count": 30,
+    "bias_mean_m": [
+      0.058357998403522966,
+      -0.02286538519975101,
+      -0.002683931689727053
+    ],
+    "bias_median_m": [
+      0.05765999933235788,
+      -0.02538602029415908,
+      -0.002926504156562414
+    ],
+    "mae_xyz_mm": [
+      58.35799840352296,
+      32.75593155135498,
+      2.872092587466025
+    ],
+    "rmse_xyz_mm": [
+      59.89938375026696,
+      37.94704471491568,
+      3.2550571503763375
+    ],
+    "rmse_3d_mm": 70.98246102601523,
+    "median_3d_mm": 66.95710012813456,
+    "p95_3d_mm": 89.43850957008641,
+    "max_3d_mm": 93.27447539881831
+  },
+  "position_error_policy_minus_apriltag": {
+    "count": 30,
+    "bias_mean_m": [
+      0.058357998403522966,
+      -0.02286538519975101,
+      -0.002683931689727053
+    ],
+    "bias_median_m": [
+      0.05765999933235788,
+      -0.02538602029415908,
+      -0.002926504156562414
+    ],
+    "mae_xyz_mm": [
+      58.35799840352296,
+      32.75593155135498,
+      2.872092587466025
+    ],
+    "rmse_xyz_mm": [
+      59.89938375026696,
+      37.94704471491568,
+      3.2550571503763375
+    ],
+    "rmse_3d_mm": 70.98246102601523,
+    "median_3d_mm": 66.95710012813456,
+    "p95_3d_mm": 89.43850957008641,
+    "max_3d_mm": 93.27447539881831
+  },
+  "policy_prediction": {
+    "model": "/home/td/franka/checkpoint/0814_gelsight_20000/gelsight_x040_three_frame_student_0020000.pt",
+    "metadata": "/home/td/franka/checkpoint/0814_gelsight_20000/gelsight_x040_three_frame_student_0020000.json",
+    "policy_config": "/home/td/franka/configs/e2e_bundle_real_exported_0814_gelsight.json",
+    "device": "cuda:0",
+    "policy_kind": "tacex_rma_gelsight_x040_dr_three_frame_student_torchscript",
+    "position_frame": "robot_root",
+    "contact_prediction_available": false,
+    "stats": {
+      "count": 30,
+      "mean_m": [
+        0.5106426189343135,
+        -0.004774438473396004,
+        0.026934779124955337
+      ],
+      "median_m": [
+        0.5064400732517242,
+        -0.004615284153260291,
+        0.027257174253463745
+      ],
+      "std_m": [
+        0.017873244959936523,
+        0.03446623292104089,
+        0.0014025115091162636
+      ]
+    }
+  },
+  "apriltag": {
+    "family": "tag36h11",
+    "id": 2,
+    "marker_length_m": 0.04,
+    "tag_to_object_translation_m": [
+      0.0,
+      0.0,
+      -0.025
+    ],
+    "base_height_offset_m": 0.02,
+    "max_reprojection_px": 3.0,
+    "detection_scales": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    "calibration_report": "/home/td/franka/runs/20260802_204111_eye_to_hand/reports/20260802_205349/calibration_report.json",
+    "base_T_camera": [
+      [
+        0.016323842311133294,
+        0.4186381809105206,
+        -0.9080063907573185,
+        1.1660910884070719
+      ],
+      [
+        0.9996638076829957,
+        -0.02512958252251996,
+        0.006385584623099237,
+        0.03590160819685967
+      ],
+      [
+        -0.02014457199684702,
+        -0.9078053632614063,
+        -0.41890764931293567,
+        0.5142003358975679
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "cache": {
+      "path": "/home/td/franka/eval_dataset/apriltag_ground_truth.json",
+      "enabled": true,
+      "hits": 30,
+      "detected": 0
+    }
+  },
+  "correction": {
+    "recommended_bias_from_position_medians_m": [
+      -0.05765999933235788,
+      0.02538602029415908,
+      0.002926504156562414
+    ],
+    "meaning": "corrected_policy_xyz = policy_xyz + recommended_bias",
+    "affine_from_position_medians": {
+      "matrix": [
+        [
+          1.0446162065254583,
+          0.07154771599100869,
+          3.2290156668102883
+        ],
+        [
+          0.08812939656575526,
+          1.8590208796595395,
+          1.5843847451408577
+        ],
+        [
+          -0.006292056806703647,
+          -0.001008649203729159,
+          0.32523427112346337
+        ]
+      ],
+      "offset_m": [
+        -0.1677721585592415,
+        -0.060710951489707836,
+        0.024066774190800253
+      ],
+      "residual_rmse_3d_mm": 16.128371709048423,
+      "residual_median_3d_mm": 11.787756379214168
+    }
+  },
+  "visualizations": {
+    "xy_position_error_png": "/home/td/franka/eval_dataset/evaluation_e2e_bundle_real_exported_0814_gelsight/xy_position_error.png"
+  }
+}

@@ -7,6 +7,11 @@ import numpy as np
 import torch
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils import configclass
+from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE,
+    GELSIGHT_STANDARD_FRANKA_BASE_LED_COLOR_RGB,
+    GELSIGHT_STANDARD_FRANKA_BASE_LED_SUBSET_PATH,
+)
 
 from .sim2real_cube_real_alignment_gelsight_rma_env import (
     _GELSIGHT_REFERENCE_OBSERVATION_SPACE,
@@ -14,14 +19,17 @@ from .sim2real_cube_real_alignment_gelsight_rma_env import (
     Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg,
     Sim2RealCubeRealAlignmentRMAGelSightTeacherEnv,
     Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg,
+    _make_gelsight_robot_cfg,
 )
 from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_M,
     _GelSightFixedSizeCubeMixin,
     _cube_illegal_sensor_cfg,
-    _invisible_ground_cfg,
+    _full_cell_backdrop_cfg,
+    _full_cell_plate_cfg,
     _isolated_scene_cfg,
     _table_illegal_sensor_cfg,
+    _visible_ground_cfg,
 )
 
 
@@ -230,6 +238,15 @@ class _GelSightX040CfgMixin:
     cube_y_pos_range = 0.10
     cube_position_curriculum_enabled = False
     cube_position_curriculum_force_full_range = True
+    robot = _make_gelsight_robot_cfg(align_standard_franka_visuals=True)
+    rma_franka_visual_profile = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE
+    rma_base_status_led_subset_path = GELSIGHT_STANDARD_FRANKA_BASE_LED_SUBSET_PATH
+    rma_base_status_led_color_rgb = GELSIGHT_STANDARD_FRANKA_BASE_LED_COLOR_RGB
+
+    def __post_init__(self) -> None:
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
 
 
 @configclass
@@ -241,7 +258,9 @@ class Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsTeacherEnvCfg(
 
     rma_task_id = GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK
     scene = _isolated_scene_cfg(Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg)
-    ground = _invisible_ground_cfg(Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg)
+    ground = _visible_ground_cfg(Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg)
+    plate = _full_cell_plate_cfg(Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg)
+    backdrop = _full_cell_backdrop_cfg(Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg)
     cube = Sim2RealCubeRealAlignmentRMAGelSightTeacherEnvCfg().cube.copy()
     cube.init_state = cube.init_state.copy()
     cube.init_state.pos = (0.40, 0.00, 0.026)
@@ -264,7 +283,9 @@ class Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREn
 
     rma_task_id = GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK
     scene = _isolated_scene_cfg(Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg)
-    ground = _invisible_ground_cfg(Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg)
+    ground = _visible_ground_cfg(Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg)
+    plate = _full_cell_plate_cfg(Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg)
+    backdrop = _full_cell_backdrop_cfg(Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg)
     cube = Sim2RealCubeRealAlignmentRMAGelSightStudentDREnvCfg().cube.copy()
     cube.init_state = cube.init_state.copy()
     cube.init_state.pos = (0.40, 0.00, 0.026)

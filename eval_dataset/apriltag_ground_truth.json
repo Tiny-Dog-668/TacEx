@@ -1,0 +1,680 @@
+{
+  "kind": "apriltag_ground_truth_cache",
+  "version": 1,
+  "fingerprint": {
+    "family": "tag36h11",
+    "marker_id": 2,
+    "marker_length_m": 0.04,
+    "tag_to_object_translation_m": [
+      0.0,
+      0.0,
+      -0.025
+    ],
+    "base_height_offset_m": 0.02,
+    "max_reprojection_px": 3.0,
+    "detection_scales": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    "base_T_camera": [
+      [
+        0.016323842311133294,
+        0.4186381809105206,
+        -0.9080063907573185,
+        1.1660910884070719
+      ],
+      [
+        0.9996638076829957,
+        -0.02512958252251996,
+        0.006385584623099237,
+        0.03590160819685967
+      ],
+      [
+        -0.02014457199684702,
+        -0.9078053632614063,
+        -0.41890764931293567,
+        0.5142003358975679
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "frames": {
+    "/home/td/franka/eval_dataset/positions/position_000/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 344137,
+        "mtime_ns": 1786687215875647778
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4245056774323184,
+        -0.04977414638190841,
+        0.033060682436430136
+      ],
+      "apriltag_raw_position_m": [
+        0.4245056774323184,
+        -0.04977414638190841,
+        0.013060682436430132
+      ],
+      "reprojection_rms_px": 0.034168698252132534,
+      "area_px2": 398.21818850236014,
+      "detection_scale": 2.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_001/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342394,
+        "mtime_ns": 1786687227082700343
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4205145559992552,
+        -0.024565002764182536,
+        0.029064451633581633
+      ],
+      "apriltag_raw_position_m": [
+        0.4205145559992552,
+        -0.024565002764182536,
+        0.009064451633581633
+      ],
+      "reprojection_rms_px": 0.02921770889955873,
+      "area_px2": 402.3369500222616,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_002/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343425,
+        "mtime_ns": 1786687234588735544
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.41941803906153646,
+        0.007865362835713771,
+        0.027543221465837115
+      ],
+      "apriltag_raw_position_m": [
+        0.41941803906153646,
+        0.007865362835713771,
+        0.007543221465837115
+      ],
+      "reprojection_rms_px": 0.04103823893608244,
+      "area_px2": 398.4862550483085,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_003/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343004,
+        "mtime_ns": 1786687241761769180
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4234182582772849,
+        0.04087366589296374,
+        0.0274482133455412
+      ],
+      "apriltag_raw_position_m": [
+        0.4234182582772849,
+        0.04087366589296374,
+        0.0074482133455411985
+      ],
+      "reprojection_rms_px": 0.007907345849181607,
+      "area_px2": 403.42892544623464,
+      "detection_scale": 4.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_004/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343040,
+        "mtime_ns": 1786687248798802176
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4281673715347287,
+        0.0628544189538279,
+        0.029229724398107636
+      ],
+      "apriltag_raw_position_m": [
+        0.4281673715347287,
+        0.0628544189538279,
+        0.009229724398107635
+      ],
+      "reprojection_rms_px": 0.07352322817515661,
+      "area_px2": 407.8845065385103,
+      "detection_scale": 4.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_005/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343148,
+        "mtime_ns": 1786687257337842210
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4269952704723323,
+        0.08422446943059039,
+        0.029271833865864325
+      ],
+      "apriltag_raw_position_m": [
+        0.4269952704723323,
+        0.08422446943059039,
+        0.009271833865864325
+      ],
+      "reprojection_rms_px": 0.05601799417157067,
+      "area_px2": 403.23519884236157,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_006/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343030,
+        "mtime_ns": 1786687265877882245
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4271384122111452,
+        0.10363056492095007,
+        0.029536435562484153
+      ],
+      "apriltag_raw_position_m": [
+        0.4271384122111452,
+        0.10363056492095007,
+        0.009536435562484152
+      ],
+      "reprojection_rms_px": 0.048480742221238264,
+      "area_px2": 411.9919509300962,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_007/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342772,
+        "mtime_ns": 1786687273583918367
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4298134335705372,
+        0.12416342926118515,
+        0.03136211678740275
+      ],
+      "apriltag_raw_position_m": [
+        0.4298134335705372,
+        0.12416342926118515,
+        0.011362116787402753
+      ],
+      "reprojection_rms_px": 0.031256506013346855,
+      "area_px2": 408.3652284229174,
+      "detection_scale": 3.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_008/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343154,
+        "mtime_ns": 1786687280021948543
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4543454184666989,
+        0.12657909419793645,
+        0.030484288063716843
+      ],
+      "apriltag_raw_position_m": [
+        0.4543454184666989,
+        0.12657909419793645,
+        0.010484288063716842
+      ],
+      "reprojection_rms_px": 0.02223106492098314,
+      "area_px2": 447.85825861338526,
+      "detection_scale": 2.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_009/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342436,
+        "mtime_ns": 1786687287960985750
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.45181285606305255,
+        0.1067085234519722,
+        0.030705049407426823
+      ],
+      "apriltag_raw_position_m": [
+        0.45181285606305255,
+        0.1067085234519722,
+        0.010705049407426823
+      ],
+      "reprojection_rms_px": 0.018483273460959966,
+      "area_px2": 448.35418041748926,
+      "detection_scale": 4.0,
+      "detection_variant": "sharp"
+    },
+    "/home/td/franka/eval_dataset/positions/position_010/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342804,
+        "mtime_ns": 1786687296467025611
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.44791321976027815,
+        0.08158666186401603,
+        0.029437262637978336
+      ],
+      "apriltag_raw_position_m": [
+        0.44791321976027815,
+        0.08158666186401603,
+        0.009437262637978335
+      ],
+      "reprojection_rms_px": 0.025268728906102288,
+      "area_px2": 428.0514709861018,
+      "detection_scale": 2.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_011/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343244,
+        "mtime_ns": 1786687303841060164
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.44066673071104995,
+        0.05781889565297523,
+        0.02602895909991681
+      ],
+      "apriltag_raw_position_m": [
+        0.44066673071104995,
+        0.05781889565297523,
+        0.006028959099916808
+      ],
+      "reprojection_rms_px": 0.01801540139382443,
+      "area_px2": 426.90307283913717,
+      "detection_scale": 4.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_012/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342598,
+        "mtime_ns": 1786687311245094855
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4392738286040469,
+        0.033854047240236676,
+        0.026858562544787624
+      ],
+      "apriltag_raw_position_m": [
+        0.4392738286040469,
+        0.033854047240236676,
+        0.006858562544787623
+      ],
+      "reprojection_rms_px": 0.12201223092286946,
+      "area_px2": 428.6971101947129,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_013/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342836,
+        "mtime_ns": 1786687318387128316
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.44305783854900754,
+        0.006686271359256094,
+        0.03030022256068734
+      ],
+      "apriltag_raw_position_m": [
+        0.44305783854900754,
+        0.006686271359256094,
+        0.010300222560687338
+      ],
+      "reprojection_rms_px": 0.07653723890824131,
+      "area_px2": 421.8178496006876,
+      "detection_scale": 2.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_014/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343091,
+        "mtime_ns": 1786687326089164397
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.44413341133521334,
+        -0.02690548148046137,
+        0.03204998582083995
+      ],
+      "apriltag_raw_position_m": [
+        0.44413341133521334,
+        -0.02690548148046137,
+        0.012049985820839947
+      ],
+      "reprojection_rms_px": 0.0034696889841310365,
+      "area_px2": 419.93463423708454,
+      "detection_scale": 2.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_015/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343220,
+        "mtime_ns": 1786687332927196428
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.43376122185480864,
+        -0.060979239694925066,
+        0.02806489215829453
+      ],
+      "apriltag_raw_position_m": [
+        0.43376122185480864,
+        -0.060979239694925066,
+        0.00806489215829453
+      ],
+      "reprojection_rms_px": 0.01340568760281098,
+      "area_px2": 416.60534660937265,
+      "detection_scale": 1.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_016/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342725,
+        "mtime_ns": 1786687339533227370
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.43940254214520136,
+        -0.09636851711978608,
+        0.031050408758613996
+      ],
+      "apriltag_raw_position_m": [
+        0.43940254214520136,
+        -0.09636851711978608,
+        0.011050408758613996
+      ],
+      "reprojection_rms_px": 0.028612397022882784,
+      "area_px2": 427.5604532917496,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_017/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343123,
+        "mtime_ns": 1786687346338259242
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4589540710746454,
+        -0.10626812546417905,
+        0.027221881470567668
+      ],
+      "apriltag_raw_position_m": [
+        0.4589540710746454,
+        -0.10626812546417905,
+        0.007221881470567668
+      ],
+      "reprojection_rms_px": 0.03069729624602596,
+      "area_px2": 458.52909542643465,
+      "detection_scale": 1.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_018/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 342696,
+        "mtime_ns": 1786687353210291426
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4717899567803539,
+        -0.08067864072888792,
+        0.031606820700803284
+      ],
+      "apriltag_raw_position_m": [
+        0.4717899567803539,
+        -0.08067864072888792,
+        0.011606820700803287
+      ],
+      "reprojection_rms_px": 0.03768203110900377,
+      "area_px2": 468.64247693121433,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_019/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343805,
+        "mtime_ns": 1786687360481325476
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4744723105535746,
+        -0.05779403070612513,
+        0.031150372591953232
+      ],
+      "apriltag_raw_position_m": [
+        0.4744723105535746,
+        -0.05779403070612513,
+        0.011150372591953232
+      ],
+      "reprojection_rms_px": 0.03813486848538374,
+      "area_px2": 471.356852394063,
+      "detection_scale": 2.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_020/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343481,
+        "mtime_ns": 1786687367220357032
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.47385468918273405,
+        -0.041522912122751596,
+        0.030219859234793128
+      ],
+      "apriltag_raw_position_m": [
+        0.47385468918273405,
+        -0.041522912122751596,
+        0.010219859234793127
+      ],
+      "reprojection_rms_px": 0.007634982737831507,
+      "area_px2": 465.1974323010072,
+      "detection_scale": 1.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_021/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343047,
+        "mtime_ns": 1786687373957388576
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4765861272535553,
+        -0.018183373041059648,
+        0.029783248932819716
+      ],
+      "apriltag_raw_position_m": [
+        0.4765861272535553,
+        -0.018183373041059648,
+        0.009783248932819715
+      ],
+      "reprojection_rms_px": 0.07380438582683423,
+      "area_px2": 478.1799754546955,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_022/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343548,
+        "mtime_ns": 1786687380929421219
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.48283759841755997,
+        0.00036421295737774277,
+        0.02924627726744966
+      ],
+      "apriltag_raw_position_m": [
+        0.48283759841755997,
+        0.00036421295737774277,
+        0.00924627726744966
+      ],
+      "reprojection_rms_px": 0.01525642568689803,
+      "area_px2": 490.9930991525762,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_023/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343415,
+        "mtime_ns": 1786687387534452142
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.48193614667057694,
+        0.019383215409973266,
+        0.03029497811224434
+      ],
+      "apriltag_raw_position_m": [
+        0.48193614667057694,
+        0.019383215409973266,
+        0.010294978112244339
+      ],
+      "reprojection_rms_px": 0.01008419676916187,
+      "area_px2": 495.84676652401686,
+      "detection_scale": 4.0,
+      "detection_variant": "sharp"
+    },
+    "/home/td/franka/eval_dataset/positions/position_024/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 344159,
+        "mtime_ns": 1786687394206483376
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4812493964282255,
+        0.039378122130107676,
+        0.027363771925412193
+      ],
+      "apriltag_raw_position_m": [
+        0.4812493964282255,
+        0.039378122130107676,
+        0.007363771925412193
+      ],
+      "reprojection_rms_px": 0.02637537122695808,
+      "area_px2": 494.86199094029143,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_025/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 344644,
+        "mtime_ns": 1786687399877509922
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.49025449046601277,
+        0.06181465241351453,
+        0.03008564538458645
+      ],
+      "apriltag_raw_position_m": [
+        0.49025449046601277,
+        0.06181465241351453,
+        0.01008564538458645
+      ],
+      "reprojection_rms_px": 0.010233439561523498,
+      "area_px2": 501.10758797079325,
+      "detection_scale": 3.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_026/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 344245,
+        "mtime_ns": 1786687406852542571
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.49262690783802543,
+        0.08648522013554179,
+        0.029916757949198076
+      ],
+      "apriltag_raw_position_m": [
+        0.49262690783802543,
+        0.08648522013554179,
+        0.009916757949198076
+      ],
+      "reprojection_rms_px": 0.059622128145323555,
+      "area_px2": 505.3909268337302,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    },
+    "/home/td/franka/eval_dataset/positions/position_027/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343969,
+        "mtime_ns": 1786687413420573313
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.46081723360028587,
+        0.02178827361223584,
+        0.031223631834513547
+      ],
+      "apriltag_raw_position_m": [
+        0.46081723360028587,
+        0.02178827361223584,
+        0.011223631834513546
+      ],
+      "reprojection_rms_px": 0.018805349698650033,
+      "area_px2": 458.42897007707506,
+      "detection_scale": 2.0,
+      "detection_variant": "sharp"
+    },
+    "/home/td/franka/eval_dataset/positions/position_028/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 343970,
+        "mtime_ns": 1786687419691602663
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.487781754276381,
+        0.021070633285336458,
+        0.030546150143721317
+      ],
+      "apriltag_raw_position_m": [
+        0.487781754276381,
+        0.021070633285336458,
+        0.010546150143721317
+      ],
+      "reprojection_rms_px": 0.04107021245117084,
+      "area_px2": 494.0980415213853,
+      "detection_scale": 3.0,
+      "detection_variant": "gray"
+    },
+    "/home/td/franka/eval_dataset/positions/position_029/rgb/frame_000000.png": {
+      "image_signature": {
+        "size_bytes": 344013,
+        "mtime_ns": 1786687426396634042
+      },
+      "tag_found": true,
+      "apriltag_position_m": [
+        0.4410398473332884,
+        0.01863813628920602,
+        0.028405618344897837
+      ],
+      "apriltag_raw_position_m": [
+        0.4410398473332884,
+        0.01863813628920602,
+        0.008405618344897836
+      ],
+      "reprojection_rms_px": 0.020074111271621498,
+      "area_px2": 429.7461358010769,
+      "detection_scale": 4.0,
+      "detection_variant": "clahe"
+    }
+  }
+}

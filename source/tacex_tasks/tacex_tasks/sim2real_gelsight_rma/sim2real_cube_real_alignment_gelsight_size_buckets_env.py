@@ -58,6 +58,42 @@ def _invisible_ground_cfg(base_cfg_cls: type):
     return ground
 
 
+def _visible_ground_cfg(base_cfg_cls: type):
+    ground = base_cfg_cls().ground.copy()
+    ground.spawn = ground.spawn.copy()
+    ground.spawn.visible = True
+    return ground
+
+
+def _full_cell_plate_cfg(base_cfg_cls: type, *, cell_size_m: float = 3.5):
+    """Tile one floor panel across an entire environment cell without changing its height."""
+    base = base_cfg_cls()
+    plate = base.plate.copy()
+    plate.init_state = plate.init_state.copy()
+    plate.spawn = plate.spawn.copy()
+    thickness_m = float(plate.spawn.size[2])
+    backdrop_x_m = float(base.backdrop.init_state.pos[0])
+    plate.init_state.pos = (
+        backdrop_x_m + 0.5 * float(cell_size_m),
+        float(plate.init_state.pos[1]),
+        float(plate.init_state.pos[2]),
+    )
+    plate.spawn.size = (float(cell_size_m), float(cell_size_m), thickness_m)
+    return plate
+
+
+def _full_cell_backdrop_cfg(base_cfg_cls: type, *, cell_size_m: float = 3.5):
+    """Extend the visual-only backdrop across the full environment-cell width."""
+    backdrop = base_cfg_cls().backdrop.copy()
+    backdrop.spawn = backdrop.spawn.copy()
+    backdrop.spawn.size = (
+        float(backdrop.spawn.size[0]),
+        float(cell_size_m),
+        float(backdrop.spawn.size[2]),
+    )
+    return backdrop
+
+
 def _cube_illegal_sensor_cfg() -> ContactSensorCfg:
     return ContactSensorCfg(
         prim_path="/World/envs/env_.*/cube",
@@ -139,7 +175,7 @@ class _GelSightFixedSizeCubeMixin:
             self.cfg.cube_size_buckets_m, device=self.device, dtype=torch.float32
         )
         super()._setup_scene()
-        self._hide_shared_ground()
+        self._set_shared_ground_visibility(bool(self.cfg.ground.spawn.visible))
         self._author_fixed_cube_scales()
         self.scene.filter_collisions(global_prim_paths=[self.cfg.ground.prim_path])
 
@@ -148,11 +184,15 @@ class _GelSightFixedSizeCubeMixin:
         """Fixed edge length for each environment, shape ``[N]``."""
         return self._cube_size_bucket_values[self._active_cube_bucket_ids]
 
-    def _hide_shared_ground(self) -> None:
+    def _set_shared_ground_visibility(self, visible: bool) -> None:
         prim = sim_utils.stage_utils.get_current_stage().GetPrimAtPath(self.cfg.ground.prim_path)
         if not prim.IsValid():
             raise RuntimeError(f"Shared ground is missing: {self.cfg.ground.prim_path}")
-        UsdGeom.Imageable(prim).MakeInvisible()
+        imageable = UsdGeom.Imageable(prim)
+        if visible:
+            imageable.MakeVisible()
+        else:
+            imageable.MakeInvisible()
 
     def _author_fixed_cube_scales(self) -> None:
         prim_paths = sim_utils.find_matching_prim_paths(self.cfg.cube.prim_path)
@@ -368,6 +408,11 @@ class _GelSightSizeBucketsCfgMixin:
     illegal_collision_termination_threshold_n = 10000.0
     table_collision_force_threshold_n = 5.0
     table_collision_penalty = -10.0
+
+    def __post_init__(self) -> None:
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
 
 
 @configclass

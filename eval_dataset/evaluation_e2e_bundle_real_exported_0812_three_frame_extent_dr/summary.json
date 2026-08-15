@@ -1,0 +1,182 @@
+{
+  "kind": "policy_vs_apriltag_evaluation",
+  "dataset": "/home/td/franka/eval_dataset",
+  "manifest": "/home/td/franka/eval_dataset/manifest.csv",
+  "output_dir": "/home/td/franka/eval_dataset/evaluation_e2e_bundle_real_exported_0812_three_frame_extent_dr",
+  "frame_count": 30,
+  "original_frame_count": 30,
+  "frame_stride": 1,
+  "max_frames_per_position": 0,
+  "position_count": 30,
+  "tag_detection_count": 30,
+  "tag_detection_fraction": 1.0,
+  "frame_error_policy_minus_apriltag": {
+    "count": 30,
+    "bias_mean_m": [
+      -0.02380641532678048,
+      0.013990133757848987,
+      -0.003777595399586105
+    ],
+    "bias_median_m": [
+      -0.023406931492833766,
+      0.016430960465401278,
+      -0.0033867480636815828
+    ],
+    "mae_xyz_mm": [
+      23.806415326780478,
+      15.535263380700794,
+      3.918231443977573
+    ],
+    "rmse_xyz_mm": [
+      24.51783446995815,
+      16.52111023957743,
+      4.657699539410237
+    ],
+    "rmse_3d_mm": 29.92934104927739,
+    "median_3d_mm": 28.04527865814863,
+    "p95_3d_mm": 35.735367272637696,
+    "max_3d_mm": 40.539448701073816
+  },
+  "position_error_policy_minus_apriltag": {
+    "count": 30,
+    "bias_mean_m": [
+      -0.02380641532678048,
+      0.013990133757848987,
+      -0.003777595399586105
+    ],
+    "bias_median_m": [
+      -0.023406931492833766,
+      0.016430960465401278,
+      -0.0033867480636815828
+    ],
+    "mae_xyz_mm": [
+      23.806415326780478,
+      15.535263380700794,
+      3.918231443977573
+    ],
+    "rmse_xyz_mm": [
+      24.51783446995815,
+      16.52111023957743,
+      4.657699539410237
+    ],
+    "rmse_3d_mm": 29.92934104927739,
+    "median_3d_mm": 28.04527865814863,
+    "p95_3d_mm": 35.735367272637696,
+    "max_3d_mm": 40.539448701073816
+  },
+  "policy_prediction": {
+    "model": "/home/td/franka/checkpoint/0812_three_frame_extent_dr/rma_x040_wide_three_frame_student_0100000.pt",
+    "metadata": "/home/td/franka/checkpoint/0812_three_frame_extent_dr/rma_x040_wide_three_frame_student_0100000.json",
+    "policy_config": "/home/td/franka/configs/e2e_bundle_real_exported_0812_three_frame_extent_dr.json",
+    "device": "cuda:0",
+    "policy_kind": "tacex_rma_x040_wide_three_frame_direct_action_torchscript",
+    "position_frame": "robot_root",
+    "contact_prediction_available": false,
+    "stats": {
+      "count": 30,
+      "mean_m": [
+        0.42847820520401003,
+        0.032081080484203994,
+        0.02584111541509628
+      ],
+      "median_m": [
+        0.42080043256282806,
+        0.040058381855487823,
+        0.025291661731898785
+      ],
+      "std_m": [
+        0.019673401177391484,
+        0.05772765997263579,
+        0.00183697385351492
+      ]
+    }
+  },
+  "apriltag": {
+    "family": "tag36h11",
+    "id": 2,
+    "marker_length_m": 0.04,
+    "tag_to_object_translation_m": [
+      0.0,
+      0.0,
+      -0.025
+    ],
+    "base_height_offset_m": 0.02,
+    "max_reprojection_px": 3.0,
+    "detection_scales": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    "calibration_report": "/home/td/franka/runs/20260802_204111_eye_to_hand/reports/20260802_205349/calibration_report.json",
+    "base_T_camera": [
+      [
+        0.016323842311133294,
+        0.4186381809105206,
+        -0.9080063907573185,
+        1.1660910884070719
+      ],
+      [
+        0.9996638076829957,
+        -0.02512958252251996,
+        0.006385584623099237,
+        0.03590160819685967
+      ],
+      [
+        -0.02014457199684702,
+        -0.9078053632614063,
+        -0.41890764931293567,
+        0.5142003358975679
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "cache": {
+      "path": "/home/td/franka/eval_dataset/apriltag_ground_truth.json",
+      "enabled": true,
+      "hits": 30,
+      "detected": 0
+    }
+  },
+  "correction": {
+    "recommended_bias_from_position_medians_m": [
+      0.023406931492833766,
+      -0.016430960465401278,
+      0.0033867480636815828
+    ],
+    "meaning": "corrected_policy_xyz = policy_xyz + recommended_bias",
+    "affine_from_position_medians": {
+      "matrix": [
+        [
+          1.1927311759787957,
+          0.08301126272189319,
+          -0.614542120017607
+        ],
+        [
+          0.020827931166130763,
+          1.048695319881409,
+          2.289278574594687
+        ],
+        [
+          0.0036162563534679086,
+          0.0006734805543753795,
+          -0.20091512600622388
+        ]
+      ],
+      "offset_m": [
+        -0.04555733019313569,
+        -0.08363415866175307,
+        0.03323948875868685
+      ],
+      "residual_rmse_3d_mm": 6.945900864463815,
+      "residual_median_3d_mm": 5.095786817882109
+    }
+  },
+  "visualizations": {
+    "xy_position_error_png": "/home/td/franka/eval_dataset/evaluation_e2e_bundle_real_exported_0812_three_frame_extent_dr/xy_position_error.png"
+  }
+}

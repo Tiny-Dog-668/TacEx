@@ -1,0 +1,32 @@
+{
+  "kind": "cube_pose_dataset",
+  "created_at": "2026-08-14T14:00:10",
+  "camera_config": {
+    "serial": "215322076207",
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "warmup_frames": 30
+  },
+  "camera_intrinsics": {
+    "width": 640,
+    "height": 480,
+    "fx": 604.8973999023438,
+    "fy": 605.0858154296875,
+    "cx": 320.9801025390625,
+    "cy": 247.91322326660156,
+    "distortion_model": "inverse_brown_conrady",
+    "distortion_coefficients": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "manifest": "manifest.csv",
+  "notes": [
+    "Images are raw RealSense RGB frames.",
+    "Each position_* directory is intended to contain one static cube placement."
+  ]
+}

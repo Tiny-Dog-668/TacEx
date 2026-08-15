@@ -37,9 +37,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
     load_student_checkpoint,
     load_student_model_state,
-)
-from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
-    RMAGelSightX040ThreeFrameStudent,
+    make_student_model_for_checkpoint,
 )
 
 
@@ -55,7 +53,9 @@ def main() -> None:
     env = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK, cfg=env_cfg)
     try:
         device = torch.device(env.unwrapped.device)
-        model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False).to(device).eval()
+        model = make_student_model_for_checkpoint(
+            payload, pretrained_backbone=False
+        ).to(device).eval()
         load_student_model_state(model, payload["model"])
         observations, _ = env.reset()
         reward_sum = 0.0

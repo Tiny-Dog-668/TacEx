@@ -10,6 +10,36 @@
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
 
+### 2026-08-15 CST — 导出最新 GelSight X040 Student 10000步 TorchScript
+
+- 产物：将 `2026-08-15_14-38-57_distillation/checkpoints/student_0010000.pt`（v6/model-v3，`global_step=10000`）导出到仓库 `exports/`，并生成含输入输出契约与 SHA-256 的同名 JSON。
+- 契约：七路输入及 `action[4]/contact[2]/cube_position_root_m[3]` 输出不变；仅生成部署产物，不修改训练、环境、奖励或 done，也不需要重训。
+- 验证：相关脚本 `compileall`/diff check、CPU batch 1/8 eager—TorchScript（误差均0）及落盘重载通过；沙箱未暴露 CUDA，定向 Isaac pytest 静默超2分钟后中止，JSON 记 `cuda_validation=false`，待目标部署机复验。
+
+### 2026-08-15 CST — GelSight X040 底座状态灯改为绿色
+
+- 修改：组合 USD 仅将 `panda_link0` 标准 visual 设为可覆盖，并把底座 `subset_5` 绑定为固定纯绿色 UsdPreviewSurface 自发光材质；link1–7 继续实例化，腕部蓝灯及 GelSight 外观不变。
+- 契约：只改变相机 RGB 像素；观测 key/shape、4维动作、奖励、done、坐标系和物理参数不变。Student checkpoint 升至v6；旧v5可play/export但不可resume，正式对齐实验需重新蒸馏；Teacher 无视觉输入，无需重训。
+- 验证：改动文件 `compileall` 与 `git diff --check`、12项X040定向pytest及8-env带相机 reset/step smoke 通过；确认底座材质的 diffuse/emissive 均为 `(0,1,0)`、腕部仍绑定 `EmissiveBlue`。
+
+### 2026-08-15 CST — 对齐 GelSight X040 与 0812 视觉场景
+
+- 修改：X040 Teacher/Student 恢复可见黑色共享 GroundPlane，并把 floor/backdrop 扩到完整3.5 m env cell；新增缓存组合 USD，停用旧 arm link0–7 visual 并独立引用标准 Panda visual，hand/finger/GelSight 保持原资产。
+- 契约：RGB 像素分布改变，Student artifact 新增视觉 profile；观测 key/shape、4维动作、奖励、done、坐标系、GelSight 额外 prim 和机器人自碰撞均不变。旧 v5 Student 可回放但正式实验应重新蒸馏，Teacher 无视觉输入且物理未变。
+- 验证：相关模块 `compileall`、`git diff --check`、12项X040定向pytest与8-env Student reset/step及RGB抓帧通过；组合USD确认每个arm link仅一套标准mesh、材质有效，原hand/finger和GelSight prim存在且自碰撞仍开启。
+
+### 2026-08-14 CST — 修复 GelSight Student 重复渲染与相机位姿回读
+
+- 修改：三个 GelSight config mixin 显式转发 `__post_init__`，恢复 `render_interval=decimation=2`；RMA 的无 marker depth camera 关闭 latest-pose 回读，并以固定 `[0,1]→uint8` scale 移除每步两次 GPU 同步。
+- 契约：观测 key/shape、4维动作、奖励、done、触觉像素换算与机器人自碰撞均不变；X040 Student artifact 新增渲染节奏、pose 开关和转换尺度，旧权重可评估但不建议跨修复 resume。
+- 验证：全仓 `compileall`/diff check、通用与X040配置契约 pytest、三个配置族实例化检查、X040最小合法8-env相机 reset/step 和触觉 uint8 范围 smoke 通过；Size-Buckets用例仍被既存10/10000 N断言阻断，未修改 Taxim 早退。
+
+### 2026-08-14 CST — GelSight X040 Student 对齐位置归一化与视觉初始化
+
+- 修改：三帧 Student 的 Cube XYZ 改为 X040-Wide 中心/尺度 `[0.40,0,0.026]/[0.08,0.10,0.10]`，训练必须显式传入经校验的 RMA XY Heatmap-DR checkpoint 初始化 ResNet18。
+- 契约：七路输入、三路输出、4维动作、Teacher、奖励与 success/done 不变；Student model/checkpoint 升至 v3/v5（v4 已撤回，不复用），新实验必须重新蒸馏，旧 v3 checkpoint 仅保留回放/导出兼容且禁止 resume。
+- 验证：待完成全仓 `compileall`、GelSight X040 定向 pytest、旧 checkpoint 回放兼容检查及带相机最小训练 smoke。
+
 ### 2026-08-14 CST — 撤回 X040 GelSight Student 底座 LED 外观 DR
 
 - 修改：移除会在场景创建时对 GelSight robot instance 执行 `make_uninstanceable` 和 stage-local 材质绑定的 LED DR；该路径使 Student 在训练日志创建前直接退出。

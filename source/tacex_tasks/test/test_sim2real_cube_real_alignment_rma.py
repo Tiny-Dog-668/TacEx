@@ -316,6 +316,10 @@ def test_rma_gelsight_configs_use_separate_robot_profile():
         assert cfg.gsmini_right.data_types == ["tactile_rgb"]
         assert cfg.gsmini_left.marker_motion_sim_cfg is None
         assert cfg.gsmini_right.marker_motion_sim_cfg is None
+        assert cfg.gsmini_left.sensor_camera_cfg.update_latest_camera_pose is False
+        assert cfg.gsmini_right.sensor_camera_cfg.update_latest_camera_pose is False
+        assert cfg.rma_gelsight_tactile_rgb_float_scale == pytest.approx(255.0)
+        assert cfg.sim.render_interval == cfg.decimation == 2
         assert cfg.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.02))
         assert cfg.robot.actuators["panda_hand"].effort_limit_sim == pytest.approx(40.0)
         assert cfg.robot.actuators["panda_hand"].stiffness == pytest.approx(400.0)
