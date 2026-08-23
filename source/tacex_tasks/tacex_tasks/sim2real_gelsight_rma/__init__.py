@@ -33,6 +33,14 @@ from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
     Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnv,
     Sim2RealCubeRealAlignmentRMAGelSightX040DRSizeBucketsThreeFrameStudentDREnvCfg,
 )
+from .sim2real_cube_real_alignment_gelsight_pulled_drawer_env import (
+    GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+    GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerTeacherEnvCfg,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerThreeFrameStudentEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerThreeFrameStudentEnvCfg,
+)
 
 
 RMA_GELSIGHT_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
@@ -103,6 +111,36 @@ gym.register(
         ),
         "skrl_cfg_entry_point": (
             f"{agents.__name__}:skrl_ppo_cube_real_alignment_gelsight_x040_dr_size_buckets_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_pulled_drawer_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerTeacherEnvCfg,
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:"
+            "skrl_ppo_cube_real_alignment_gelsight_pulled_drawer_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_pulled_drawer_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerThreeFrameStudentEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerThreeFrameStudentEnvCfg
         ),
     },
 )

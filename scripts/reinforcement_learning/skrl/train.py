@@ -189,6 +189,9 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
+    GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+)
 
 
 def _process_cfg(cfg: dict) -> dict:
@@ -364,9 +367,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.task in {
         GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
         GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
     }:
         if args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
             from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
+                infer_teacher_checkpoint_policy_step,
+            )
+        elif args_cli.task == GELSIGHT_PULLED_DRAWER_TEACHER_TASK:
+            from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
                 infer_teacher_checkpoint_policy_step,
             )
         else:
@@ -417,7 +425,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK and (
+    if args_cli.task == GELSIGHT_PULLED_DRAWER_TEACHER_TASK and (
+        not args_cli.distributed or app_launcher.local_rank == 0
+    ):
+        from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
+            load_teacher_manifest,
+            validate_live_teacher_contract,
+            write_teacher_manifest,
+        )
+
+        if resume_path is not None:
+            source_manifest = load_teacher_manifest(resume_path)
+            validate_live_teacher_contract(
+                env.unwrapped, source_manifest, require_instance=True
+            )
+        manifest_path = write_teacher_manifest(
+            env.unwrapped, os.path.join(log_dir, "params"), agent_cfg
+        )
+        print(f"[INFO] Saved Pulled-Drawer Teacher manifest: {manifest_path}")
+    elif args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (

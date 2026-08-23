@@ -114,25 +114,31 @@ class _GelSightX040SafetyMixin:
                 "info/illegal_collision_penalty_threshold_n": torch.tensor(
                     penalty_threshold, device=self.device, dtype=illegal_force.dtype
                 ),
-                "info/illegal_collision_termination_threshold_n": torch.tensor(
-                    self._collision_threshold("illegal_collision_termination_threshold"),
-                    device=self.device,
-                    dtype=illegal_force.dtype,
-                ),
             }
         )
+        if bool(self.cfg.illegal_collision_terminates_episode):
+            log["info/illegal_collision_termination_threshold_n"] = torch.tensor(
+                self._collision_threshold("illegal_collision_termination_threshold"),
+                device=self.device,
+                dtype=illegal_force.dtype,
+            )
         return reward, log
 
     def _rma_collision_reward_print_fields(
         self, log: dict[str, torch.Tensor]
     ) -> str:
         """Format the X040 unified collision metrics for the RMA summary."""
+        termination_field = ""
+        if "info/illegal_collision_termination_threshold_n" in log:
+            termination_field = (
+                "illegal_termination_threshold="
+                f"{log['info/illegal_collision_termination_threshold_n'].item():.2f} N, "
+            )
         return (
             f"illegal_collision={log['reward/illegal_collision'].item():.3f}, "
             f"illegal_threshold="
             f"{log['info/illegal_collision_penalty_threshold_n'].item():.2f} N, "
-            f"illegal_termination_threshold="
-            f"{log['info/illegal_collision_termination_threshold_n'].item():.2f} N, "
+            f"{termination_field}"
             f"illegal_force_max={log['info/illegal_collision_max_force_n'].item():.2f} N, "
         )
 
@@ -151,11 +157,15 @@ class _GelSightX040SafetyMixin:
         ground_collision = torch.any(
             self._robot.data.body_link_pos_w[:, :, 2] < float(self.cfg.ground_height), dim=1
         )
-        illegal_force = self._compute_illegal_collision_force()
-        termination_threshold = self._collision_threshold(
-            "illegal_collision_termination_threshold"
-        )
-        illegal_termination = illegal_force > termination_threshold
+        if bool(self.cfg.illegal_collision_terminates_episode):
+            illegal_force = self._compute_illegal_collision_force()
+            termination_threshold = self._collision_threshold(
+                "illegal_collision_termination_threshold"
+            )
+            illegal_termination = illegal_force > termination_threshold
+        else:
+            # X040 keeps the force penalty but disables force-based termination.
+            illegal_termination = torch.zeros_like(ground_collision)
         terminated = ground_collision | illegal_termination
         completed = terminated | time_out
         self._record_episode_outcomes_for_step(
@@ -229,16 +239,15 @@ class _GelSightX040CfgMixin:
     illegal_collision_curriculum_start_step = 0
     illegal_collision_curriculum_end_step = 100_000
     illegal_collision_curriculum_step_offset = 0
-    illegal_collision_penalty_threshold_start_n = 20.0
-    illegal_collision_penalty_threshold_end_n = 5.0
-    illegal_collision_termination_threshold_start_n = 200.0
-    illegal_collision_termination_threshold_end_n = 20.0
+    illegal_collision_penalty_threshold_start_n = 100.0
+    illegal_collision_penalty_threshold_end_n = 10.0
+    illegal_collision_terminates_episode = False
     illegal_collision_penalty = -10.0
     cube_x_pos_range = 0.08
     cube_y_pos_range = 0.10
     cube_position_curriculum_enabled = False
     cube_position_curriculum_force_full_range = True
-    robot = _make_gelsight_robot_cfg(align_standard_franka_visuals=True)
+    robot = _make_gelsight_robot_cfg()
     rma_franka_visual_profile = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE
     rma_base_status_led_subset_path = GELSIGHT_STANDARD_FRANKA_BASE_LED_SUBSET_PATH
     rma_base_status_led_color_rgb = GELSIGHT_STANDARD_FRANKA_BASE_LED_COLOR_RGB

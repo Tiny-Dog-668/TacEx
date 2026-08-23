@@ -20,6 +20,9 @@ import torch.nn.functional as F
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import tacex_tasks  # noqa: F401
+from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD,
+)
 from tacex.simulation_approaches.gpu_taxim.taxim_sim import TaximSimulator
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
     STUDENT_CHECKPOINT_VERSION,
@@ -53,6 +56,7 @@ def close_app():
 
 
 def test_new_tasks_and_fixed_size_contract_are_registered():
+    assert STUDENT_CHECKPOINT_VERSION == 5
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK) is not None
     teacher = parse_env_cfg(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK, device="cuda:0", num_envs=8)
@@ -72,7 +76,16 @@ def test_new_tasks_and_fixed_size_contract_are_registered():
     assert student.observation_space["gsmini_left_reference_rgb"].shape == (96, 128, 3)
     assert student.observation_space["gsmini_right_reference_rgb"].shape == (96, 128, 3)
     assert environment_contract(teacher) == environment_contract(student)
-    assert environment_contract(teacher)["gelsight_geometry"] == geometry_contract()
+    contract = environment_contract(teacher)
+    assert contract["profile"] == "rma_gelsight_fixed_size_buckets_v3"
+    assert contract["gelsight_geometry"] == geometry_contract()
+    assert contract["robot_asset_filename"] == "franka_gsmini_standard_arm_visuals_v6.usd"
+    assert contract["robot_base_world_position_m"] == [0.0, 0.0, 0.015]
+    assert contract["camera_world_position_m"] == pytest.approx(
+        [1.166091088407, 0.035901608197, 0.529200335898]
+    )
+    assert teacher.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
+    assert student.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
     assert teacher.rma_contact_force_threshold_n == pytest.approx(0.2)
     assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
     assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 
 if sys.platform != "win32":
     import pinocchio  # noqa: F401
@@ -21,6 +22,9 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 from pxr import Usd, UsdGeom, UsdShade
 
 import tacex_tasks  # noqa: F401
+from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD,
+)
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
@@ -28,6 +32,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
     PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_KIND,
+    TEACHER_MANIFEST_VERSION,
     load_student_checkpoint,
     student_environment_contract,
     student_input_contract,
@@ -52,7 +57,8 @@ def close_app():
 
 def test_task_registration_and_shared_x040_contract():
     assert PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION == 5
-    assert STUDENT_CHECKPOINT_VERSION == 6
+    assert TEACHER_MANIFEST_VERSION == 5
+    assert STUDENT_CHECKPOINT_VERSION == 8
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK) is not None
     teacher = parse_env_cfg(
@@ -66,7 +72,23 @@ def test_task_registration_and_shared_x040_contract():
     assert teacher_environment_contract(teacher) == teacher_environment_contract(student)
     teacher_contract = teacher_environment_contract(teacher)
     assert teacher_contract["gelsight_geometry"] == geometry_contract()
-    assert teacher_contract["profile"] == "rma_gelsight_x040_dr_static_size_buckets_v3"
+    assert teacher_contract["gelsight_geometry"]["finger_and_gelsight_extension_m"] == (
+        pytest.approx(0.026)
+    )
+    assert teacher_contract["gelsight_geometry"]["center_offset_hand_m"] == pytest.approx(
+        [0.0, 0.0, 0.1442]
+    )
+    assert teacher_contract["gelsight_geometry"]["lowest_point_offset_hand_m"] == (
+        pytest.approx([0.0, 0.0, 0.1613])
+    )
+    assert teacher_contract["profile"] == "rma_gelsight_x040_dr_static_size_buckets_v5"
+    assert teacher_contract["robot_asset_filename"] == (
+        "franka_gsmini_standard_arm_visuals_v6.usd"
+    )
+    assert teacher_contract["robot_base_world_position_m"] == [0.0, 0.0, 0.015]
+    assert teacher_contract["camera_world_position_m"] == pytest.approx(
+        [1.166091088407, 0.035901608197, 0.529200335898]
+    )
     assert teacher_contract["cube_size_sampling"] == "fixed_round_robin_by_environment"
     assert teacher_contract["cube_size_assignment"] == "env_id_mod_8"
     assert teacher_contract["cube_size_object_count_per_environment"] == 1
@@ -91,7 +113,8 @@ def test_task_registration_and_shared_x040_contract():
         "shared_ground_visible": True,
         "shared_ground_color_rgb": [0.0, 0.0, 0.0],
         "franka_body_visual_profile": (
-            "gelsight_physics_isaaclab_panda_arm_link0_7_visuals_green_base_led_usd_v5"
+            "gelsight_physics_isaaclab_panda_arm_link0_7_visuals_green_base_led_"
+            "finger_offset_26mm_usd_v6"
         ),
         "base_status_led": {
             "subset_path": "panda_link0/standard_visuals/panda_link0/subset_5",
@@ -105,7 +128,9 @@ def test_task_registration_and_shared_x040_contract():
     assert teacher.ground.spawn.visible is True
     assert student.ground.spawn.visible is True
     assert student.robot.spawn.func.__name__ == "spawn_from_usd"
-    assert "franka_gsmini_standard_arm_visuals_" in student.robot.spawn.usd_path
+    assert student.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
+    assert teacher.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.015))
+    assert student.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.015))
     assert student_environment_contract(student)["gelsight_depth_camera"] == {
         "left_update_latest_camera_pose": False,
         "right_update_latest_camera_pose": False,
@@ -127,8 +152,9 @@ def test_task_registration_and_shared_x040_contract():
     assert tuple(student.observation_space["gsmini_left_reference_rgb"].shape) == (96, 128, 3)
     assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
     assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)
-    assert teacher.illegal_collision_termination_threshold_start_n == pytest.approx(200.0)
-    assert teacher.illegal_collision_termination_threshold_end_n == pytest.approx(20.0)
+    assert teacher.illegal_collision_terminates_episode is False
+    assert teacher_contract["illegal_collision_terminates_episode"] is False
+    assert "illegal_collision_termination_threshold_n" not in teacher_contract
 
 
 def test_collision_curricula_are_linear_clamped_and_strict_boundaries():
@@ -136,24 +162,63 @@ def test_collision_curricula_are_linear_clamped_and_strict_boundaries():
     assert linear_collision_threshold(50_000, start_n=20.0, end_n=5.0) == pytest.approx(12.5)
     assert linear_collision_threshold(100_000, start_n=20.0, end_n=5.0) == pytest.approx(5.0)
     assert linear_collision_threshold(200_000, start_n=20.0, end_n=5.0) == pytest.approx(5.0)
-    assert linear_collision_threshold(0, start_n=200.0, end_n=20.0) == pytest.approx(200.0)
-    assert linear_collision_threshold(50_000, start_n=200.0, end_n=20.0) == pytest.approx(110.0)
-    assert linear_collision_threshold(100_000, start_n=200.0, end_n=20.0) == pytest.approx(20.0)
 
 
 def test_compact_reward_summary_uses_x040_unified_collision_metrics():
     log = {
         "reward/illegal_collision": torch.tensor(-1.25),
         "info/illegal_collision_penalty_threshold_n": torch.tensor(12.5),
-        "info/illegal_collision_termination_threshold_n": torch.tensor(110.0),
         "info/illegal_collision_max_force_n": torch.tensor(7.5),
     }
     fields = _GelSightX040SafetyMixin._rma_collision_reward_print_fields(None, log)
     assert "illegal_collision=-1.250" in fields
     assert "illegal_threshold=12.50 N" in fields
-    assert "illegal_termination_threshold=110.00 N" in fields
     assert "illegal_force_max=7.50 N" in fields
     assert "table=" not in fields
+
+
+def test_force_collision_does_not_terminate_x040_episode():
+    dummy = SimpleNamespace(
+        episode_length_buf=torch.tensor([149, 0]),
+        max_episode_length=150,
+        cfg=SimpleNamespace(success_hold_steps=5, ground_height=0.0),
+        _cube=SimpleNamespace(
+            data=SimpleNamespace(
+                root_pos_w=torch.tensor([[0.4, 0.0, 0.03], [0.4, 0.0, 0.03]]),
+                root_quat_w=torch.tensor(
+                    [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+                ),
+            )
+        ),
+        _robot=SimpleNamespace(
+            data=SimpleNamespace(
+                body_link_pos_w=torch.tensor(
+                    [
+                        [[0.0, 0.0, 0.10], [0.0, 0.0, 0.05]],
+                        [[0.0, 0.0, 0.10], [0.0, 0.0, -0.001]],
+                    ]
+                )
+            )
+        ),
+        _success_hold_counter=torch.zeros(2, dtype=torch.long),
+        _rma_episode_success_ever=torch.zeros(2, dtype=torch.bool),
+    )
+    dummy._compute_cube_upright_cos = lambda quat: torch.ones(quat.shape[0])
+    dummy._compute_cube_lift_terms = lambda height, upright: (
+        torch.zeros_like(height),
+        torch.zeros_like(height),
+        torch.zeros_like(height, dtype=torch.bool),
+    )
+    dummy._compute_illegal_collision_force = lambda: (_ for _ in ()).throw(
+        AssertionError("force-based termination must not be queried")
+    )
+    dummy._record_episode_outcomes_for_step = lambda **kwargs: None
+    dummy._publish_episode_success_statistics = lambda: None
+
+    terminated, truncated = _GelSightX040SafetyMixin._get_dones(dummy)
+
+    assert terminated.tolist() == [False, True]
+    assert truncated.tolist() == [True, False]
 
 
 def test_three_frame_model_outputs_and_has_no_heatmap_head():
@@ -269,6 +334,13 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
         },
         checkpoint,
     )
+    with pytest.raises(RuntimeError, match="version mismatch"):
+        load_student_checkpoint(checkpoint)
+
+
+def test_pre_finger_offset_v6_checkpoint_is_rejected(tmp_path):
+    checkpoint = tmp_path / "pre_finger_offset_student.pt"
+    torch.save({"kind": STUDENT_KIND, "version": 6}, checkpoint)
     with pytest.raises(RuntimeError, match="version mismatch"):
         load_student_checkpoint(checkpoint)
 

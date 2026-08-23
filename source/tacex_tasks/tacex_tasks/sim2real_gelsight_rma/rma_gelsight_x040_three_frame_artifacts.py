@@ -40,11 +40,13 @@ from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
 
 
 MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
-TEACHER_MANIFEST_VERSION = 3
+TEACHER_MANIFEST_VERSION = 5
 LEGACY_STUDENT_CHECKPOINT_VERSION = 3
 # v4 was assigned to the withdrawn LED-DR experiment and must not be reused.
 PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION = 5
-STUDENT_CHECKPOINT_VERSION = 6
+# v6 used the pre-offset v5 robot asset and is intentionally rejected by the
+# shared shifted-geometry environment contract.
+STUDENT_CHECKPOINT_VERSION = 8
 STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
 TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
 
@@ -85,8 +87,11 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     hand = cfg.robot.actuators["panda_hand"]
     return {
-        "profile": "rma_gelsight_x040_dr_static_size_buckets_v3",
+        "profile": "rma_gelsight_x040_dr_static_size_buckets_v5",
         "robot_profile": str(cfg.rma_robot_profile),
+        "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
+        "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
+        "camera_world_position_m": [float(value) for value in cfg.wrist_camera.offset.pos],
         "action_dim": int(cfg.action_space),
         "action_scales": [float(cfg.action_scale)] * 3
         + [float(cfg.gripper_width_delta_scale)],
@@ -147,13 +152,9 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             "start_step": int(cfg.illegal_collision_curriculum_start_step),
             "end_step": int(cfg.illegal_collision_curriculum_end_step),
         },
-        "illegal_collision_termination_threshold_n": {
-            "schedule": "linear_clamped_global_policy_step",
-            "start_n": float(cfg.illegal_collision_termination_threshold_start_n),
-            "end_n": float(cfg.illegal_collision_termination_threshold_end_n),
-            "start_step": int(cfg.illegal_collision_curriculum_start_step),
-            "end_step": int(cfg.illegal_collision_curriculum_end_step),
-        },
+        "illegal_collision_terminates_episode": bool(
+            cfg.illegal_collision_terminates_episode
+        ),
         "ground_collision": "terminated",
         "illegal_collision_threshold_comparison": "strictly_greater_than",
         "success_terminates_episode": bool(cfg.rma_success_terminates_episode),
@@ -393,12 +394,8 @@ def load_student_checkpoint(
     if not isinstance(payload, dict) or payload.get("kind") != STUDENT_KIND:
         raise RuntimeError("Not a GelSight X040 DR three-frame Student checkpoint")
     version = payload.get("version")
-    legacy = version == LEGACY_STUDENT_CHECKPOINT_VERSION
-    if version not in (
-        LEGACY_STUDENT_CHECKPOINT_VERSION,
-        PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
-        STUDENT_CHECKPOINT_VERSION,
-    ):
+    legacy = False
+    if version != STUDENT_CHECKPOINT_VERSION:
         raise RuntimeError("GelSight X040 DR Student version mismatch")
     expected_model_version = (
         GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION
@@ -456,11 +453,7 @@ def make_student_model_for_checkpoint(
 ) -> RMAGelSightX040ThreeFrameStudent:
     """Construct the matching normalization profile for a validated checkpoint."""
     version = payload.get("version")
-    if version not in (
-        LEGACY_STUDENT_CHECKPOINT_VERSION,
-        PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
-        STUDENT_CHECKPOINT_VERSION,
-    ):
+    if version != STUDENT_CHECKPOINT_VERSION:
         raise RuntimeError("GelSight X040 DR Student version mismatch")
     return RMAGelSightX040ThreeFrameStudent(
         pretrained_backbone=pretrained_backbone,
@@ -477,6 +470,8 @@ __all__ = (
     "GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK",
     "LEGACY_STUDENT_CHECKPOINT_VERSION",
     "PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION",
+    "STUDENT_CHECKPOINT_VERSION",
+    "TEACHER_MANIFEST_VERSION",
     "MANIFEST_FILENAME",
     "load_student_checkpoint",
     "load_encoder_initialization_checkpoint",

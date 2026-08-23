@@ -4,11 +4,131 @@
 
 ## 第一部分 变更日志
 
+### 2026-08-23 CST — 取消 X040 强碰撞终止
+
+- 修改：X040 Size-Buckets Teacher/三帧 Student 保留 `20→5 N` 非法碰撞阈值、每步 `-10` 惩罚与 force 日志，但删除 `200→20 N` 强碰撞终止；机器人刚体原点穿过 ground 的终止与 timeout-only truncated 保持不变。
+- 契约：观测/动作 shape、奖励权重和 success 不变，terminated 语义改变；环境 profile/Teacher manifest/Student checkpoint 升至 v5/v5/v8，旧 X040 Teacher 需重训且 Student 需重新蒸馏。
+- 验证：改动 Python `compileall`、残留引用检查与 `git diff --check` 通过；X040 定向 pytest 因当前执行环境无可用 CUDA，在完成用例前 35 s 超时，Isaac reset/step 与重新训练曲线交由用户运行。
+
+### 2026-08-23 CST — 统一全部 GelSight RMA 的基座高度与偏移资产
+
+- 修改：`sim2real_gelsight_rma` 的 11 个注册 task 统一使用 `franka_gsmini_standard_arm_visuals_v6.usd`，Franka 根 Z 从 `20 mm` 改为 `15 mm`；外部相机随基座下降 5 mm，以保持 base_T_camera 不变，并修复相机基座位姿从 `configclass` 类对象读取导致的 task 注册失败。
+- 契约：全局 hand→GelPad 中心/最低点改为 `0.1442/0.1613 m`，IK/reward/safety/Teacher FK 同步；观测/动作维度、奖励权重和 done 不变。Size-Buckets artifact 为 v4/v5、X040 为 v4/v7、Pulled 为 v9，所有旧 GelSight Teacher 需重训且 Student 需重新蒸馏。
+- 验证：改动 Python `compileall`、共享资产离线关节检查及 Isaac task 导入/8-env 配置解析通过；当前执行环境无可用 CUDA，reset/step、相机和碰撞 smoke 交由用户运行。非 GelSight 与 `occluded_grasping` 未修改。
+
+### 2026-08-23 CST — Pulled-Drawer GelSight 指组件下移 26 mm
+
+- 资产：新增 Pulled-Drawer 专用 v8 Franka USD；保持 `panda_link8`、`panda_hand` 与两者固定关节原点不变，只将左右 finger、GelSight case/GelPad 和中心指尖参考沿 hand 局部 `+Z` 延长 26 mm，并同步关节锚点。
+- 契约：IK/reward/safety 的 hand→GelPad 中心与最低点偏移改为 `0.1442/0.1613 m`，Teacher FK 同步；观测/动作维度、奖励和 done 不变。geometry/manifest/Student artifact 升至 v8、Teacher model 升至 v4，旧 Pulled Teacher 需重训且 Student 需重新蒸馏，X040 不受影响。
+- 验证：Pulled USD 离线确认 hand/link8 位姿零变化、7个下游刚体 Z 均为 `-0.026 m`、finger joint 锚点为 `0.0844 m`，16个双刚体关节最大世界锚点误差 `3.12e-8 m`；Python 静态检查见本次交付，Isaac reset/render smoke 交由用户运行。
+
+### 2026-08-23 CST — 固化双 GelSight 标准 Franka 组合资产
+
+- 资产：将现有运行时组合层展开为仓库内持久 USD `franka_gsmini_standard_arm_visuals_v5.usd`，机器人配置直接加载该文件，不再写入 `/tmp/tacex_usd_cache`；原路径函数保留为兼容接口。
+- 契约：GelSight 物理/碰撞、标准 arm visual、绿色底座灯及视觉 profile v5 内容不变；观测、动作、奖励、done 和 checkpoint 契约不变，现有 Teacher/Student 无需因此重训。
+- 验证：持久 USD 可离线打开，默认 `/panda`、11个关键 prim、17个关节、17组 rigid/collision API 与绿色灯材质绑定均存在；改动 Python `compileall`、无运行时缓存引用检查及 `git diff --check` 通过。Isaac reset/render smoke 交由用户运行。
+
+### 2026-08-22 CST — Pulled-Drawer 接触阈值改为 1 N
+
+- 修改：仅在 Pulled-Drawer Teacher/Student 配置中将 `rma_contact_force_threshold_n` 从继承的 `0.2 N` 覆盖为 `1.0 N`；通用 RMA、X040、loss、网络与其余参数不变。
+- 契约：Teacher 接触输入/接触奖励及 Student 接触标签同步改变；现有 Teacher checkpoint 语义不再等价，需重新训练后蒸馏 Student。
+- 验证：改动环境文件快速 `compileall`、静态值检查及 `git diff --check` 通过；Isaac 接触行为交由用户运行。
+
+### 2026-08-22 CST — 统一 Pulled-Drawer 内外缩放比例
+
+- 修改：每个 env 从 `[0.9,1.1]` 只采样一个 isotropic scale，同时应用到外柜和内抽屉 XYZ；保留独立位置扰动、侧向间隙拒绝和 X 向零接缝约束。
+- 契约：观测、动作、奖励与碰撞规则不变；几何采样和实例 hash 改变，Pulled-Drawer geometry/manifest/Student artifact 升至 v7，旧 v6 Teacher 不可迁移且需重训，Student 需重新蒸馏。
+- 验证：改动文件快速 `compileall`、64-env 共享缩放/零接缝离线检查及 `git diff --check` 通过；Isaac/相机画面检查交由用户运行。
+
+### 2026-08-22 CST — 支持保存 Student 初始相机图像
+
+- 新增：GelSight 三帧 Student 训练入口增加可选 `--save_initial_images`，首次 reset 后为每个 env 保存一张策略相机 PNG 和一份 shape/source metadata，默认输出到本次 run 的 `initial_images/`。
+- 契约：默认关闭且只进行一次观测副本写盘；不修改训练输入、模型、loss、动作、环境 reset 或 checkpoint 兼容性。
+- 验证：改动脚本快速 `compileall`、参数/调用顺序静态检查及 `git diff --check` 通过；带相机实际保存交由用户运行。
+
+### 2026-08-22 CST — 收窄 Pulled-Drawer 内抽屉颜色 DR
+
+- 修改：内抽屉标称 RGB 改为真机近似的冷灰蓝 `(0.34,0.40,0.43)`、roughness `0.18`；Student HSV 收窄为 `H 0.52–0.62/S 0.08–0.20/V 0.30–0.55`，opacity 继续固定 `1.0`。
+- 契约：外柜、Cube、物理、观测/动作、奖励和 done 不变；当前无 v6 Student 训练或 checkpoint，故保留 v6，并同步已迁移 10k Teacher manifest 的无相机外观元数据，Teacher 权重无需更改。
+- 验证：改动文件快速 `compileall`、源码—manifest 静态契约检查及 `git diff --check` 通过；Isaac/相机画面对齐交由用户运行。
+
+### 2026-08-22 CST — 迁移最新 Pulled-Drawer Teacher manifest 到 v6
+
+- 产物：将 `20-53-02` run 的 `agent_10000.pt` 配套 manifest 从 v5 显式迁移为固定 opacity 的 v6，并在原目录保留 `.v5.backup.json`；policy 权重未修改。
+- 兼容性：仅因 v5→v6 是 Teacher 不可见的材质变化而允许该次人工迁移；checkpoint 只有 10k steps，可用于启动蒸馏但不等价于完成 200k Teacher 训练。
+- 验证：迁移前后 diff 仅含版本、profile、抽屉外观契约及审计字段；目标/临时文件 SHA-256 一致，原 run config hash 全部仍匹配。未启动 Isaac/Student。
+
+### 2026-08-22 CST — 固定 Pulled-Drawer 抽屉透明度
+
+- 修改：Teacher/Student 抽屉材质统一固定为 `opacity=1.0`；Student reset 继续随机柜体与抽屉颜色，但不再采样或写入 opacity。
+- 契约：观测、动作、奖励、done 与物理碰撞不变；Pulled-Drawer geometry/manifest/Student artifact 升至 v6，旧完整 checkpoint 拒绝 resume，Teacher 需重训且 Student 需重新蒸馏。
+- 验证：改动文件快速 `compileall` 与 `git diff --check` 通过；Isaac/相机画面检查交由用户运行。
+
+### 2026-08-22 CST — 缩短默认验证流程
+
+- 维护：只读问答不再启动测试；代理默认只执行预计 30 秒内的最小静态检查，Isaac/GPU/相机、长 pytest 与全仓测试默认提供命令交由用户运行。
+- 边界：用户明确授权或无法执行必要测试时，代理再代跑最小定向集合；代码、实验契约与 checkpoint 兼容性不变。
+- 验证：纯文档规则调整，仅完成内容复核与 diff 检查，未运行代码测试。
+
+### 2026-08-22 CST — 收紧 Pulled-Drawer Cube reset 范围
+
+- 修改：Teacher/Student 的 Cube episode reset 从相对各自抽屉中心 XY `±0.06 m` 收紧为 `±0.03 m`；八档固定尺寸与底板顶面 Z 生成规则不变。
+- 契约：观测/动作、normalizer、奖励与 done 不变；初始状态分布改变，geometry/artifact 升至 v5，旧 Pulled-Drawer 完整 checkpoint 需重训/重新蒸馏。
+- 验证：全仓 `compileall`、`git diff --check` 与 Pulled-Drawer 6项定向 pytest 通过；8-env GPU 连续64次全量 reset 实测最大绝对 XY 偏移为 `(0.029972,0.029838) m`，Z 生成误差为0。
+
+### 2026-08-22 CST — 隔离 Pulled-Drawer 物理与碰撞参数
+
+- 修改：Pulled-Drawer Teacher/Student 显式声明独立的碰撞课程、板件 contact/rest offset 与机器人 articulation solver；机器人由继承的 `8/0` 提升为本 profile 的 `32/4`，X040 与其他 GelSight task 保持原值。
+- 契约：观测、4维动作、奖励权重与 done 阈值数值不变；geometry/artifact 升至 v4 并记录 solver/offset，旧 Pulled-Drawer 完整 checkpoint 拒绝加载且需重训/重新蒸馏，model/normalizer 仍为 v3。
+- 验证：全仓 `compileall`、`git diff --check`、Pulled-Drawer 6项定向 pytest 与8-env GPU runtime/contact smoke 通过；运行时 solver 为 `32/4`，下压在约29.6 N首次报告接触并于220.1 N触发200 N终止。完整及两项 X040 pytest 均在无输出下超时，未计为通过；Pulled 定向测试已断言 X040 配置仍为 `8/0`。
+
+### 2026-08-22 CST — 建立双 GelSight 开口 Pulled-Drawer Teacher–Student 契约
+
+- 新增：按 `occluded_grasping` 拓扑建立白色四板外柜与透明五板开口抽屉、启动前固定几何 DR、八档均衡 Cube，以及独立 Teacher/三帧 Student 训练链路；Cube 位于抽屉内部底板，抽屉后沿与柜体前沿零缝连接。
+- 契约：九块板均为带摩擦、接触报告和启动校验的 kinematic rigid collider；七路 Student 输入、三路输出、4维动作、奖励及 success/done 不变。位置归一化改为 `[0.5275,0,0.033]/[0.11,0.08,0.10]`，geometry/model/artifact 升至 v3，旧完整 checkpoint 拒绝加载并需重训/重新蒸馏。
+- 验证：全仓 `compileall`、Pulled-Drawer 6项定向 pytest、4096-env采样检查及 GPU Teacher 8-env reset/step 通过；九块板各创建8个 PhysX刚体、接缝误差约`0.00006 mm`，机械臂下探测得最大抽屉接触力`171.6 N`。带相机 Student smoke 未运行。
+
+### 2026-08-22 CST — 修复抽屉 Student 回放模块导入
+
+- 修复：抽屉回放脚本与定向测试改为导入实际的完整环境模块名，避免启动时报 `ModuleNotFoundError`。
+- 契约：仅修复 Python 导入路径；task、观测、动作、奖励、done 和 checkpoint 格式均不变，旧 checkpoint 无需重训。
+- 验证：改动文件 `compileall`、`git diff --check` 与静态引用检查均已通过；Isaac/GPU 回放未运行。
+
+### 2026-08-18 CST — 新增 GelSight X040 抽屉零样本 demo task
+
+- 新增：在 X040 三帧 Student 场景内加入固定抽屉底板、侧壁、后壁和前板，并注册独立 task 与跨场景回放脚本。
+- 契约：Student 七路 runtime 输入、4 维动作、原奖励/成功保持不变；抽屉尺寸为待真机标定的近似，旧 checkpoint 仅作显式零样本评估，不能视为已训练抽屉策略。
+- 验证：新增文件 `compileall` 通过；IsaacLab 定向 pytest 因当前容器缺少 `omni.log` 未完成，需在 Isaac Lab 运行时复验 reset/step 与成功率。
+
+### 2026-08-18 CST — 新增 GelSight X040 抽屉 Teacher 训练 task
+
+- 新增：注册抽屉 privileged Teacher、独立 PPO YAML，并让 X040 manifest 记录抽屉 task 与几何契约。
+- 契约：Teacher 仍为 30 维 privileged actor、4 维动作和原成功语义；抽屉 Teacher checkpoint 与平面 Teacher checkpoint 互不兼容，Student 蒸馏需使用配套抽屉 task。
+- 验证：改动文件 `compileall` 与 `git diff --check` 通过；Isaac reset/step smoke 因当前容器无 CUDA 未完成。
+
+### 2026-08-19 CST — 新增抽屉 Teacher→Student 串行训练脚本
+
+- 新增：自动以 Teacher `1024` env 完成训练，定位成功生成的 checkpoint 后再以 Student `128` env 启动蒸馏；Teacher 失败时 Student 不启动。
+- 契约：训练 task、Teacher manifest、Student encoder 初始化 checkpoint 均显式传递，默认不覆盖已有日志；可选 `--start-at HH:MM` 延迟启动。
+- 验证：脚本 `bash -n`、帮助输出、非法 env 数量拒绝、全仓 `compileall` 和 `git diff --check` 已运行；实际 GPU 训练未运行。
+
 ### 日志记录规则
 
 每条 3–5 行，写清「改了什么 / 契约与兼容性影响 / 验证情况」。不得把未运行的训练或评估写成结果；
 不确定的作者、commit、seed、checkpoint 或数值写「待确认」。涉及观测、动作、奖励、done 或 checkpoint
 兼容性的改动必须显式说明。更早的记录见 `archive/DEVLOG-2026H1.md`。
+
+### 2026-08-15 CST — 新增 GelSight 接触/未接触 RGB rollout 诊断
+
+- 新增：X040 三帧 Student 可直接加载 checkpoint 跑 rollout，按物理左右接触标签及 Taxim `shifted_height_map < 0` 像素覆盖率分组，输出逐侧 NPZ、汇总 JSON 和 reference/current/delta 代表帧。
+- 契约：仅新增只读诊断入口；观测、动作、奖励、done、训练与 checkpoint 格式均不变，旧 checkpoint 可直接测试且无需重训。
+- 验证：改动文件 `compileall`、diff check 与离线汇总定向 pytest（2项）通过；当前 Codex 容器未挂载 NVIDIA 设备，完整带相机 rollout 待在 GPU 终端运行。
+
+### 2026-08-15 CST — 导出 GelSight X040 Student 30000步 TorchScript
+
+- 产物：将 `2026-08-15_14-38-57_distillation/checkpoints/student_0030000.pt`（v6/model-v3，`global_step=30000`）导出为 TorchScript 与契约 JSON；因沙箱将日志实际根 `/data2/skrl` 挂载为只读，暂存于 `exports/0815_gelsight_30000/`，待移入原 checkpoint 目录。
+- 契约：七路输入及 `action[4]/contact[2]/cube_position_root_m[3]` 输出不变；仅生成部署产物，不修改训练、环境、奖励或 done，也不需要重训。
+- 验证：CPU batch 1/8 eager—TorchScript 三输出最大绝对误差均为0，落盘重载 batch-8 shape/finite 检查通过；当前沙箱未暴露 CUDA，JSON 中 `cuda_validation=false`。
 
 ### 2026-08-15 CST — 导出最新 GelSight X040 Student 10000步 TorchScript
 

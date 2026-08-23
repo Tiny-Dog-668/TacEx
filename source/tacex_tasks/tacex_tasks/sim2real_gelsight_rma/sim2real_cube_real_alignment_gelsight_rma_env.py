@@ -18,7 +18,8 @@ from isaaclab.utils import math as math_utils
 from tacex import GelSightSensor
 from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
     FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG,
-    create_gelsight_standard_franka_arm_visual_usd,
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE,
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD,
 )
 from tacex_assets.sensors.gelsight_mini.gsmini_cfg import GelSightMiniCfg
 
@@ -47,7 +48,16 @@ from .gelsight_geometry import (
 )
 
 
-_GELSIGHT_PROFILE = "franka_gsmini_gripper_rigid_left_right"
+GELSIGHT_ROBOT_BASE_WORLD_POSITION_M = (0.0, 0.0, 0.015)
+GELSIGHT_CAMERA_BASE_POSITION_M = tuple(
+    Sim2RealCubeRealAlignmentEnvCfg().camera_base_position_m
+)
+GELSIGHT_CAMERA_WORLD_POSITION_M = tuple(
+    GELSIGHT_ROBOT_BASE_WORLD_POSITION_M[index]
+    + GELSIGHT_CAMERA_BASE_POSITION_M[index]
+    for index in range(3)
+)
+_GELSIGHT_PROFILE = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE
 _GELSIGHT_SENSOR_NAMES = ("gsmini_left", "gsmini_right")
 _GELSIGHT_TACTILE_RGB_SHAPE = (96, 128, 3)
 _GELSIGHT_SENSOR_PRIMS = (
@@ -59,22 +69,29 @@ _GELSIGHT_CONTACT_FILTER_PRIMS = (
     "/World/envs/env_.*/Robot/gelpad_right",
 )
 
-def _make_gelsight_robot_cfg(
-    *, align_standard_franka_visuals: bool = False
-) -> ArticulationCfg:
-    """Return the Real-Alignment initial state on the two-GelSight Franka asset."""
+def _make_gelsight_robot_cfg() -> ArticulationCfg:
+    """Return the shared shifted-geometry GelSight Franka at the 15 mm base height."""
     reference_robot = Sim2RealCubeRealAlignmentEnvCfg().robot
+    init_state = reference_robot.init_state.copy()
+    init_state.pos = GELSIGHT_ROBOT_BASE_WORLD_POSITION_M
     robot_cfg = FRANKA_PANDA_ARM_GSMINI_GRIPPER_HIGH_PD_RIGID_CFG.replace(
         prim_path="/World/envs/env_.*/Robot",
-        init_state=reference_robot.init_state,
+        init_state=init_state,
     )
-    if align_standard_franka_visuals:
-        robot_cfg.spawn.usd_path = create_gelsight_standard_franka_arm_visual_usd()
+    robot_cfg.spawn = robot_cfg.spawn.copy()
+    robot_cfg.spawn.usd_path = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
     hand_actuator = robot_cfg.actuators["panda_hand"]
     hand_actuator.effort_limit_sim = 40.0
     hand_actuator.stiffness = 400.0
     hand_actuator.damping = 40.0
     return robot_cfg
+
+
+def _make_gelsight_wrist_camera_cfg():
+    """Keep the calibrated base-to-camera pose while lowering the robot by 5 mm."""
+    camera = Sim2RealCubeRealAlignmentEnvCfg().wrist_camera.copy()
+    camera.offset = camera.offset.replace(pos=GELSIGHT_CAMERA_WORLD_POSITION_M)
+    return camera
 
 
 def _make_gelsight_sensor_cfg(prim_path: str) -> GelSightMiniCfg:
@@ -167,12 +184,16 @@ class _RMAGelSightGeometryMixin:
         bottom, _ = self._hand_offset_world(self._gelsight_bottom_offset_hand)
         return bottom
 
+    def _grasp_support_height_m(self) -> float | torch.Tensor:
+        """Return the per-environment grasp support height in world metres."""
+        return float(self.cfg.plate_top_height_m)
+
     def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Add a geometry-only penalty before the lowest gripper point reaches the table."""
         reward, log = super()._compute_additional_reward()
         clearance = (
             self._compute_gelsight_fingertip_bottom_world()[:, 2]
-            - float(self.cfg.plate_top_height_m)
+            - self._grasp_support_height_m()
         )
         below_clearance, penalty = table_clearance_penalty(
             clearance,
@@ -328,6 +349,10 @@ class _RMAGelSightCfgMixin:
     """Shared static GelSight profile fields for RMA contracts."""
 
     robot = _make_gelsight_robot_cfg()
+    robot_base_world_position_m = GELSIGHT_ROBOT_BASE_WORLD_POSITION_M
+    camera_base_position_m = GELSIGHT_CAMERA_BASE_POSITION_M
+    camera_world_position_m = GELSIGHT_CAMERA_WORLD_POSITION_M
+    wrist_camera = _make_gelsight_wrist_camera_cfg()
     rma_robot_profile = _GELSIGHT_PROFILE
     rma_gelsight_enabled = True
     arm_ik_tcp_source = "panda_hand_fixed_offset_gelpad_midpoint"

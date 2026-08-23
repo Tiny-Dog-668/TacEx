@@ -26,8 +26,8 @@ from .rma_gelsight_size_buckets_models import gelsight_student_model_contract
 
 
 MANIFEST_FILENAME = "rma_gelsight_size_buckets_manifest.json"
-TEACHER_MANIFEST_VERSION = 3
-STUDENT_CHECKPOINT_VERSION = 4
+TEACHER_MANIFEST_VERSION = 4
+STUDENT_CHECKPOINT_VERSION = 5
 STUDENT_MODEL_VERSION = 2
 
 
@@ -121,8 +121,11 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 def environment_contract(cfg: Any) -> dict[str, Any]:
     return {
-        "profile": "rma_gelsight_fixed_size_buckets_v2",
+        "profile": "rma_gelsight_fixed_size_buckets_v3",
         "robot_profile": str(cfg.rma_robot_profile),
+        "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
+        "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
+        "camera_world_position_m": [float(value) for value in cfg.wrist_camera.offset.pos],
         "action_dim": int(cfg.action_space),
         "action_scales": [float(cfg.action_scale)] * 3
         + [float(cfg.gripper_width_delta_scale)],

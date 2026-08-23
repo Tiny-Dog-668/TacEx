@@ -2,22 +2,36 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 
+from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
+    GELSIGHT_FINGER_EXTENSION_M,
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE,
+    GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD,
+)
 
-# Offsets are expressed in the panda_hand local frame.  The hand +Z axis is
-# collinear with the centered fingertip reference despite the hand yaw.
-GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M = 0.1182
-GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M = 0.1353
+
+# Offsets are expressed in the panda_hand local frame. The shared RMA GelSight
+# v6 asset extends both fingers and the complete GelSight assembly by 26 mm
+# along hand +Z while panda_hand remains coincident with panda_link8.
+GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M = 0.1442
+GELSIGHT_HAND_TO_FINGERTIP_BOTTOM_M = 0.1613
 GELSIGHT_TABLE_CLEARANCE_MIN_M = 0.0100
 GELSIGHT_TABLE_CLEARANCE_PENALTY = -10.0
-GELSIGHT_GEOMETRY_CONTRACT_VERSION = 1
+GELSIGHT_GEOMETRY_CONTRACT_VERSION = 2
 
 
 def geometry_contract() -> dict[str, object]:
     """Return JSON-safe geometry and near-table reward semantics."""
     return {
         "version": GELSIGHT_GEOMETRY_CONTRACT_VERSION,
+        "asset_geometry": "panda_fingers_and_gelsight_plus_z_26mm",
+        "asset_profile": GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE,
+        "asset_filename": Path(GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD).name,
+        "finger_and_gelsight_extension_m": GELSIGHT_FINGER_EXTENSION_M,
+        "panda_link8_to_hand_fixed_joint_local_pos0_m": [0.0, 0.0, 0.0],
         "center_source": "panda_hand_plus_z_gelpad_left_right_midpoint",
         "center_offset_hand_m": [0.0, 0.0, GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M],
         "lowest_point_source": "panda_hand_plus_z_panda_fingertip_centered",

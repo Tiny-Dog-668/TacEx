@@ -51,7 +51,7 @@ parser.add_argument(
 parser.add_argument("--weight_decay", type=float, default=1.0e-5)
 parser.add_argument("--position_loss_weight", type=float, default=1.0)
 parser.add_argument("--contact_loss_weight", type=float, default=1.0)
-parser.add_argument("--contact_positive_weight", type=float, default=5.0)
+parser.add_argument("--contact_positive_weight", type=float, default=1.0)
 parser.add_argument("--action_loss_weight", type=float, default=1.0)
 parser.add_argument("--action_smoothness_loss_weight", type=float, default=0.05)
 parser.add_argument("--smooth_l1_beta", type=float, default=0.1)
@@ -59,6 +59,11 @@ parser.add_argument("--grad_norm_clip", type=float, default=1.0)
 parser.add_argument("--log_interval", type=int, default=100)
 parser.add_argument("--checkpoint_interval", type=int, default=10_000)
 parser.add_argument("--log_dir", default=None)
+parser.add_argument(
+    "--save_initial_images",
+    action="store_true",
+    help="Save one post-reset policy-camera RGB PNG per environment under the run directory.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 args.enable_cameras = True
@@ -68,22 +73,21 @@ import gymnasium as gym
 import torch
 import torch.nn.functional as F
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
+from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 
 import tacex_tasks  # noqa: F401
+from tacex_tasks.sim2real_gelsight_rma import rma_gelsight_pulled_drawer_artifacts as drawer_artifacts
+from tacex_tasks.sim2real_gelsight_rma import rma_gelsight_x040_three_frame_artifacts as x040_artifacts
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
+    GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+)
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
-    STUDENT_CHECKPOINT_VERSION,
-    load_encoder_initialization_checkpoint,
-    load_student_checkpoint,
-    load_student_model_state,
-    load_teacher_manifest,
-    load_teacher_policy_state,
-    make_student_payload,
-    sha256_file,
-    state_dict_sha256,
-    student_environment_contract,
-    validate_live_teacher_contract,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import (
+    RMAGelSightPulledDrawerActorCore,
+    RMAGelSightPulledDrawerThreeFrameStudent,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     RMAGelSightX040ThreeFrameStudent,
@@ -108,6 +112,29 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _save_initial_policy_images(observations: dict, output_dir: Path) -> None:
+    """Save the first valid post-reset RGB frame for every environment."""
+    history = observations["policy"]["wrist_rgb_history"]
+    if history.ndim != 5 or history.shape[1] != 3 or history.shape[-1] != 3:
+        raise RuntimeError(
+            "Expected wrist_rgb_history [N,3,H,W,3], got "
+            f"{tuple(history.shape)}"
+        )
+    images = history[:, -1].detach().to(device="cpu", dtype=torch.uint8).numpy()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for env_id, image in enumerate(images):
+        Image.fromarray(image, mode="RGB").save(output_dir / f"env_{env_id:04d}.png")
+    _atomic_json_dump(
+        {
+            "source": "policy.wrist_rgb_history[:, -1]",
+            "reset_fill": "repeat_first_post_reset_frame",
+            "num_envs": int(images.shape[0]),
+            "image_shape_hwc": list(images.shape[1:]),
+        },
+        output_dir / "metadata.json",
+    )
 
 
 def _loss_contract() -> dict[str, object]:
@@ -138,8 +165,20 @@ def _optimizer_contract() -> dict[str, object]:
 
 
 def main() -> None:
-    if args.task != GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK:
-        raise ValueError(f"This trainer only supports {GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK}")
+    if args.task not in {
+        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+    }:
+        raise ValueError("This trainer only supports the paired X040 or Pulled-Drawer Student task")
+
+    drawer_profile = args.task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK
+    artifacts = drawer_artifacts if drawer_profile else x040_artifacts
+    student_cls = (
+        RMAGelSightPulledDrawerThreeFrameStudent
+        if drawer_profile
+        else RMAGelSightX040ThreeFrameStudent
+    )
+    teacher_cls = RMAGelSightPulledDrawerActorCore if drawer_profile else RMAGelSightActorCore
     if args.num_envs <= 0:
         raise ValueError("num_envs must be positive")
     if min(args.timesteps, args.log_interval, args.checkpoint_interval) <= 0:
@@ -162,22 +201,22 @@ def main() -> None:
 
     teacher_checkpoint = Path(args.teacher_checkpoint).expanduser().resolve()
     encoder_checkpoint = Path(args.encoder_init_checkpoint).expanduser().resolve()
-    teacher_manifest = load_teacher_manifest(teacher_checkpoint)
-    encoder_state, encoder_payload = load_encoder_initialization_checkpoint(
+    teacher_manifest = artifacts.load_teacher_manifest(teacher_checkpoint)
+    encoder_state, encoder_payload = artifacts.load_encoder_initialization_checkpoint(
         encoder_checkpoint
     )
     resume_payload = None
     if args.resume:
-        resume_payload = load_student_checkpoint(
+        resume_payload = artifacts.load_student_checkpoint(
             args.resume,
             device="cpu",
             expected_teacher_checkpoint=teacher_checkpoint,
         )
-        if resume_payload.get("version") != STUDENT_CHECKPOINT_VERSION:
+        if resume_payload.get("version") != artifacts.STUDENT_CHECKPOINT_VERSION:
             raise RuntimeError(
                 "Older GelSight Student checkpoints cannot resume the current visual contract"
             )
-        if resume_payload.get("encoder_init_checkpoint_sha256") != sha256_file(
+        if resume_payload.get("encoder_init_checkpoint_sha256") != artifacts.sha256_file(
             encoder_checkpoint
         ):
             raise RuntimeError("Resume checkpoint used a different encoder initialization")
@@ -190,20 +229,31 @@ def main() -> None:
     env_cfg.seed = args.seed
     if resume_payload is not None:
         env_cfg.illegal_collision_curriculum_step_offset = int(resume_payload["global_step"])
-    validate_live_teacher_contract(env_cfg, teacher_manifest)
+    artifacts.validate_live_teacher_contract(env_cfg, teacher_manifest)
     env = gym.make(args.task, cfg=env_cfg)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
+    if resume_payload is not None and drawer_profile:
+        if resume_payload.get("student_environment_contract") != artifacts.student_environment_contract(
+            env_cfg
+        ):
+            raise RuntimeError("Resume Pulled-Drawer environment contract mismatch")
+        if resume_payload.get("geometry_instance_sha256") != artifacts.geometry_instance_sha256(
+            base_env
+        ):
+            raise RuntimeError("Resume Pulled-Drawer geometry instance mismatch")
 
-    teacher = RMAGelSightActorCore().to(device).eval()
+    teacher = teacher_cls().to(device).eval()
     teacher.load_state_dict(
-        extract_actor_core_state_dict(load_teacher_policy_state(teacher_checkpoint, device)),
+        extract_actor_core_state_dict(
+            artifacts.load_teacher_policy_state(teacher_checkpoint, device)
+        ),
         strict=True,
     )
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
 
-    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False).to(device)
+    model = student_cls(pretrained_backbone=False).to(device)
     model.load_vision_encoder_state(encoder_state)
     head_parameters = (
         list(model.temporal_fusion.parameters())
@@ -220,21 +270,23 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
+    default_log_root = (
+        "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_student"
+        if drawer_profile
+        else "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_"
+        "student_x040_normalized_heatmap_init"
+    )
     run_dir = (
         Path(args.log_dir).expanduser().resolve()
         if args.log_dir
-        else Path(
-            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_"
-            "student_x040_normalized_heatmap_init"
-        )
-        / f"{datetime.now():%Y-%m-%d_%H-%M-%S}_distillation"
+        else Path(default_log_root) / f"{datetime.now():%Y-%m-%d_%H-%M-%S}_distillation"
     )
     _atomic_json_dump(
         {
             **vars(args),
-            "teacher_checkpoint_sha256": sha256_file(teacher_checkpoint),
-            "teacher_actor_state_dict_sha256": state_dict_sha256(teacher.state_dict()),
-            "encoder_init_checkpoint_sha256": sha256_file(encoder_checkpoint),
+            "teacher_checkpoint_sha256": artifacts.sha256_file(teacher_checkpoint),
+            "teacher_actor_state_dict_sha256": artifacts.state_dict_sha256(teacher.state_dict()),
+            "encoder_init_checkpoint_sha256": artifacts.sha256_file(encoder_checkpoint),
             "encoder_init_task": encoder_payload.get("task"),
             "encoder_init_state_dict_sha256": encoder_payload.get(
                 "vision_encoder_state_dict_sha256"
@@ -261,12 +313,19 @@ def main() -> None:
     writer = SummaryWriter(str(run_dir))
     start_step = 0
     if resume_payload is not None:
-        load_student_model_state(model, resume_payload["model"])
+        artifacts.load_student_model_state(model, resume_payload["model"])
         optimizer.load_state_dict(resume_payload["optimizer"])
         start_step = int(resume_payload["global_step"])
     model.train()
 
     observations, _ = env.reset()
+    if args.save_initial_images:
+        initial_image_dir = run_dir / "initial_images"
+        _save_initial_policy_images(observations, initial_image_dir)
+        print(
+            f"[INFO] Saved {args.num_envs} initial policy-camera images to "
+            f"{initial_image_dir}"
+        )
     action_scale = torch.tensor(
         [env_cfg.action_scale] * 3 + [env_cfg.gripper_width_delta_scale],
         device=device,
@@ -351,19 +410,24 @@ def main() -> None:
                 )
 
             if step % args.checkpoint_interval == 0 or step == args.timesteps:
-                payload = make_student_payload(
-                    model=model,
-                    optimizer=optimizer,
-                    global_step=step,
-                    teacher_checkpoint=teacher_checkpoint,
-                    teacher_manifest=teacher_manifest,
-                    teacher_actor_state_dict=teacher.state_dict(),
-                    encoder_init_checkpoint=encoder_checkpoint,
-                    encoder_init_payload=encoder_payload,
-                    student_env_contract=student_environment_contract(env_cfg),
-                    loss=_loss_contract(),
-                    optimizer_config=_optimizer_contract(),
-                )
+                payload_kwargs = {
+                    "model": model,
+                    "optimizer": optimizer,
+                    "global_step": step,
+                    "teacher_checkpoint": teacher_checkpoint,
+                    "teacher_manifest": teacher_manifest,
+                    "teacher_actor_state_dict": teacher.state_dict(),
+                    "encoder_init_checkpoint": encoder_checkpoint,
+                    "encoder_init_payload": encoder_payload,
+                    "student_env_contract": artifacts.student_environment_contract(env_cfg),
+                    "loss": _loss_contract(),
+                    "optimizer_config": _optimizer_contract(),
+                }
+                if drawer_profile:
+                    payload_kwargs["geometry_instance_hash"] = artifacts.geometry_instance_sha256(
+                        base_env
+                    )
+                payload = artifacts.make_student_payload(**payload_kwargs)
                 checkpoint = run_dir / "checkpoints" / f"student_{step:07d}.pt"
                 _atomic_torch_save(payload, checkpoint)
                 _atomic_torch_save(payload, checkpoint.parent / "latest.pt")
