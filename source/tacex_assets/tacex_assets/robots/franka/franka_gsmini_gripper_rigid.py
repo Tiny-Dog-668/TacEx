@@ -26,7 +26,7 @@ from tacex_assets import TACEX_ASSETS_DATA_DIR
 
 GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE = (
     "gelsight_physics_isaaclab_panda_arm_link0_7_visuals_green_base_led_"
-    "finger_offset_26mm_usd_v6"
+    "finger_offset_21mm_usd_v7"
 )
 GELSIGHT_STANDARD_FRANKA_BASE_LED_SUBSET_PATH = (
     "panda_link0/standard_visuals/panda_link0/subset_5"
@@ -38,11 +38,11 @@ GELSIGHT_LEGACY_STANDARD_FRANKA_ARM_VISUAL_USD = str(
 )
 GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD = str(
     Path(TACEX_ASSETS_DATA_DIR)
-    / "Robots/Franka/GelSight_Mini/Gripper/franka_gsmini_standard_arm_visuals_v6.usd"
+    / "Robots/Franka/GelSight_Mini/Gripper/franka_gsmini_standard_arm_visuals_v7.usd"
 )
-GELSIGHT_FINGER_EXTENSION_M = 0.026
+GELSIGHT_FINGER_EXTENSION_M = 0.021
 # Backward-compatible names for the Pulled-Drawer profile. All RMA GelSight
-# tasks now use the same shifted v6 asset and physical finger geometry.
+# tasks use the same shifted v7 asset and physical finger geometry.
 GELSIGHT_PULLED_DRAWER_FINGER_EXTENSION_M = GELSIGHT_FINGER_EXTENSION_M
 GELSIGHT_PULLED_DRAWER_FRANKA_ASSET_PROFILE = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_PROFILE
 GELSIGHT_PULLED_DRAWER_FRANKA_USD = GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD

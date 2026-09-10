@@ -95,11 +95,12 @@ def test_pulled_drawer_task_registration_and_runtime_contract() -> None:
     assert teacher.robot.spawn.usd_path == x040_teacher.robot.spawn.usd_path
     assert teacher.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.015))
     assert x040_teacher.robot.init_state.pos == pytest.approx((0.0, 0.0, 0.015))
-    assert teacher.pulled_drawer_finger_extension_local_z_m == pytest.approx(0.026)
-    assert teacher.arm_ik_tcp_offset_m == pytest.approx((0.0, 0.0, 0.1442))
-    assert teacher.gelsight_center_offset_hand_m == pytest.approx((0.0, 0.0, 0.1442))
+    assert teacher.pulled_drawer_finger_extension_local_z_m == pytest.approx(0.021)
+    assert teacher.rma_contact_force_threshold_n == pytest.approx(2.0)
+    assert teacher.arm_ik_tcp_offset_m == pytest.approx((0.0, 0.0, 0.1392))
+    assert teacher.gelsight_center_offset_hand_m == pytest.approx((0.0, 0.0, 0.1392))
     assert teacher.gelsight_fingertip_bottom_offset_hand_m == pytest.approx(
-        (0.0, 0.0, 0.1613)
+        (0.0, 0.0, 0.1563)
     )
     assert teacher.robot.spawn.articulation_props.solver_position_iteration_count == 32
     assert teacher.robot.spawn.articulation_props.solver_velocity_iteration_count == 4
@@ -232,13 +233,13 @@ def test_pulled_drawer_normalization_and_fail_closed_contracts() -> None:
         "pulled_drawer_contiguous_rigid_tray_robot_root_xyz_v3"
     )
     kinematics = RMAGelSightPulledDrawerHandKinematics()
-    assert kinematics.link7_to_fingertip_midpoint[2].item() == pytest.approx(0.2512)
-    assert PULLED_DRAWER_LINK7_TO_GELPAD_MIDPOINT_M == pytest.approx(0.2512)
+    assert kinematics.link7_to_fingertip_midpoint[2].item() == pytest.approx(0.2462)
+    assert PULLED_DRAWER_LINK7_TO_GELPAD_MIDPOINT_M == pytest.approx(0.2462)
     assert kinematics.contract()["panda_hand_to_finger_gelsight_extension_m"] == (
-        pytest.approx(0.026)
+        pytest.approx(0.021)
     )
     assert kinematics.contract()["panda_hand_to_fingertip_midpoint_m"] == pytest.approx(
-        0.1442
+        0.1392
     )
     with pytest.raises(RuntimeError, match="Unsupported Pulled-Drawer"):
         make_student_model_for_checkpoint({"kind": X040_STUDENT_KIND, "version": 6})
@@ -269,7 +270,7 @@ def test_pulled_drawer_environment_contract_records_geometry_and_collisions() ->
     teacher_contract = teacher_environment_contract(teacher)
     student_contract = student_environment_contract(student)
     assert teacher_contract["profile"] == (
-        "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v9"
+        "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11"
     )
     assert teacher_contract["geometry"] == pulled_drawer_geometry_contract()
     assert teacher_contract["robot_base_world_position_m"] == [0.0, 0.0, 0.015]
@@ -314,6 +315,9 @@ def test_pulled_drawer_environment_contract_records_geometry_and_collisions() ->
         0.18
     )
     assert teacher_contract["geometry"]["appearance"]["opacity_randomization_enabled"] is False
+    assert teacher_contract["compliant_grasp"]["contact_force_threshold_n"] == 2.0
+    assert teacher_contract["compliant_grasp"]["excess_contact_force_penalty_per_policy_step"] == -5.0
+    assert teacher_contract["compliant_grasp"]["drop_penalty"] == -10.0
     assert student_contract["wrist_rgb_history"]["shape"] == [3, 224, 224, 3]
 
 
@@ -360,7 +364,7 @@ def test_pulled_drawer_asset_extends_fingers_without_moving_panda_hand() -> None
         "/panda/panda_hand/panda_fingertip_centered"
     )
     assert centered_joint.GetAttribute("physics:localPos0").Get()[2] == pytest.approx(
-        -0.16133872
+        -0.15633872
     )
 
     geometry = pulled_drawer_geometry_contract()["robot_end_effector"]

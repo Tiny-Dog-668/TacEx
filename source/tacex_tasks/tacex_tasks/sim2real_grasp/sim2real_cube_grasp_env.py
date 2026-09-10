@@ -300,17 +300,31 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         tilt_threshold_deg = self._current_lift_tilt_threshold_deg()
         upright_cos_threshold = math.cos(math.radians(tilt_threshold_deg))
         upright = upright_cos >= upright_cos_threshold
-        lift_reward = (
-            lift_progress * upright.float()
-            if bool(self.cfg.lift_reward_requires_upright)
-            else lift_progress
-        )
+        lift_reward = self._shape_lift_reward(lift_progress, upright)
         # Treat the configured millimeter boundary as inclusive despite normal
         # float32 subtraction error in current_height - reference_height.
         success = lift_delta >= success_lift_delta - 1e-6
         if bool(getattr(self.cfg, "success_requires_upright", True)):
             success &= upright
         return lift_delta, lift_reward, success
+
+    def _shape_lift_reward(
+        self, lift_progress: torch.Tensor, upright: torch.Tensor
+    ) -> torch.Tensor:
+        """Map normalized absolute lift progress ``[N]`` to a reward signal."""
+        return (
+            lift_progress * upright.float()
+            if bool(self.cfg.lift_reward_requires_upright)
+            else lift_progress
+        )
+
+    def _shape_success_reward(self, success: torch.Tensor) -> torch.Tensor:
+        """Map the instantaneous success predicate ``[N]`` to reward values."""
+        return success.float()
+
+    def _shape_reach_reward(self, reach_proximity: torch.Tensor) -> torch.Tensor:
+        """Map normalized reach proximity ``[N]`` to a reward signal."""
+        return reach_proximity
 
     def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return task-specific additive reward terms and scalar log values."""
@@ -356,7 +370,8 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         sigma = max(self.cfg.reach_sigma, 1e-6)
         reach_distance = torch.norm(cube_pos - ee_pos, dim=-1)
-        reach_reward = 1.0 - torch.tanh(reach_distance / sigma)
+        reach_proximity = 1.0 - torch.tanh(reach_distance / sigma)
+        reach_reward = self._shape_reach_reward(reach_proximity)
 
         upright_cos = self._compute_cube_upright_cos(self._cube.data.root_quat_w)
         upright_tilt_deg = torch.rad2deg(torch.acos(upright_cos))
@@ -364,7 +379,7 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
         current_height = cube_pos[:, 2]
         current_lowest_height = self._compute_cube_lowest_height(cube_pos, self._cube.data.root_quat_w)
         lift_delta, lift_reward, success = self._compute_cube_lift_terms(current_height, upright_cos)
-        success_reward = success.float()
+        success_reward = self._shape_success_reward(success)
         tilt_threshold_deg = self._current_lift_tilt_threshold_deg()
 
         rewards = (
@@ -378,6 +393,7 @@ class Sim2RealCubeGraspEnv(Sim2RealGraspEnv):
 
         log = self.extras.setdefault("log", {})
         log["reward/reach"] = reach_reward.mean().detach()
+        log["info/reach_proximity"] = reach_proximity.mean().detach()
         log["reward/lift"] = lift_reward.mean().detach()
         log["reward/success"] = success_reward.mean().detach()
         log["reward/total"] = rewards.mean().detach()

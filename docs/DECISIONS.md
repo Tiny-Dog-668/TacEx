@@ -356,6 +356,13 @@
 - 原因：GelSight robot 的该 visual branch 在场景构建期解除 instance 后会使 Kit 在创建训练日志前直接退出，不能作为可复现实验路径。
 - 影响：Teacher、物理、动作、奖励、done 和 Student 输入 key/shape 不变；Student 恢复 v3 契约。需在专用可编辑 Student USD/material authoring 层实现后，才能重新引入该视觉 DR。
 
+### DEC-051 — GelSight Size-Buckets 用独立 task 验证进展奖励和终止成功
+
+- 状态：已实现，待训练验证
+- 背景：旧 RMA task 按绝对 reach/lift/contact 状态每步给奖励，成功后继续到 timeout，允许保持状态重复累计回报；仅惩罚动作变化也无法限制恒定饱和命令。
+- 决策：保留旧 task 作为基线，新增 Progress Teacher/Student 配对；三项 dense shaping 改为有符号进展，稳定成功只奖励一次并 terminated，另加归一化动作幅值与连续二次过力惩罚。
+- 影响：观测 key/shape、4维动作、几何和模型结构不变；reward/done、episode 分布及 artifact task provenance 改变，必须重新训练 Teacher 并重新蒸馏 Student。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

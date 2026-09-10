@@ -4,6 +4,24 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-10 CST — 新增 GelSight Size-Buckets 进展奖励与终止成功环境
+
+- 新增独立 Progress Teacher/Student task：reach、lift 与 contact 改为有符号进展奖励，保持状态不再重复得分；成功高度稳定 5 步后仅奖励一次并立即 terminated/reset。
+- 奖励新增归一化动作幅值 `-0.05 mean(a²)`，并以 15 N 为阈值使用连续二次过力惩罚；观测 key/shape、4维动作和 v7 USD 不变，旧 Size-Buckets task 完全保留。
+- 契约：新旧 Teacher/Student task 强制配对，旧 checkpoint 张量可加载但 MDP 语义不兼容；新 Teacher 需从头训练，Student 随后重新蒸馏。验证：快速静态检查见本次交付，Isaac/GPU 训练与 reset/step 待用户运行。
+
+### 2026-08-23 CST — 全部 GelSight task 增加柔顺抓取与掉落惩罚
+
+- 奖励：左右 GelPad 严格 `>2 N` 生成接触标签并保留单侧/双侧 `+1.5/+3`；任一侧严格 `>15 N` 每步 `-5`。Cube 曾抬升 `>=20 mm` 后回落到 `<5 mm` 时，每 episode 首次事件 `-10`，不终止。
+- 契约：全部 11 个 GelSight Teacher/Student 共用，观测/动作 shape 与 success/done 不变；Size-Buckets、X040、Pulled artifact/profile 升版，旧 Teacher 需重训，Student 需重新蒸馏。非 GelSight RMA 不变。
+- 验证：新增边界 pytest 通过；全部 11 个 GelSight task 配置解析为同一组 `2/15 N、-5/-10` 参数，2-env Teacher reset/step smoke 通过。未运行长时训练或人为制造真实掉落的轨迹测试。
+
+### 2026-08-23 CST — 全局 GelSight 夹爪组件向上回移 5 mm
+
+- 资产：从零偏移 v5 基准重新生成持久 v7 USD；`panda_hand/link8` 不动，左右 finger、case、GelPad 和中心参考的净延长由 26 mm 改为 21 mm，并同步三个 hand-level joint 锚点，全部 11 个 GelSight task 共用。
+- 契约：hand→GelPad 中心/最低点改为 `0.1392/0.1563 m`，IK/reward/safety/Teacher FK 同步；观测/动作 shape、奖励权重和 done 不变。Size-Buckets、X040、Pulled artifact/profile 均升版，旧 Teacher 需重训、Student 需重新蒸馏。
+- 验证：生成器已核对 hand/link8 零位移、7 个下游刚体统一 21 mm 位移及 3 个 hand-level joint 锚点；改动文件 `compileall`、`diff --check` 和全部 11 个 GelSight task 配置解析通过。未运行 reset/step 或相机渲染 smoke，交由用户做画面确认。
+
 ### 2026-08-23 CST — 取消 X040 强碰撞终止
 
 - 修改：X040 Size-Buckets Teacher/三帧 Student 保留 `20→5 N` 非法碰撞阈值、每步 `-10` 惩罚与 force 日志，但删除 `200→20 N` 强碰撞终止；机器人刚体原点穿过 ground 的终止与 timeout-only truncated 保持不变。

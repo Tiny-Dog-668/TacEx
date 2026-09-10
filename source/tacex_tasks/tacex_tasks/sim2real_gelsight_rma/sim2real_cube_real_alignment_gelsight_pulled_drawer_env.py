@@ -44,7 +44,7 @@ GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK = (
     "Three-Frame-Direct-Action-Student-DR-v0"
 )
 
-PULLED_DRAWER_GEOMETRY_VERSION = 9
+PULLED_DRAWER_GEOMETRY_VERSION = 10
 PULLED_DRAWER_PANDA_FINGER_JOINT_LOCAL_POS0_Z_M = (
     0.0584 + GELSIGHT_PULLED_DRAWER_FINGER_EXTENSION_M
 )
@@ -461,7 +461,6 @@ class _PulledDrawerCfgMixin:
         0.0,
         PULLED_DRAWER_GELSIGHT_BOTTOM_OFFSET_HAND_M,
     )
-    rma_contact_force_threshold_n = 1.0
     illegal_collision_curriculum_start_step = (
         PULLED_DRAWER_ILLEGAL_COLLISION_CURRICULUM_START_STEP
     )

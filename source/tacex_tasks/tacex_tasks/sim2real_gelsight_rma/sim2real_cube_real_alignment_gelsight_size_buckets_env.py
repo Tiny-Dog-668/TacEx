@@ -362,14 +362,17 @@ class _GelSightFixedSizeCollisionMixin(_GelSightFixedSizeCubeMixin):
             termination_threshold_n=float(self.cfg.illegal_collision_termination_threshold_n),
             penalty_value=float(self.cfg.illegal_collision_penalty),
         )
-        terminated = ground_collision | illegal_termination
+        success_termination = success & bool(self.cfg.rma_success_terminates_episode)
+        terminated = ground_collision | illegal_termination | success_termination
         completed = terminated | time_out
         self._record_episode_outcomes_for_step(
             completed_count=completed.long().sum(),
             success_count=(completed & self._rma_episode_success_ever).long().sum(),
         )
         self._publish_episode_success_statistics()
-        self._last_rma_success_nonterminal = success.detach().clone()
+        self._last_rma_success_nonterminal = (
+            success & ~success_termination
+        ).detach().clone()
         self._last_illegal_collision_termination = illegal_termination.detach().clone()
         return terminated, time_out
 

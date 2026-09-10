@@ -120,9 +120,17 @@ class _RMATerminalMixin:
         history = self._rma_contact_force_history()
         return torch.linalg.vector_norm(history, dim=-1).amax(dim=(1, 2))
 
+    def _compute_rma_contact_state_from_forces(
+        self, forces: torch.Tensor
+    ) -> torch.Tensor:
+        """Threshold left/right forces ``[N,2]`` using the task contract."""
+        return (forces >= float(self.cfg.rma_contact_force_threshold_n)).to(
+            torch.float32
+        )
+
     def _compute_rma_contact_state(self) -> torch.Tensor:
         forces = self._compute_rma_contact_forces()
-        return (forces >= float(self.cfg.rma_contact_force_threshold_n)).to(torch.float32)
+        return self._compute_rma_contact_state_from_forces(forces)
 
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         observations = super()._get_observations()
@@ -202,7 +210,7 @@ class _RMATerminalMixin:
     def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         reward, log = super()._compute_additional_reward()
         forces = self._compute_rma_contact_forces()
-        contact = (forces >= float(self.cfg.rma_contact_force_threshold_n)).to(torch.float32)
+        contact = self._compute_rma_contact_state_from_forces(forces)
         left_contact = contact[:, 0]
         right_contact = contact[:, 1]
         bilateral_contact = left_contact * right_contact

@@ -19,8 +19,8 @@ from .rma_gelsight_models import (
 from .rma_gelsight_x040_three_frame_models import RMAGelSightX040ThreeFrameStudent
 
 
-PULLED_DRAWER_TEACHER_MODEL_VERSION = 4
-PULLED_DRAWER_STUDENT_MODEL_VERSION = 3
+PULLED_DRAWER_TEACHER_MODEL_VERSION = 5
+PULLED_DRAWER_STUDENT_MODEL_VERSION = 4
 PULLED_DRAWER_LINK7_TO_GELPAD_MIDPOINT_M = (
     0.107
     + GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M
@@ -33,8 +33,8 @@ class RMAGelSightPulledDrawerHandKinematics(GelSightPandaHandKinematics):
     def __init__(self) -> None:
         super().__init__()
         # Input/output: Panda arm joint positions [N,7] -> robot-root XYZ [N,3].
-        # The shared GelSight v6 asset keeps panda_hand coincident with link8
-        # and extends the finger/GelSight assembly by 26 mm along hand local +Z.
+        # The shared GelSight v7 asset keeps panda_hand coincident with link8
+        # and extends the finger/GelSight assembly by 21 mm along hand local +Z.
         self.link7_to_fingertip_midpoint = torch.tensor(
             [0.0, 0.0, PULLED_DRAWER_LINK7_TO_GELPAD_MIDPOINT_M, 1.0]
         )

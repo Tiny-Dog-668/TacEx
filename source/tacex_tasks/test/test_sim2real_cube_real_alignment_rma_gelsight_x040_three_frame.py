@@ -57,8 +57,8 @@ def close_app():
 
 def test_task_registration_and_shared_x040_contract():
     assert PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION == 5
-    assert TEACHER_MANIFEST_VERSION == 5
-    assert STUDENT_CHECKPOINT_VERSION == 8
+    assert TEACHER_MANIFEST_VERSION == 7
+    assert STUDENT_CHECKPOINT_VERSION == 10
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK) is not None
     teacher = parse_env_cfg(
@@ -73,17 +73,17 @@ def test_task_registration_and_shared_x040_contract():
     teacher_contract = teacher_environment_contract(teacher)
     assert teacher_contract["gelsight_geometry"] == geometry_contract()
     assert teacher_contract["gelsight_geometry"]["finger_and_gelsight_extension_m"] == (
-        pytest.approx(0.026)
+        pytest.approx(0.021)
     )
     assert teacher_contract["gelsight_geometry"]["center_offset_hand_m"] == pytest.approx(
-        [0.0, 0.0, 0.1442]
+        [0.0, 0.0, 0.1392]
     )
     assert teacher_contract["gelsight_geometry"]["lowest_point_offset_hand_m"] == (
-        pytest.approx([0.0, 0.0, 0.1613])
+        pytest.approx([0.0, 0.0, 0.1563])
     )
-    assert teacher_contract["profile"] == "rma_gelsight_x040_dr_static_size_buckets_v5"
+    assert teacher_contract["profile"] == "rma_gelsight_x040_dr_static_size_buckets_v7"
     assert teacher_contract["robot_asset_filename"] == (
-        "franka_gsmini_standard_arm_visuals_v6.usd"
+        "franka_gsmini_standard_arm_visuals_v7.usd"
     )
     assert teacher_contract["robot_base_world_position_m"] == [0.0, 0.0, 0.015]
     assert teacher_contract["camera_world_position_m"] == pytest.approx(
@@ -92,6 +92,9 @@ def test_task_registration_and_shared_x040_contract():
     assert teacher_contract["cube_size_sampling"] == "fixed_round_robin_by_environment"
     assert teacher_contract["cube_size_assignment"] == "env_id_mod_8"
     assert teacher_contract["cube_size_object_count_per_environment"] == 1
+    assert teacher_contract["compliant_grasp"]["contact_force_threshold_n"] == 2.0
+    assert teacher_contract["compliant_grasp"]["excess_contact_force_threshold_n"] == 15.0
+    assert teacher_contract["compliant_grasp"]["drop_penalty"] == -10.0
     assert teacher_contract["physics_layout"] == {
         "gpu_dynamics": True,
         "replicate_physics": False,
@@ -114,7 +117,7 @@ def test_task_registration_and_shared_x040_contract():
         "shared_ground_color_rgb": [0.0, 0.0, 0.0],
         "franka_body_visual_profile": (
             "gelsight_physics_isaaclab_panda_arm_link0_7_visuals_green_base_led_"
-            "finger_offset_26mm_usd_v6"
+            "finger_offset_21mm_usd_v7"
         ),
         "base_status_led": {
             "subset_path": "panda_link0/standard_visuals/panda_link0/subset_5",
@@ -338,9 +341,9 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
         load_student_checkpoint(checkpoint)
 
 
-def test_pre_finger_offset_v6_checkpoint_is_rejected(tmp_path):
-    checkpoint = tmp_path / "pre_finger_offset_student.pt"
-    torch.save({"kind": STUDENT_KIND, "version": 6}, checkpoint)
+def test_pre_21mm_v7_asset_checkpoint_is_rejected(tmp_path):
+    checkpoint = tmp_path / "pre_21mm_asset_student.pt"
+    torch.save({"kind": STUDENT_KIND, "version": 8}, checkpoint)
     with pytest.raises(RuntimeError, match="version mismatch"):
         load_student_checkpoint(checkpoint)
 

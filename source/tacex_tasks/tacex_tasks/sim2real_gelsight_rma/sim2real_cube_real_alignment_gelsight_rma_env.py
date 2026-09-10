@@ -68,6 +68,78 @@ _GELSIGHT_CONTACT_FILTER_PRIMS = (
     "/World/envs/env_.*/Robot/gelpad_left",
     "/World/envs/env_.*/Robot/gelpad_right",
 )
+GELSIGHT_CONTACT_REWARD_THRESHOLD_N = 2.0
+GELSIGHT_EXCESS_CONTACT_FORCE_THRESHOLD_N = 15.0
+GELSIGHT_EXCESS_CONTACT_FORCE_PENALTY = -5.0
+GELSIGHT_DROP_ARM_LIFT_DELTA_M = 0.020
+GELSIGHT_DROP_TRIGGER_LIFT_DELTA_M = 0.005
+GELSIGHT_DROP_PENALTY = -10.0
+
+
+def gelsight_contact_state_from_forces(
+    forces_n: torch.Tensor,
+    *,
+    threshold_n: float = GELSIGHT_CONTACT_REWARD_THRESHOLD_N,
+) -> torch.Tensor:
+    """Return strict-threshold left/right contact labels for forces ``[N,2]``."""
+    return (forces_n > float(threshold_n)).to(torch.float32)
+
+
+def excessive_gelsight_contact_force_penalty(
+    forces_n: torch.Tensor,
+    *,
+    threshold_n: float = GELSIGHT_EXCESS_CONTACT_FORCE_THRESHOLD_N,
+    penalty_value: float = GELSIGHT_EXCESS_CONTACT_FORCE_PENALTY,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return per-env binary penalty and mask from left/right forces ``[N,2]``."""
+    excessive = torch.any(forces_n > float(threshold_n), dim=-1)
+    penalty = excessive.to(forces_n.dtype) * float(penalty_value)
+    return penalty, excessive
+
+
+def update_gelsight_drop_penalty_state(
+    lift_delta_m: torch.Tensor,
+    was_lifted: torch.Tensor,
+    drop_already_penalized: torch.Tensor,
+    *,
+    arm_lift_delta_m: float = GELSIGHT_DROP_ARM_LIFT_DELTA_M,
+    trigger_lift_delta_m: float = GELSIGHT_DROP_TRIGGER_LIFT_DELTA_M,
+    penalty_value: float = GELSIGHT_DROP_PENALTY,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Update once-per-episode drop state for per-env lift deltas ``[N]``."""
+    was_lifted = was_lifted | (lift_delta_m >= float(arm_lift_delta_m))
+    dropped = (
+        was_lifted
+        & (lift_delta_m < float(trigger_lift_delta_m))
+        & ~drop_already_penalized
+    )
+    drop_already_penalized = drop_already_penalized | dropped
+    penalty = dropped.to(lift_delta_m.dtype) * float(penalty_value)
+    return penalty, dropped, was_lifted, drop_already_penalized
+
+
+def gelsight_compliant_grasp_contract(cfg) -> dict[str, object]:
+    """Return JSON-safe contact reward, force penalty, and drop semantics."""
+    return {
+        "contact_force_threshold_n": float(cfg.rma_contact_force_threshold_n),
+        "contact_threshold_comparison": "strictly_greater_than",
+        "single_contact_reward": 0.5
+        * float(cfg.rma_contact_reward_weight)
+        * float(cfg.rma_single_contact_reward_fraction),
+        "bilateral_contact_reward": float(cfg.rma_contact_reward_weight),
+        "excess_contact_force_threshold_n": float(
+            cfg.rma_excess_contact_force_threshold_n
+        ),
+        "excess_contact_force_threshold_comparison": "strictly_greater_than_any_side",
+        "excess_contact_force_penalty_per_policy_step": float(
+            cfg.rma_excess_contact_force_penalty
+        ),
+        "drop_arm_lift_delta_m": float(cfg.rma_drop_arm_lift_delta_m),
+        "drop_trigger_lift_delta_m": float(cfg.rma_drop_trigger_lift_delta_m),
+        "drop_penalty": float(cfg.rma_drop_penalty),
+        "drop_penalty_semantics": str(cfg.rma_drop_penalty_semantics),
+        "drop_terminates_episode": False,
+    }
 
 def _make_gelsight_robot_cfg() -> ArticulationCfg:
     """Return the shared shifted-geometry GelSight Franka at the 15 mm base height."""
@@ -152,6 +224,14 @@ class _RMAGelSightGeometryMixin:
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs) -> None:
         super().__init__(cfg, render_mode, **kwargs)
+        if float(self.cfg.rma_excess_contact_force_threshold_n) <= float(
+            self.cfg.rma_contact_force_threshold_n
+        ):
+            raise ValueError("GelSight excess-force threshold must exceed contact threshold")
+        if float(self.cfg.rma_drop_arm_lift_delta_m) <= float(
+            self.cfg.rma_drop_trigger_lift_delta_m
+        ):
+            raise ValueError("GelSight drop arm height must exceed drop trigger height")
         self._gelsight_center_offset_hand = torch.tensor(
             self.cfg.gelsight_center_offset_hand_m,
             device=self.device,
@@ -162,6 +242,20 @@ class _RMAGelSightGeometryMixin:
             device=self.device,
             dtype=torch.float32,
         ).unsqueeze(0).repeat(self.num_envs, 1)
+        self._gelsight_cube_was_lifted = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+        self._gelsight_drop_already_penalized = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+
+    def _compute_rma_contact_state_from_forces(
+        self, forces: torch.Tensor
+    ) -> torch.Tensor:
+        """Use strict ``> 2 N`` labels for all dual-GelSight tasks."""
+        return gelsight_contact_state_from_forces(
+            forces, threshold_n=float(self.cfg.rma_contact_force_threshold_n)
+        )
 
     def _hand_offset_world(self, offset_hand_m: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Transform batched ``panda_hand`` local offsets into world coordinates."""
@@ -189,7 +283,7 @@ class _RMAGelSightGeometryMixin:
         return float(self.cfg.plate_top_height_m)
 
     def _compute_additional_reward(self) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Add a geometry-only penalty before the lowest gripper point reaches the table."""
+        """Add clearance, compliant-contact, and once-per-episode drop penalties."""
         reward, log = super()._compute_additional_reward()
         clearance = (
             self._compute_gelsight_fingertip_bottom_world()[:, 2]
@@ -202,14 +296,59 @@ class _RMAGelSightGeometryMixin:
         )
         self._last_gelsight_table_clearance_m = clearance.detach().clone()
         self._last_gelsight_table_clearance_penalty = penalty.detach().clone()
+
+        # Input/output: filtered Cube-to-GelPad forces [N,2] -> penalty [N].
+        forces = self._last_rma_contact_forces
+        excess_force_penalty, excessive_force = excessive_gelsight_contact_force_penalty(
+            forces,
+            threshold_n=float(self.cfg.rma_excess_contact_force_threshold_n),
+            penalty_value=float(self.cfg.rma_excess_contact_force_penalty),
+        )
+
+        self._ensure_cube_lift_reference_height()
+        lift_delta = (
+            self._cube.data.root_pos_w[:, 2]
+            - self._cube_lift_reference_height_per_env
+        )
+        (
+            drop_penalty,
+            dropped,
+            self._gelsight_cube_was_lifted,
+            self._gelsight_drop_already_penalized,
+        ) = update_gelsight_drop_penalty_state(
+            lift_delta,
+            self._gelsight_cube_was_lifted,
+            self._gelsight_drop_already_penalized,
+            arm_lift_delta_m=float(self.cfg.rma_drop_arm_lift_delta_m),
+            trigger_lift_delta_m=float(self.cfg.rma_drop_trigger_lift_delta_m),
+            penalty_value=float(self.cfg.rma_drop_penalty),
+        )
+        self._last_gelsight_excess_force_penalty = excess_force_penalty.detach().clone()
+        self._last_gelsight_drop_penalty = drop_penalty.detach().clone()
         log.update(
             {
                 "reward/gelsight_table_clearance": penalty.mean().detach(),
+                "reward/gelsight_excess_contact_force": excess_force_penalty.mean().detach(),
+                "reward/gelsight_cube_drop": drop_penalty.mean().detach(),
                 "info/gelsight_fingertip_bottom_clearance_m": clearance.mean().detach(),
                 "info/gelsight_table_clearance_fraction": below_clearance.float().mean().detach(),
+                "info/gelsight_max_contact_force_n": forces.max(dim=-1).values.mean().detach(),
+                "info/gelsight_excess_contact_force_fraction": excessive_force.float().mean().detach(),
+                "info/gelsight_cube_lift_delta_m": lift_delta.mean().detach(),
+                "info/gelsight_cube_was_lifted_fraction": (
+                    self._gelsight_cube_was_lifted.float().mean().detach()
+                ),
+                "info/gelsight_cube_drop_event_fraction": dropped.float().mean().detach(),
             }
         )
-        return reward + penalty, log
+        return reward + penalty + excess_force_penalty + drop_penalty, log
+
+    def _reset_idx(self, env_ids: torch.Tensor) -> None:
+        super()._reset_idx(env_ids)
+        if hasattr(self, "_gelsight_cube_was_lifted"):
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+            self._gelsight_cube_was_lifted[env_ids] = False
+            self._gelsight_drop_already_penalized[env_ids] = False
 
     def _get_observations(self) -> dict[str, dict[str, torch.Tensor]]:
         """Keep privileged gripper state aligned with the GelSight reward center."""
@@ -241,6 +380,10 @@ class _RMAGelSightGeometryMixin:
             + f"{self._last_gelsight_table_clearance_m.mean().item():.4f} m, "
             + "gelsight_tip_penalty="
             + f"{self._last_gelsight_table_clearance_penalty.mean().item():.3f}, "
+            + "gelsight_force_penalty="
+            + f"{self._last_gelsight_excess_force_penalty.mean().item():.3f}, "
+            + "gelsight_drop_penalty="
+            + f"{self._last_gelsight_drop_penalty.mean().item():.3f}, "
         )
 
 
@@ -368,6 +511,13 @@ class _RMAGelSightCfgMixin:
     rma_student_contact_observation_source = "physics_contact_label"
     rma_gelsight_contact_filter_prims = _GELSIGHT_CONTACT_FILTER_PRIMS
     rma_cube_contact_sensor = _make_gelsight_cube_contact_sensor_cfg()
+    rma_contact_force_threshold_n = GELSIGHT_CONTACT_REWARD_THRESHOLD_N
+    rma_excess_contact_force_threshold_n = GELSIGHT_EXCESS_CONTACT_FORCE_THRESHOLD_N
+    rma_excess_contact_force_penalty = GELSIGHT_EXCESS_CONTACT_FORCE_PENALTY
+    rma_drop_arm_lift_delta_m = GELSIGHT_DROP_ARM_LIFT_DELTA_M
+    rma_drop_trigger_lift_delta_m = GELSIGHT_DROP_TRIGGER_LIFT_DELTA_M
+    rma_drop_penalty = GELSIGHT_DROP_PENALTY
+    rma_drop_penalty_semantics = "once_per_episode_after_armed_lift"
     rma_gelsight_tactile_sensor_enabled = False
     rma_gelsight_reference_enabled = False
     rma_gelsight_tactile_rgb_float_scale = 255.0

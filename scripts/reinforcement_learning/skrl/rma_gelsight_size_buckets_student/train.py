@@ -67,7 +67,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
-    GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+    GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS,
+    GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_MODEL_VERSION,
     load_student_checkpoint,
@@ -265,8 +267,9 @@ def _masked_heatmap_loss(
 
 
 def main() -> None:
-    if args.task != GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK:
-        raise RuntimeError(f"This trainer only supports {GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK}")
+    if args.task not in GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS:
+        supported = ", ".join(sorted(GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS))
+        raise RuntimeError(f"This trainer only supports: {supported}")
     if args.num_envs <= 0 or args.num_envs % 8:
         raise ValueError("num_envs must be a positive multiple of 8")
     if args.timesteps <= 0:
@@ -288,7 +291,10 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     teacher_checkpoint = Path(args.teacher_checkpoint).expanduser().resolve()
-    teacher_manifest = load_teacher_manifest(teacher_checkpoint)
+    expected_teacher_task = GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK[args.task]
+    teacher_manifest = load_teacher_manifest(
+        teacher_checkpoint, expected_task=expected_teacher_task
+    )
     resume_payload = None
     if args.resume:
         resume_payload = load_student_checkpoint(
@@ -318,7 +324,11 @@ def main() -> None:
     teacher_actor = RMAGelSightActorCore().to(device)
     teacher_actor.load_state_dict(
         extract_actor_core_state_dict(
-            load_teacher_policy_state(teacher_checkpoint, device)
+            load_teacher_policy_state(
+                teacher_checkpoint,
+                device,
+                expected_task=expected_teacher_task,
+            )
         ),
         strict=True,
     )
@@ -344,7 +354,14 @@ def main() -> None:
     run_dir = (
         Path(args.log_dir).expanduser().resolve()
         if args.log_dir
-        else Path("logs/skrl/sim2real_cube_real_alignment_rma_gelsight_size_buckets_student")
+        else Path(
+            "logs/skrl/"
+            + (
+                "sim2real_cube_real_alignment_rma_gelsight_size_buckets_progress_student"
+                if args.task == GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK
+                else "sim2real_cube_real_alignment_rma_gelsight_size_buckets_student"
+            )
+        )
         / (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_distillation")
     ).resolve()
     (run_dir / "params").mkdir(parents=True, exist_ok=True)

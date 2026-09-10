@@ -25,12 +25,19 @@ from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
 )
 from tacex.simulation_approaches.gpu_taxim.taxim_sim import TaximSimulator
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
+    GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_MODEL_VERSION,
+    TEACHER_MANIFEST_VERSION,
     environment_contract,
     infer_teacher_checkpoint_policy_step,
     load_student_checkpoint,
     student_input_contract,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_rma_env import (
+    excessive_gelsight_contact_force_penalty,
+    gelsight_contact_state_from_forces,
+    update_gelsight_drop_penalty_state,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
     GELSIGHT_STUDENT_FUSION_DIM,
@@ -47,6 +54,12 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_siz
     illegal_collision_response,
     linear_illegal_collision_penalty_threshold,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_size_buckets_progress_env import (
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK,
+    quadratic_excess_contact_force_penalty,
+    signed_progress_reward,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -56,7 +69,8 @@ def close_app():
 
 
 def test_new_tasks_and_fixed_size_contract_are_registered():
-    assert STUDENT_CHECKPOINT_VERSION == 5
+    assert TEACHER_MANIFEST_VERSION == 6
+    assert STUDENT_CHECKPOINT_VERSION == 7
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK) is not None
     teacher = parse_env_cfg(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK, device="cuda:0", num_envs=8)
@@ -77,21 +91,120 @@ def test_new_tasks_and_fixed_size_contract_are_registered():
     assert student.observation_space["gsmini_right_reference_rgb"].shape == (96, 128, 3)
     assert environment_contract(teacher) == environment_contract(student)
     contract = environment_contract(teacher)
-    assert contract["profile"] == "rma_gelsight_fixed_size_buckets_v3"
+    assert contract["profile"] == "rma_gelsight_fixed_size_buckets_v5"
     assert contract["gelsight_geometry"] == geometry_contract()
-    assert contract["robot_asset_filename"] == "franka_gsmini_standard_arm_visuals_v6.usd"
+    assert contract["robot_asset_filename"] == "franka_gsmini_standard_arm_visuals_v7.usd"
     assert contract["robot_base_world_position_m"] == [0.0, 0.0, 0.015]
     assert contract["camera_world_position_m"] == pytest.approx(
         [1.166091088407, 0.035901608197, 0.529200335898]
     )
     assert teacher.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
     assert student.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
-    assert teacher.rma_contact_force_threshold_n == pytest.approx(0.2)
+    assert teacher.rma_contact_force_threshold_n == pytest.approx(2.0)
+    assert contract["compliant_grasp"] == {
+        "contact_force_threshold_n": 2.0,
+        "contact_threshold_comparison": "strictly_greater_than",
+        "single_contact_reward": 1.5,
+        "bilateral_contact_reward": 3.0,
+        "excess_contact_force_threshold_n": 15.0,
+        "excess_contact_force_threshold_comparison": "strictly_greater_than_any_side",
+        "excess_contact_force_penalty_per_policy_step": -5.0,
+        "drop_arm_lift_delta_m": 0.02,
+        "drop_trigger_lift_delta_m": 0.005,
+        "drop_penalty": -10.0,
+        "drop_penalty_semantics": "once_per_episode_after_armed_lift",
+        "drop_terminates_episode": False,
+    }
     assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
     assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)
     assert teacher.illegal_collision_curriculum_start_step == 0
     assert teacher.illegal_collision_curriculum_end_step == 100_000
     assert teacher.illegal_collision_termination_threshold_n == pytest.approx(10.0)
+
+
+def test_compliant_grasp_force_and_drop_boundaries() -> None:
+    forces = torch.tensor([[2.0, 2.0001], [15.0, 15.0001]])
+    torch.testing.assert_close(
+        gelsight_contact_state_from_forces(forces),
+        torch.tensor([[0.0, 1.0], [1.0, 1.0]]),
+    )
+    force_penalty, excessive = excessive_gelsight_contact_force_penalty(forces)
+    torch.testing.assert_close(force_penalty, torch.tensor([0.0, -5.0]))
+    torch.testing.assert_close(excessive, torch.tensor([False, True]))
+
+    was_lifted = torch.zeros(2, dtype=torch.bool)
+    already_penalized = torch.zeros(2, dtype=torch.bool)
+    _, _, was_lifted, already_penalized = update_gelsight_drop_penalty_state(
+        torch.tensor([0.020, 0.019]), was_lifted, already_penalized
+    )
+    drop_penalty, dropped, was_lifted, already_penalized = (
+        update_gelsight_drop_penalty_state(
+            torch.tensor([0.0049, 0.0049]), was_lifted, already_penalized
+        )
+    )
+    torch.testing.assert_close(drop_penalty, torch.tensor([-10.0, 0.0]))
+    torch.testing.assert_close(dropped, torch.tensor([True, False]))
+    repeated_penalty, _, _, _ = update_gelsight_drop_penalty_state(
+        torch.tensor([0.0, 0.0]), was_lifted, already_penalized
+    )
+    torch.testing.assert_close(repeated_penalty, torch.zeros(2))
+
+
+def test_progress_reward_tasks_and_contract_are_isolated_from_legacy_tasks():
+    assert gym.spec(GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK) is not None
+    assert gym.spec(GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK) is not None
+    teacher = parse_env_cfg(
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+    student = parse_env_cfg(
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+    assert teacher.rma_success_terminates_episode is True
+    assert student.rma_success_terminates_episode is True
+    assert teacher.success_hold_steps == student.success_hold_steps == 5
+    assert teacher.rma_action_magnitude_penalty_weight == pytest.approx(0.05)
+    assert environment_contract(teacher) == environment_contract(student)
+    progress = environment_contract(teacher)["progress_reward"]
+    assert progress["reach"] == (
+        "signed_normalized_proximity_delta_after_first_transition"
+    )
+    assert progress["lift"] == "signed_normalized_progress_delta"
+    assert progress["contact"] == "signed_contact_acquisition_delta"
+    assert progress["success"] == "once_on_confirmed_terminal_success"
+    assert progress["success_reward_weight"] == pytest.approx(100.0)
+    assert progress["excess_contact_force_penalty"] == {
+        "mode": "quadratic_normalized_max_side_excess",
+        "threshold_n": 15.0,
+        "quadratic_weight": 5.0,
+        "normalized_by_threshold": True,
+    }
+    legacy = parse_env_cfg(
+        GELSIGHT_SIZE_BUCKETS_TEACHER_TASK, device="cuda:0", num_envs=8
+    )
+    assert legacy.rma_success_terminates_episode is False
+    assert "progress_reward" not in environment_contract(legacy)
+    assert GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK[
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK
+    ] == GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK
+
+
+def test_signed_progress_and_quadratic_force_penalty_boundaries():
+    current = torch.tensor([0.0, 0.5, 0.25])
+    previous = torch.tensor([0.0, 0.2, 0.5])
+    torch.testing.assert_close(
+        signed_progress_reward(current, previous),
+        torch.tensor([0.0, 0.3, -0.25]),
+    )
+    forces = torch.tensor([[15.0, 10.0], [30.0, 15.0], [45.0, 0.0]])
+    penalty, excessive = quadratic_excess_contact_force_penalty(
+        forces, threshold_n=15.0, weight=5.0
+    )
+    torch.testing.assert_close(penalty, torch.tensor([0.0, -5.0, -20.0]))
+    assert excessive.tolist() == [False, True, True]
 
 
 def test_illegal_collision_boundaries_are_strict_and_non_stacking():

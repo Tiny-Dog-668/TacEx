@@ -18,17 +18,43 @@ from tacex_tasks.sim2real_grasp.rma_models import (
 
 from .gelsight_geometry import geometry_contract
 from .rma_gelsight_models import RMAGelSightActorCore
+from .sim2real_cube_real_alignment_gelsight_rma_env import (
+    gelsight_compliant_grasp_contract,
+)
 from .sim2real_cube_real_alignment_gelsight_size_buckets_env import (
     GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
     GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+)
+from .sim2real_cube_real_alignment_gelsight_size_buckets_progress_env import (
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK,
 )
 from .rma_gelsight_size_buckets_models import gelsight_student_model_contract
 
 
 MANIFEST_FILENAME = "rma_gelsight_size_buckets_manifest.json"
-TEACHER_MANIFEST_VERSION = 4
-STUDENT_CHECKPOINT_VERSION = 5
+TEACHER_MANIFEST_VERSION = 6
+STUDENT_CHECKPOINT_VERSION = 7
 STUDENT_MODEL_VERSION = 2
+
+GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS = frozenset(
+    {
+        GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK,
+    }
+)
+GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS = frozenset(
+    {
+        GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+    }
+)
+GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK = {
+    GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK: GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+    GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK: (
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK
+    ),
+}
 
 
 def student_input_contract() -> dict[str, Any]:
@@ -120,8 +146,8 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 
 def environment_contract(cfg: Any) -> dict[str, Any]:
-    return {
-        "profile": "rma_gelsight_fixed_size_buckets_v3",
+    contract = {
+        "profile": "rma_gelsight_fixed_size_buckets_v5",
         "robot_profile": str(cfg.rma_robot_profile),
         "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
         "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
@@ -146,11 +172,7 @@ def environment_contract(cfg: Any) -> dict[str, Any]:
         "replicate_physics": bool(cfg.scene.replicate_physics),
         "shared_ground_visible": bool(cfg.ground.spawn.visible),
         "gelpad_contact_filters": list(cfg.rma_cube_contact_sensor.filter_prim_paths_expr),
-        "contact_force_threshold_n": float(cfg.rma_contact_force_threshold_n),
-        "single_contact_reward": 0.5
-        * float(cfg.rma_contact_reward_weight)
-        * float(cfg.rma_single_contact_reward_fraction),
-        "bilateral_contact_reward": float(cfg.rma_contact_reward_weight),
+        "compliant_grasp": gelsight_compliant_grasp_contract(cfg),
         "cube_illegal_filters": list(
             cfg.cube_illegal_contact_sensor.filter_prim_paths_expr
         ),
@@ -176,6 +198,46 @@ def environment_contract(cfg: Any) -> dict[str, Any]:
         ),
         "timeout_semantics": "truncated_only",
     }
+    if str(getattr(cfg, "lift_reward_mode", "")) == (
+        "signed_normalized_progress_delta"
+    ):
+        compliant_grasp = dict(contract["compliant_grasp"])
+        compliant_grasp.pop("excess_contact_force_penalty_per_policy_step", None)
+        compliant_grasp["excess_contact_force_penalty"] = {
+            "mode": str(cfg.rma_excess_contact_force_penalty_mode),
+            "quadratic_weight": float(
+                cfg.rma_excess_contact_force_quadratic_weight
+            ),
+            "normalized_by_threshold": True,
+        }
+        contract["compliant_grasp"] = compliant_grasp
+        contract["progress_reward"] = {
+            "reach": "signed_normalized_proximity_delta_after_first_transition",
+            "reach_weight": float(cfg.reach_weight),
+            "lift": "signed_normalized_progress_delta",
+            "lift_weight": float(cfg.lift_weight),
+            "decrease_returns_prior_shaping_reward": True,
+            "contact": "signed_contact_acquisition_delta",
+            "contact_weight": float(cfg.rma_contact_reward_weight),
+            "success": "once_on_confirmed_terminal_success",
+            "success_hold_steps": int(cfg.success_hold_steps),
+            "success_reward_weight": float(cfg.success_reward_weight),
+            "action_magnitude_penalty_weight": float(
+                cfg.rma_action_magnitude_penalty_weight
+            ),
+            "action_magnitude_scales": str(
+                cfg.rma_action_magnitude_penalty_scales
+            ),
+            "excess_contact_force_penalty": {
+                "mode": str(cfg.rma_excess_contact_force_penalty_mode),
+                "threshold_n": float(cfg.rma_excess_contact_force_threshold_n),
+                "quadratic_weight": float(
+                    cfg.rma_excess_contact_force_quadratic_weight
+                ),
+                "normalized_by_threshold": True,
+            },
+        }
+    return contract
 
 
 def write_teacher_manifest(
@@ -183,6 +245,9 @@ def write_teacher_manifest(
     params_dir: str | Path,
     agent_cfg: Mapping[str, Any],
 ) -> Path:
+    task = str(base_env.cfg.rma_task_id)
+    if task not in GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS:
+        raise RuntimeError(f"Unsupported GelSight Size-Buckets Teacher task: {task}")
     params = Path(params_dir)
     hashes = {}
     for name in ("agent.yaml", "env.yaml"):
@@ -193,7 +258,7 @@ def write_teacher_manifest(
     manifest = {
         "kind": "tacex_rma_gelsight_size_buckets_teacher",
         "version": TEACHER_MANIFEST_VERSION,
-        "task": GELSIGHT_SIZE_BUCKETS_TEACHER_TASK,
+        "task": task,
         "model_version": RMA_MODEL_VERSION,
         "actor_inputs": {
             "proprio_obs": 15,
@@ -215,7 +280,11 @@ def write_teacher_manifest(
     return output
 
 
-def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
+def load_teacher_manifest(
+    checkpoint: str | Path,
+    *,
+    expected_task: str | None = None,
+) -> dict[str, Any]:
     checkpoint = Path(checkpoint).expanduser().resolve()
     if not checkpoint.is_file():
         raise FileNotFoundError(f"Teacher checkpoint not found: {checkpoint}")
@@ -228,8 +297,11 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
         raise RuntimeError("Checkpoint is not a GelSight Size-Buckets Teacher")
     if manifest.get("version") != TEACHER_MANIFEST_VERSION:
         raise RuntimeError("Unsupported GelSight Size-Buckets Teacher manifest version")
-    if manifest.get("task") != GELSIGHT_SIZE_BUCKETS_TEACHER_TASK:
+    task = manifest.get("task")
+    if task not in GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS:
         raise RuntimeError("GelSight Size-Buckets Teacher task mismatch")
+    if expected_task is not None and task != expected_task:
+        raise RuntimeError("Selected task differs from Teacher checkpoint")
     if manifest.get("model_version") != RMA_MODEL_VERSION:
         raise RuntimeError("Teacher RMA model version mismatch")
     if manifest.get("actor_contract") != RMAGelSightActorCore().contract():
@@ -256,9 +328,12 @@ def validate_live_env_contract(cfg: Any, manifest: Mapping[str, Any]) -> None:
 
 
 def load_teacher_policy_state(
-    checkpoint: str | Path, device: str | torch.device
+    checkpoint: str | Path,
+    device: str | torch.device,
+    *,
+    expected_task: str | None = None,
 ) -> dict[str, torch.Tensor]:
-    load_teacher_manifest(checkpoint)
+    load_teacher_manifest(checkpoint, expected_task=expected_task)
     payload = torch.load(checkpoint, map_location=device, weights_only=False)
     policy = payload.get("policy") if isinstance(payload, Mapping) else None
     if not isinstance(policy, Mapping):
@@ -282,10 +357,18 @@ def load_student_checkpoint(
         raise RuntimeError("Student checkpoint version mismatch")
     if payload.get("model_version") != STUDENT_MODEL_VERSION:
         raise RuntimeError("Student model version mismatch")
-    if payload.get("task") != GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK:
+    task = payload.get("task")
+    if task not in GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS:
         raise RuntimeError("Student task mismatch")
-    if expected_task is not None and payload.get("task") != expected_task:
+    if expected_task is not None and task != expected_task:
         raise RuntimeError("Selected task differs from Student checkpoint")
+    teacher_manifest = payload.get("teacher_manifest")
+    expected_teacher_task = GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK[task]
+    if (
+        not isinstance(teacher_manifest, Mapping)
+        or teacher_manifest.get("task") != expected_teacher_task
+    ):
+        raise RuntimeError("Student and Teacher task provenance mismatch")
     if payload.get("normalization") != RMAObservationNormalizer().contract():
         raise RuntimeError("Student normalization contract mismatch")
     if payload.get("student_input_contract") != student_input_contract():
@@ -322,8 +405,13 @@ def load_student_model_state(
 
 
 __all__ = (
+    "GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK",
+    "GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK",
     "GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK",
+    "GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS",
+    "GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK",
     "GELSIGHT_SIZE_BUCKETS_TEACHER_TASK",
+    "GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS",
     "MANIFEST_FILENAME",
     "STUDENT_CHECKPOINT_VERSION",
     "STUDENT_MODEL_VERSION",

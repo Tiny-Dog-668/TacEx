@@ -19,6 +19,9 @@ from .rma_gelsight_pulled_drawer_models import (
     RMAGelSightPulledDrawerThreeFrameStudent,
     pulled_drawer_student_model_contract,
 )
+from .sim2real_cube_real_alignment_gelsight_rma_env import (
+    gelsight_compliant_grasp_contract,
+)
 from .rma_gelsight_x040_three_frame_artifacts import (
     load_encoder_initialization_checkpoint,
     sha256_file,
@@ -37,9 +40,9 @@ from .sim2real_cube_real_alignment_gelsight_pulled_drawer_env import (
 
 MANIFEST_FILENAME = "rma_gelsight_pulled_drawer_manifest.json"
 TEACHER_KIND = "tacex_rma_gelsight_pulled_drawer_teacher"
-TEACHER_MANIFEST_VERSION = 9
+TEACHER_MANIFEST_VERSION = 11
 STUDENT_KIND = "tacex_rma_gelsight_pulled_drawer_three_frame_student"
-STUDENT_CHECKPOINT_VERSION = 9
+STUDENT_CHECKPOINT_VERSION = 11
 
 
 def _run_dir(checkpoint: str | Path) -> Path:
@@ -63,7 +66,7 @@ def _cfg_seed(cfg: Any) -> int:
 def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     hand = cfg.robot.actuators["panda_hand"]
     return {
-        "profile": "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v9",
+        "profile": "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11",
         "task_family": "paired_teacher_student",
         "robot_profile": str(cfg.rma_robot_profile),
         "robot_asset": {
@@ -114,6 +117,7 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
         "geometry": pulled_drawer_geometry_contract(),
         "geometry_seed": _cfg_seed(cfg),
         "gelpad_contact_filters": list(cfg.rma_cube_contact_sensor.filter_prim_paths_expr),
+        "compliant_grasp": gelsight_compliant_grasp_contract(cfg),
         "cube_illegal_filters": list(cfg.cube_illegal_contact_sensor.filter_prim_paths_expr),
         "surface_robot_collision_filters": {
             name: list(sensor_cfg.filter_prim_paths_expr)

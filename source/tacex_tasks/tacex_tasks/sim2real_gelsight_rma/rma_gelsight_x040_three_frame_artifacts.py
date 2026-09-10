@@ -27,6 +27,9 @@ from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
 
 from .gelsight_geometry import geometry_contract
 from .rma_gelsight_models import RMAGelSightActorCore
+from .sim2real_cube_real_alignment_gelsight_rma_env import (
+    gelsight_compliant_grasp_contract,
+)
 from .rma_gelsight_x040_three_frame_models import (
     GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION,
     GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
@@ -40,13 +43,13 @@ from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
 
 
 MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
-TEACHER_MANIFEST_VERSION = 5
+TEACHER_MANIFEST_VERSION = 7
 LEGACY_STUDENT_CHECKPOINT_VERSION = 3
 # v4 was assigned to the withdrawn LED-DR experiment and must not be reused.
 PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION = 5
-# v6 used the pre-offset v5 robot asset and is intentionally rejected by the
-# shared shifted-geometry environment contract.
-STUDENT_CHECKPOINT_VERSION = 8
+# v6 used the pre-offset v5 robot asset; v8 used the 26 mm v6 asset. Both are
+# intentionally rejected by the current shared 21 mm geometry contract.
+STUDENT_CHECKPOINT_VERSION = 10
 STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
 TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
 
@@ -87,7 +90,7 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     hand = cfg.robot.actuators["panda_hand"]
     return {
-        "profile": "rma_gelsight_x040_dr_static_size_buckets_v5",
+        "profile": "rma_gelsight_x040_dr_static_size_buckets_v7",
         "robot_profile": str(cfg.rma_robot_profile),
         "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
         "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
@@ -137,6 +140,7 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             "finger_joint_noise": "none",
         },
         "gelpad_contact_filters": list(cfg.rma_cube_contact_sensor.filter_prim_paths_expr),
+        "compliant_grasp": gelsight_compliant_grasp_contract(cfg),
         "illegal_collision_scope": str(cfg.illegal_collision_scope),
         "cube_illegal_filters": list(
             cfg.cube_illegal_contact_sensor.filter_prim_paths_expr

@@ -22,7 +22,7 @@ class GelSightPandaHandKinematics(PandaFingertipKinematics):
     def __init__(self) -> None:
         super().__init__()
         # The inherited link7-to-link8 transform is 0.107 m.  From panda_hand,
-        # the shifted-v6 GelSight midpoint is the measured +Z 0.1442 m offset.
+        # the shifted-v7 GelSight midpoint is the measured +Z 0.1392 m offset.
         self.link7_to_fingertip_midpoint = torch.tensor(
             [0.0, 0.0, 0.107 + GELSIGHT_HAND_TO_GELPAD_MIDPOINT_M, 1.0]
         )
