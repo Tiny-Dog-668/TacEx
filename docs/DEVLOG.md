@@ -4,6 +4,12 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-12 CST — 新增 X040 Progress 单通道二值触觉 Student
+
+- 新增独立 Binary-Tactile Student task；物理场景、三帧视觉、full-strength DR、奖励、终止和四维动作完全继承现有 X040 Progress Student，并复用同一 Progress Teacher。
+- 触觉分支在模型内对 current/reference RGB 做逐像素 `max(abs(delta_rgb)) > 5`，生成 `[N,1,96,128]` float32 0/1 mask；部署仍保持七个原始输入和三个输出。
+- 兼容性：原 signed-delta task/model/checkpoint 行为不变；binary task 使用独立 model/input contract，必须重新蒸馏 Student。验证情况见本次交付，Isaac 相机 smoke 待用户运行。
+
 ### 2026-09-11 CST — 新增 X040 三帧 Progress Teacher–Student 对照任务
 
 - 新增独立 X040 Progress Teacher/三帧 Student：复用 x=0.40、XY ±0.08/±0.10 m、关节 reset 噪声、全场景和 full-strength 0823 DR，同时固定使用 v7 21 mm GelSight USD。

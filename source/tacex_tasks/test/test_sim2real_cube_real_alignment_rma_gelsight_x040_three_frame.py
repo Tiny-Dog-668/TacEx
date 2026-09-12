@@ -28,6 +28,7 @@ from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
     GELSIGHT_X040_PROGRESS_TEACHER_TASK,
     GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
     GELSIGHT_X040_STUDENT_TO_TEACHER_TASK,
@@ -37,6 +38,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
     STUDENT_KIND,
     TEACHER_MANIFEST_VERSION,
     load_student_checkpoint,
+    make_student_model_for_checkpoint,
     make_student_payload,
     student_environment_contract,
     student_input_contract,
@@ -45,6 +47,10 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     GELSIGHT_X040_THREE_FRAME_FUSION_DIM,
     RMAGelSightX040ThreeFrameStudent,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_binary_tactile_models import (
+    BinaryReferenceDeltaTactileEncoder,
+    RMAGelSightX040BinaryTactileThreeFrameStudent,
 )
 from tacex_tasks.sim2real_gelsight_rma.gelsight_geometry import geometry_contract
 from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
@@ -357,6 +363,56 @@ def test_x040_progress_pair_combines_0823_distribution_with_0911_rewards():
     assert contract["progress_reward"]["action_magnitude_penalty_weight"] == pytest.approx(0.05)
 
 
+def test_x040_progress_binary_tactile_task_is_isolated_but_reuses_progress_mdp():
+    task = GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    assert gym.spec(task) is not None
+    binary_cfg = parse_env_cfg(task, device="cuda:0", num_envs=8)
+    signed_cfg = parse_env_cfg(
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+
+    assert GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[task] == GELSIGHT_X040_PROGRESS_TEACHER_TASK
+    assert student_environment_contract(binary_cfg) == student_environment_contract(signed_cfg)
+    binary_contract = student_input_contract(task)
+    assert binary_contract["tactile_rgb"] == [96, 128, 3]
+    assert binary_contract["tactile_network_input"] == [1, 96, 128]
+    assert binary_contract["tactile_binary_threshold_u8"] == pytest.approx(5.0)
+    assert binary_contract["tactile_binary_values"] == [0.0, 1.0]
+    assert student_input_contract()["tactile_delta"] == (
+        "signed_float32_current_minus_reference_div_255"
+    )
+
+
+def test_single_channel_binary_tactile_preprocessing_boundaries_and_sign():
+    reference = torch.full((1, 1, 4, 3), 100, dtype=torch.uint8)
+    current = reference.clone()
+    current[0, 0, 0] = torch.tensor([104, 100, 100], dtype=torch.uint8)
+    current[0, 0, 1] = torch.tensor([105, 100, 100], dtype=torch.uint8)
+    current[0, 0, 2] = torch.tensor([106, 100, 100], dtype=torch.uint8)
+    current[0, 0, 3] = torch.tensor([94, 100, 100], dtype=torch.uint8)
+
+    mask = BinaryReferenceDeltaTactileEncoder.binary_delta(current, reference)
+
+    assert mask.shape == (1, 1, 1, 4)
+    assert mask.dtype == torch.float32
+    assert mask.flatten().tolist() == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_binary_tactile_checkpoint_factory_selects_one_channel_model():
+    model = make_student_model_for_checkpoint(
+        {
+            "version": STUDENT_CHECKPOINT_VERSION,
+            "task": GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+        }
+    )
+
+    assert isinstance(model, RMAGelSightX040BinaryTactileThreeFrameStudent)
+    assert model.tactile_encoder.side_encoder[0].in_channels == 1
+    assert model.contract()["tactile_preprocessing"]["threshold_u8"] == pytest.approx(5.0)
+
+
 def test_x040_progress_uses_absolute_reach_and_lift():
     dummy = SimpleNamespace(cfg=SimpleNamespace(lift_reward_requires_upright=False))
     proximity = torch.tensor([0.05, 0.40, 0.95])
@@ -456,6 +512,24 @@ def test_x040_progress_student_checkpoint_round_trip_and_task_isolation(tmp_path
     loaded = load_student_checkpoint(checkpoint)
 
     assert loaded["task"] == GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK
+    with pytest.raises(RuntimeError, match="model does not match"):
+        make_student_payload(
+            student_task=GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+            model=model,
+            optimizer=optimizer,
+            global_step=1,
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_manifest=teacher_manifest,
+            teacher_actor_state_dict={"probe": torch.zeros(1)},
+            encoder_init_checkpoint=encoder_checkpoint,
+            encoder_init_payload={
+                "task": RMA_XY_STUDENT_HEATMAP_DR_TASK,
+                "vision_encoder_state_dict_sha256": "encoder-hash",
+            },
+            student_env_contract=student_environment_contract(student_cfg),
+            loss={"action": "mse"},
+            optimizer_config={"class": "AdamW"},
+        )
     with pytest.raises(RuntimeError, match="not paired"):
         make_student_payload(
             student_task=GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
@@ -572,6 +646,29 @@ def test_torchscript_preserves_three_public_outputs():
         torch.testing.assert_close(observed, expected)
 
 
+def test_binary_tactile_torchscript_preserves_seven_inputs_and_three_outputs():
+    model = RMAGelSightX040BinaryTactileThreeFrameStudent(
+        pretrained_backbone=False
+    ).eval()
+    scripted = torch.jit.script(model)
+    history = torch.zeros((1, 3, 224, 224, 3), dtype=torch.uint8)
+    tactile = torch.zeros((1, 96, 128, 3), dtype=torch.uint8)
+    args = (
+        history,
+        torch.zeros((1, 15)),
+        torch.zeros((1, 4)),
+        tactile,
+        tactile,
+        tactile,
+        tactile,
+    )
+    with torch.inference_mode():
+        eager = model(*args)
+        actual = scripted(*args)
+    for expected, observed in zip(eager, actual):
+        torch.testing.assert_close(observed, expected)
+
+
 def test_legacy_checkpoint_is_rejected(tmp_path):
     checkpoint = tmp_path / "legacy.pt"
     torch.save({"kind": "tacex_rma_gelsight_size_buckets_student", "version": 3}, checkpoint)
@@ -605,6 +702,7 @@ def test_pre_21mm_v7_asset_checkpoint_is_rejected(tmp_path):
     [
         GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
         GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
     ],
 )
 def test_student_eight_env_visual_alignment_smoke(student_task: str):

@@ -49,6 +49,11 @@ from .sim2real_cube_real_alignment_gelsight_x040_progress_env import (
     Sim2RealCubeRealAlignmentRMAGelSightX040ProgressThreeFrameStudentDREnv,
     Sim2RealCubeRealAlignmentRMAGelSightX040ProgressThreeFrameStudentDREnvCfg,
 )
+from .sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env import (
+    GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightX040ProgressBinaryTactileThreeFrameStudentDREnv,
+    Sim2RealCubeRealAlignmentRMAGelSightX040ProgressBinaryTactileThreeFrameStudentDREnvCfg,
+)
 from .sim2real_cube_real_alignment_gelsight_pulled_drawer_env import (
     GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
     GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
@@ -235,6 +240,20 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": (
             Sim2RealCubeRealAlignmentRMAGelSightX040ProgressThreeFrameStudentDREnvCfg
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightX040ProgressBinaryTactileThreeFrameStudentDREnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCubeRealAlignmentRMAGelSightX040ProgressBinaryTactileThreeFrameStudentDREnvCfg
         ),
     },
 )

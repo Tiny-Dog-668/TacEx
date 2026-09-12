@@ -83,8 +83,12 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts impo
     GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
+    GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
     GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
     GELSIGHT_X040_STUDENT_TASKS,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_binary_tactile_models import (
+    RMAGelSightX040BinaryTactileThreeFrameStudent,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import (
     RMAGelSightPulledDrawerActorCore,
@@ -139,11 +143,17 @@ def _save_initial_policy_images(observations: dict, output_dir: Path) -> None:
 
 
 def _loss_contract() -> dict[str, object]:
+    contact_source = (
+        "left_right_bce_from_single_channel_binary_max_abs_rgb_delta_gt_5_u8"
+        if args.task
+        == GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+        else "left_right_bce_from_signed_current_minus_reference"
+    )
     return {
         "position": "smooth_l1_normalized_cube_position_root_xyz",
         "position_weight": float(args.position_loss_weight),
         "smooth_l1_beta": float(args.smooth_l1_beta),
-        "contact": "left_right_bce_from_signed_current_minus_reference",
+        "contact": contact_source,
         "contact_weight": float(args.contact_loss_weight),
         "contact_positive_weight": float(args.contact_positive_weight),
         "action": "mse_teacher_deterministic_mean",
@@ -173,11 +183,18 @@ def main() -> None:
         raise ValueError("This trainer only supports the paired X040 or Pulled-Drawer Student task")
 
     drawer_profile = args.task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK
+    binary_tactile_profile = (
+        args.task == GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    )
     artifacts = drawer_artifacts if drawer_profile else x040_artifacts
     student_cls = (
         RMAGelSightPulledDrawerThreeFrameStudent
         if drawer_profile
-        else RMAGelSightX040ThreeFrameStudent
+        else (
+            RMAGelSightX040BinaryTactileThreeFrameStudent
+            if binary_tactile_profile
+            else RMAGelSightX040ThreeFrameStudent
+        )
     )
     teacher_cls = RMAGelSightPulledDrawerActorCore if drawer_profile else RMAGelSightActorCore
     if args.num_envs <= 0:
@@ -277,6 +294,11 @@ def main() -> None:
     if drawer_profile:
         default_log_root = (
             "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_student"
+        )
+    elif binary_tactile_profile:
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_progress_"
+            "three_frame_binary_tactile_student"
         )
     elif args.task == GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK:
         default_log_root = (
