@@ -34,10 +34,10 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
-    GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
     load_student_checkpoint,
     load_student_model_state,
     make_student_model_for_checkpoint,
+    student_environment_contract,
 )
 
 
@@ -45,12 +45,15 @@ def main() -> None:
     if args.num_envs <= 0:
         raise ValueError("num_envs must be positive")
     payload = load_student_checkpoint(args.student_checkpoint, device="cpu")
+    task = str(payload["task"])
     env_cfg = parse_env_cfg(
-        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        task,
         device=args.device,
         num_envs=args.num_envs,
     )
-    env = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK, cfg=env_cfg)
+    if payload.get("student_environment_contract") != student_environment_contract(env_cfg):
+        raise RuntimeError("Live Student environment contract differs from checkpoint")
+    env = gym.make(task, cfg=env_cfg)
     try:
         device = torch.device(env.unwrapped.device)
         model = make_student_model_for_checkpoint(

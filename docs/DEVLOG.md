@@ -4,6 +4,12 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-11 CST — 新增 X040 三帧 Progress Teacher–Student 对照任务
+
+- 新增独立 X040 Progress Teacher/三帧 Student：复用 x=0.40、XY ±0.08/±0.10 m、关节 reset 噪声、全场景和 full-strength 0823 DR，同时固定使用 v7 21 mm GelSight USD。
+- 契约：reach 每步使用权重2.5的绝对 proximity，lift 每步使用权重2.5的 reset-relative 归一化绝对高度，contact 保持 signed progress，terminal success 为一次性 `+1000`；其余采用 0911 的20→5 N碰撞和动作平滑。观测保持七路三帧输入、动作保持4维，旧 X040/Size-Buckets task 行为不变。
+- 兼容性：artifact 强制新 Teacher–Student 配对，旧 checkpoint 不能用于新任务，需重新训练 Teacher 并蒸馏 Student。验证情况见本次交付，Isaac 8-env 相机 smoke 待用户运行。
+
 ### 2026-09-10 CST — 新增 GelSight Size-Buckets 进展奖励与终止成功环境
 
 - 新增独立 Progress Teacher/Student task：reach、lift 与 contact 改为有符号进展奖励，保持状态不再重复得分；成功高度稳定 5 步后仅奖励一次并立即 terminated/reset。

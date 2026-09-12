@@ -187,7 +187,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
     GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
-    GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+    GELSIGHT_X040_TEACHER_TASKS,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
     GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
@@ -366,10 +366,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
     if args_cli.task in {
         *GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS,
-        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        *GELSIGHT_X040_TEACHER_TASKS,
         GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
     }:
-        if args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
+        if args_cli.task in GELSIGHT_X040_TEACHER_TASKS:
             from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
                 infer_teacher_checkpoint_policy_step,
             )
@@ -443,7 +443,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env.unwrapped, os.path.join(log_dir, "params"), agent_cfg
         )
         print(f"[INFO] Saved Pulled-Drawer Teacher manifest: {manifest_path}")
-    elif args_cli.task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK and (
+    elif args_cli.task in GELSIGHT_X040_TEACHER_TASKS and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (

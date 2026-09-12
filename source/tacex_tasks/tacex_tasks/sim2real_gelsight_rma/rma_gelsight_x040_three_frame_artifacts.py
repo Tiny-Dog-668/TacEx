@@ -40,6 +40,10 @@ from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
 )
+from .sim2real_cube_real_alignment_gelsight_x040_progress_env import (
+    GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+    GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+)
 
 
 MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
@@ -52,6 +56,57 @@ PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION = 5
 STUDENT_CHECKPOINT_VERSION = 10
 STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
 TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
+GELSIGHT_X040_TEACHER_TASKS = frozenset(
+    {
+        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+    }
+)
+GELSIGHT_X040_STUDENT_TO_TEACHER_TASK = {
+    GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK: (
+        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK
+    ),
+    GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK: (
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK
+    ),
+}
+GELSIGHT_X040_STUDENT_TASKS = frozenset(
+    GELSIGHT_X040_STUDENT_TO_TEACHER_TASK
+)
+
+
+def _expected_environment_profile(task: str) -> str:
+    if task in {
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+    }:
+        return "rma_gelsight_x040_progress_three_frame_v5"
+    if task in {
+        GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    }:
+        return "rma_gelsight_x040_dr_static_size_buckets_v7"
+    raise RuntimeError(f"Unsupported GelSight X040 task: {task}")
+
+
+def _validate_environment_contract_for_task(
+    task: str, contract: object, *, student: bool
+) -> None:
+    if not isinstance(contract, Mapping):
+        raise RuntimeError("GelSight X040 environment contract is missing")
+    if contract.get("profile") != _expected_environment_profile(task):
+        raise RuntimeError("GelSight X040 environment profile does not match task")
+    is_progress = task in {
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+    }
+    if is_progress and (
+        "progress_reward" not in contract
+        or contract.get("success_terminates_episode") is not True
+    ):
+        raise RuntimeError("GelSight X040 Progress reward contract is incomplete")
+    if student and is_progress and "visual_domain_randomization" not in contract:
+        raise RuntimeError("GelSight X040 Progress Student DR contract is incomplete")
 
 
 def sha256_file(path: str | Path) -> str:
@@ -89,8 +144,10 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     hand = cfg.robot.actuators["panda_hand"]
-    return {
-        "profile": "rma_gelsight_x040_dr_static_size_buckets_v7",
+    task = str(cfg.rma_task_id)
+    profile = _expected_environment_profile(task)
+    contract = {
+        "profile": profile,
         "robot_profile": str(cfg.rma_robot_profile),
         "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
         "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
@@ -164,6 +221,60 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
         "success_terminates_episode": bool(cfg.rma_success_terminates_episode),
         "timeout_semantics": "truncated_only",
     }
+    lift_reward_mode = str(getattr(cfg, "lift_reward_mode", ""))
+    if lift_reward_mode in {
+        "signed_normalized_progress_delta",
+        "absolute_normalized_progress_per_step",
+    }:
+        compliant_grasp = dict(contract["compliant_grasp"])
+        compliant_grasp.pop("excess_contact_force_penalty_per_policy_step", None)
+        compliant_grasp["excess_contact_force_penalty"] = {
+            "mode": str(cfg.rma_excess_contact_force_penalty_mode),
+            "quadratic_weight": float(cfg.rma_excess_contact_force_quadratic_weight),
+            "normalized_by_threshold": True,
+        }
+        contract["compliant_grasp"] = compliant_grasp
+        reach_reward_mode = str(cfg.reach_reward_mode)
+        if reach_reward_mode == "signed_normalized_proximity_delta":
+            reach_contract = "signed_normalized_proximity_delta_after_first_transition"
+        elif reach_reward_mode == "absolute_normalized_proximity_per_step":
+            reach_contract = reach_reward_mode
+        else:
+            raise RuntimeError(f"Unsupported reach reward mode: {reach_reward_mode}")
+        contract["progress_reward"] = {
+            "reach": reach_contract,
+            "reach_weight": float(cfg.reach_weight),
+            "lift": lift_reward_mode,
+            "lift_weight": float(cfg.lift_weight),
+            "reach_holding_state_repeats_reward": (
+                reach_reward_mode == "absolute_normalized_proximity_per_step"
+            ),
+            "lift_holding_state_repeats_reward": (
+                lift_reward_mode == "absolute_normalized_progress_per_step"
+            ),
+            "contact_holding_state_repeats_reward": False,
+            "contact": "signed_contact_acquisition_delta",
+            "contact_weight": float(cfg.rma_contact_reward_weight),
+            "success": "once_on_confirmed_terminal_success",
+            "success_lift_delta_m": float(cfg.success_lift_delta),
+            "success_hold_steps": int(cfg.success_hold_steps),
+            "success_reward_weight": float(cfg.success_reward_weight),
+            "action_rate_penalty_weight": float(cfg.rma_action_rate_penalty_weight),
+            "action_rate_scales": str(cfg.rma_action_rate_penalty_scales),
+            "action_magnitude_penalty_weight": float(
+                cfg.rma_action_magnitude_penalty_weight
+            ),
+            "action_magnitude_scales": str(cfg.rma_action_magnitude_penalty_scales),
+            "excess_contact_force_penalty": {
+                "mode": str(cfg.rma_excess_contact_force_penalty_mode),
+                "threshold_n": float(cfg.rma_excess_contact_force_threshold_n),
+                "quadratic_weight": float(
+                    cfg.rma_excess_contact_force_quadratic_weight
+                ),
+                "normalized_by_threshold": True,
+            },
+        }
+    return contract
 
 
 def student_environment_contract(cfg: Any) -> dict[str, Any]:
@@ -220,6 +331,79 @@ def student_environment_contract(cfg: Any) -> dict[str, Any]:
             "gelsight_reference": "first_post_reset_frame_per_environment",
         }
     )
+    if str(cfg.rma_task_id) == GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK:
+        contract["visual_domain_randomization"] = {
+            "full_strength_from_first_step": not bool(cfg.dr_curriculum_enabled),
+            "camera_pose": {
+                "enabled": bool(cfg.camera_pose_randomization_enabled),
+                "position_delta_max_m": [
+                    float(value) for value in cfg.camera_position_delta_max_m
+                ],
+                "rotation_delta_max_deg": [
+                    float(value) for value in cfg.camera_rotation_delta_max_deg
+                ],
+            },
+            "camera_intrinsic_warp": {
+                "enabled": bool(cfg.camera_intrinsic_warp_enabled),
+                "focal_scale_range": [
+                    float(value) for value in cfg.camera_focal_scale_range
+                ],
+                "principal_point_shift_max_px": [
+                    float(value) for value in cfg.camera_principal_point_shift_max_px
+                ],
+            },
+            "wrist_rgb": {
+                "enabled": bool(cfg.wrist_visual_randomization_enabled),
+                "brightness_enabled": bool(cfg.wrist_brightness_randomization_enabled),
+                "brightness_range": [float(value) for value in cfg.wrist_brightness_range],
+                "gamma_enabled": bool(cfg.wrist_gamma_randomization_enabled),
+                "gamma_range": [float(value) for value in cfg.wrist_gamma_range],
+                "contrast_enabled": bool(cfg.wrist_contrast_randomization_enabled),
+                "contrast_range": [float(value) for value in cfg.wrist_contrast_range],
+                "saturation_enabled": bool(cfg.wrist_saturation_randomization_enabled),
+                "saturation_range": [float(value) for value in cfg.wrist_saturation_range],
+                "hue_enabled": bool(cfg.wrist_hue_randomization_enabled),
+                "hue_max_deg": float(cfg.wrist_hue_max_deg),
+                "white_balance_enabled": bool(
+                    cfg.wrist_white_balance_randomization_enabled
+                ),
+                "white_balance_shift_max": float(cfg.wrist_white_balance_shift_max),
+                "blur_enabled": bool(cfg.wrist_blur_randomization_enabled),
+                "blur_probability": float(cfg.wrist_blur_probability),
+                "blur_kernel_sizes": [int(value) for value in cfg.wrist_blur_kernel_sizes],
+                "gaussian_noise_enabled": bool(
+                    cfg.wrist_gaussian_noise_randomization_enabled
+                ),
+                "gaussian_noise_std_range": [
+                    float(value) for value in cfg.wrist_gaussian_noise_std_range
+                ],
+            },
+            "dome_light": {
+                "enabled": bool(cfg.light_randomization_enabled),
+                "nominal_intensity": float(cfg.light_nominal_intensity),
+                "nominal_color_rgb": [float(value) for value in cfg.light_nominal_color],
+                "intensity_range": [float(value) for value in cfg.light_intensity_range],
+                "nominal_color_temperature": float(
+                    cfg.light_nominal_color_temperature
+                ),
+                "color_temperature_range": [
+                    float(value) for value in cfg.light_color_temperature_range
+                ],
+            },
+            "materials": {
+                "ground_color_enabled": bool(cfg.ground_color_randomization_enabled),
+                "plate_color_enabled": bool(cfg.plate_color_randomization_enabled),
+                "plate_color_center": [float(value) for value in cfg.plate_color_center],
+                "plate_color_min": [float(value) for value in cfg.plate_color_min],
+                "plate_color_max": [float(value) for value in cfg.plate_color_max],
+                "backdrop_color_enabled": bool(cfg.backdrop_color_randomization_enabled),
+                "backdrop_color_center": [
+                    float(value) for value in cfg.backdrop_color_center
+                ],
+                "backdrop_color_min": [float(value) for value in cfg.backdrop_color_min],
+                "backdrop_color_max": [float(value) for value in cfg.backdrop_color_max],
+            },
+        }
     return contract
 
 
@@ -249,6 +433,9 @@ def student_input_contract() -> dict[str, Any]:
 
 
 def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Mapping[str, Any]) -> Path:
+    task = str(base_env.cfg.rma_task_id)
+    if task not in GELSIGHT_X040_TEACHER_TASKS:
+        raise RuntimeError(f"Unsupported GelSight X040 Teacher task: {task}")
     params = Path(params_dir)
     hashes = {}
     for name in ("agent.yaml", "env.yaml"):
@@ -259,7 +446,7 @@ def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Map
     manifest = {
         "kind": TEACHER_KIND,
         "version": TEACHER_MANIFEST_VERSION,
-        "task": GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
+        "task": task,
         "model_version": RMA_MODEL_VERSION,
         "actor_inputs": {
             "proprio_obs": 15,
@@ -289,8 +476,11 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("kind") != TEACHER_KIND or manifest.get("version") != TEACHER_MANIFEST_VERSION:
         raise RuntimeError("Unsupported GelSight X040 DR Teacher manifest")
-    if manifest.get("task") != GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
+    if manifest.get("task") not in GELSIGHT_X040_TEACHER_TASKS:
         raise RuntimeError("GelSight X040 DR Teacher task mismatch")
+    _validate_environment_contract_for_task(
+        str(manifest["task"]), manifest.get("environment_contract"), student=False
+    )
     if manifest.get("model_version") != RMA_MODEL_VERSION:
         raise RuntimeError("GelSight X040 DR Teacher model mismatch")
     if manifest.get("actor_contract") != RMAGelSightActorCore().contract():
@@ -308,6 +498,12 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
 
 
 def validate_live_teacher_contract(cfg: Any, manifest: Mapping[str, Any]) -> None:
+    live_task = str(cfg.rma_task_id)
+    expected_teacher_task = GELSIGHT_X040_STUDENT_TO_TEACHER_TASK.get(
+        live_task, live_task
+    )
+    if manifest.get("task") != expected_teacher_task:
+        raise RuntimeError("Live GelSight X040 task is not paired with this Teacher")
     if manifest.get("environment_contract") != teacher_environment_contract(cfg):
         raise RuntimeError("Live GelSight X040 DR environment differs from Teacher contract")
 
@@ -331,6 +527,7 @@ def infer_teacher_checkpoint_policy_step(checkpoint: str | Path) -> int:
 
 def make_student_payload(
     *,
+    student_task: str = GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
     model: RMAGelSightX040ThreeFrameStudent,
     optimizer: torch.optim.Optimizer,
     global_step: int,
@@ -343,6 +540,18 @@ def make_student_payload(
     loss: Mapping[str, Any],
     optimizer_config: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if student_task not in GELSIGHT_X040_STUDENT_TASKS:
+        raise RuntimeError(f"Unsupported GelSight X040 Student task: {student_task}")
+    if teacher_manifest.get("task") != GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[student_task]:
+        raise RuntimeError("GelSight X040 Student and Teacher tasks are not paired")
+    _validate_environment_contract_for_task(
+        str(teacher_manifest["task"]),
+        teacher_manifest.get("environment_contract"),
+        student=False,
+    )
+    _validate_environment_contract_for_task(
+        student_task, student_env_contract, student=True
+    )
     state = model.state_dict()
     component_hashes = {}
     for prefix, name in (
@@ -358,7 +567,7 @@ def make_student_payload(
         "kind": STUDENT_KIND,
         "version": STUDENT_CHECKPOINT_VERSION,
         "model_version": GELSIGHT_X040_THREE_FRAME_MODEL_VERSION,
-        "task": GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        "task": student_task,
         "global_step": int(global_step),
         "model": state,
         "optimizer": optimizer.state_dict(),
@@ -408,8 +617,24 @@ def load_student_checkpoint(
     )
     if payload.get("model_version") != expected_model_version:
         raise RuntimeError("GelSight X040 DR Student model version mismatch")
-    if payload.get("task") != GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK:
+    task = payload.get("task")
+    if task not in GELSIGHT_X040_STUDENT_TASKS:
         raise RuntimeError("GelSight X040 DR Student task mismatch")
+    teacher_manifest = payload.get("teacher_manifest")
+    if (
+        not isinstance(teacher_manifest, Mapping)
+        or teacher_manifest.get("task")
+        != GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[task]
+    ):
+        raise RuntimeError("GelSight X040 Student embedded Teacher task mismatch")
+    _validate_environment_contract_for_task(
+        str(teacher_manifest["task"]),
+        teacher_manifest.get("environment_contract"),
+        student=False,
+    )
+    _validate_environment_contract_for_task(
+        str(task), payload.get("student_environment_contract"), student=True
+    )
     if payload.get("student_input_contract") != student_input_contract():
         raise RuntimeError("GelSight X040 DR Student input contract mismatch")
     if payload.get("student_model_contract") != gelsight_x040_three_frame_model_contract(
@@ -472,6 +697,11 @@ def load_student_model_state(model: torch.nn.Module, state_dict: Mapping[str, to
 __all__ = (
     "GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK",
     "GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK",
+    "GELSIGHT_X040_PROGRESS_TEACHER_TASK",
+    "GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK",
+    "GELSIGHT_X040_STUDENT_TASKS",
+    "GELSIGHT_X040_STUDENT_TO_TEACHER_TASK",
+    "GELSIGHT_X040_TEACHER_TASKS",
     "LEGACY_STUDENT_CHECKPOINT_VERSION",
     "PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION",
     "STUDENT_CHECKPOINT_VERSION",

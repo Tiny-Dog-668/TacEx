@@ -107,6 +107,7 @@ def main() -> None:
         {
             "kind": "tacex_rma_gelsight_x040_dr_three_frame_student_torchscript",
             "version": 1,
+            "task": payload["task"],
             "student_checkpoint": str(checkpoint),
             "student_checkpoint_sha256": sha256_file(checkpoint),
             "torchscript_sha256": sha256_file(output),

@@ -280,11 +280,11 @@ def run(args: argparse.Namespace) -> None:
 
     import tacex_tasks  # noqa: F401
     from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
-        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
         load_student_checkpoint,
         load_student_model_state,
         make_student_model_for_checkpoint,
         sha256_file,
+        student_environment_contract,
     )
 
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
@@ -295,12 +295,15 @@ def run(args: argparse.Namespace) -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=False)
     payload = load_student_checkpoint(checkpoint, device="cpu")
+    task = str(payload["task"])
     env_cfg = parse_env_cfg(
-        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        task,
         device=args.device,
         num_envs=args.num_envs,
     )
-    env = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK, cfg=env_cfg)
+    if payload.get("student_environment_contract") != student_environment_contract(env_cfg):
+        raise RuntimeError("Live Student environment contract differs from checkpoint")
+    env = gym.make(task, cfg=env_cfg)
     records: dict[str, list[Any]] = {
         key: []
         for key in (
@@ -408,7 +411,7 @@ def run(args: argparse.Namespace) -> None:
         "num_envs": int(args.num_envs),
         "steps": int(args.steps),
         "side_samples": int(arrays["contact_state"].size),
-        "task": GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        "task": task,
         "taxim_contact_mask_definition": "shifted_height_map_mm < 0",
         "rgb_delta_definition": "abs(current_uint8-reference_uint8)/255",
     }

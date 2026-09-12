@@ -83,7 +83,8 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts impo
     GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
-    GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+    GELSIGHT_X040_STUDENT_TASKS,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import (
     RMAGelSightPulledDrawerActorCore,
@@ -166,7 +167,7 @@ def _optimizer_contract() -> dict[str, object]:
 
 def main() -> None:
     if args.task not in {
-        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        *GELSIGHT_X040_STUDENT_TASKS,
         GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
     }:
         raise ValueError("This trainer only supports the paired X040 or Pulled-Drawer Student task")
@@ -212,6 +213,8 @@ def main() -> None:
             device="cpu",
             expected_teacher_checkpoint=teacher_checkpoint,
         )
+        if resume_payload.get("task") != args.task:
+            raise RuntimeError("Resume checkpoint task differs from --task")
         if resume_payload.get("version") != artifacts.STUDENT_CHECKPOINT_VERSION:
             raise RuntimeError(
                 "Older GelSight Student checkpoints cannot resume the current visual contract"
@@ -233,11 +236,12 @@ def main() -> None:
     env = gym.make(args.task, cfg=env_cfg)
     base_env = env.unwrapped
     device = torch.device(base_env.device)
-    if resume_payload is not None and drawer_profile:
+    if resume_payload is not None:
         if resume_payload.get("student_environment_contract") != artifacts.student_environment_contract(
             env_cfg
         ):
-            raise RuntimeError("Resume Pulled-Drawer environment contract mismatch")
+            raise RuntimeError("Resume Student environment contract mismatch")
+    if resume_payload is not None and drawer_profile:
         if resume_payload.get("geometry_instance_sha256") != artifacts.geometry_instance_sha256(
             base_env
         ):
@@ -270,12 +274,20 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
-    default_log_root = (
-        "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_student"
-        if drawer_profile
-        else "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_"
-        "student_x040_normalized_heatmap_init"
-    )
+    if drawer_profile:
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_student"
+        )
+    elif args.task == GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK:
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_progress_"
+            "three_frame_student"
+        )
+    else:
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_x040_dr_three_frame_"
+            "student_x040_normalized_heatmap_init"
+        )
     run_dir = (
         Path(args.log_dir).expanduser().resolve()
         if args.log_dir
@@ -427,6 +439,8 @@ def main() -> None:
                     payload_kwargs["geometry_instance_hash"] = artifacts.geometry_instance_sha256(
                         base_env
                     )
+                else:
+                    payload_kwargs["student_task"] = args.task
                 payload = artifacts.make_student_payload(**payload_kwargs)
                 checkpoint = run_dir / "checkpoints" / f"student_{step:07d}.pt"
                 _atomic_torch_save(payload, checkpoint)

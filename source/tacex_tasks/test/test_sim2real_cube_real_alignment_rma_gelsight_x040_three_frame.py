@@ -28,12 +28,16 @@ from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
     GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+    GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+    GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+    GELSIGHT_X040_STUDENT_TO_TEACHER_TASK,
     LEGACY_STUDENT_CHECKPOINT_VERSION,
     PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_KIND,
     TEACHER_MANIFEST_VERSION,
     load_student_checkpoint,
+    make_student_payload,
     student_environment_contract,
     student_input_contract,
     teacher_environment_contract,
@@ -43,12 +47,16 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models impo
     RMAGelSightX040ThreeFrameStudent,
 )
 from tacex_tasks.sim2real_gelsight_rma.gelsight_geometry import geometry_contract
+from tacex_tasks.sim2real_grasp.rma_xy_artifacts import (
+    RMA_XY_STUDENT_HEATMAP_DR_TASK,
+)
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
     _GelSightX040SafetyMixin,
     linear_collision_threshold,
 )
-
-
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x040_progress_env import (
+    _GelSightX040ProgressRewardMixin,
+)
 @pytest.fixture(scope="module", autouse=True)
 def close_app():
     yield
@@ -153,8 +161,8 @@ def test_task_registration_and_shared_x040_contract():
     assert student.scene.replicate_physics is False
     assert tuple(student.observation_space["wrist_rgb_history"].shape) == (3, 224, 224, 3)
     assert tuple(student.observation_space["gsmini_left_reference_rgb"].shape) == (96, 128, 3)
-    assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
-    assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)
+    assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(100.0)
+    assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(10.0)
     assert teacher.illegal_collision_terminates_episode is False
     assert teacher_contract["illegal_collision_terminates_episode"] is False
     assert "illegal_collision_termination_threshold_n" not in teacher_contract
@@ -184,7 +192,12 @@ def test_force_collision_does_not_terminate_x040_episode():
     dummy = SimpleNamespace(
         episode_length_buf=torch.tensor([149, 0]),
         max_episode_length=150,
-        cfg=SimpleNamespace(success_hold_steps=5, ground_height=0.0),
+        cfg=SimpleNamespace(
+            success_hold_steps=5,
+            ground_height=0.0,
+            rma_success_terminates_episode=False,
+            illegal_collision_terminates_episode=False,
+        ),
         _cube=SimpleNamespace(
             data=SimpleNamespace(
                 root_pos_w=torch.tensor([[0.4, 0.0, 0.03], [0.4, 0.0, 0.03]]),
@@ -222,6 +235,245 @@ def test_force_collision_does_not_terminate_x040_episode():
 
     assert terminated.tolist() == [False, True]
     assert truncated.tolist() == [True, False]
+
+
+def test_x040_progress_pair_combines_0823_distribution_with_0911_rewards():
+    assert gym.spec(GELSIGHT_X040_PROGRESS_TEACHER_TASK) is not None
+    assert gym.spec(GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK) is not None
+    teacher = parse_env_cfg(
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK, device="cuda:0", num_envs=8
+    )
+    student = parse_env_cfg(
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+    legacy_student = parse_env_cfg(
+        GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+
+    assert GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK
+    ] == GELSIGHT_X040_PROGRESS_TEACHER_TASK
+    assert teacher_environment_contract(teacher) == teacher_environment_contract(student)
+    assert tuple(student.cube.init_state.pos[:2]) == pytest.approx((0.40, 0.0))
+    assert student.cube_x_pos_range == pytest.approx(0.08)
+    assert student.cube_y_pos_range == pytest.approx(0.10)
+    assert student.cube_position_curriculum_enabled is False
+    assert student.arm_joint_reset_noise_std_rad == pytest.approx(0.01)
+    assert student.arm_joint_reset_noise_clip_rad == pytest.approx(0.03)
+    assert student.robot.spawn.usd_path == GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD
+    assert student.ground.spawn.visible is True
+    assert tuple(student.plate.spawn.size) == pytest.approx((3.5, 3.5, 0.001))
+    assert tuple(student.backdrop.spawn.size) == pytest.approx((0.02, 3.5, 2.5))
+
+    dr_fields = (
+        "dr_curriculum_enabled",
+        "camera_pose_randomization_enabled",
+        "camera_position_delta_max_m",
+        "camera_rotation_delta_max_deg",
+        "camera_intrinsic_warp_enabled",
+        "camera_focal_scale_range",
+        "camera_principal_point_shift_max_px",
+        "wrist_visual_randomization_enabled",
+        "wrist_brightness_randomization_enabled",
+        "wrist_brightness_range",
+        "wrist_gamma_randomization_enabled",
+        "wrist_gamma_range",
+        "wrist_contrast_randomization_enabled",
+        "wrist_contrast_range",
+        "wrist_saturation_randomization_enabled",
+        "wrist_saturation_range",
+        "wrist_hue_randomization_enabled",
+        "wrist_hue_max_deg",
+        "wrist_white_balance_randomization_enabled",
+        "wrist_white_balance_shift_max",
+        "wrist_blur_randomization_enabled",
+        "wrist_blur_probability",
+        "wrist_blur_kernel_sizes",
+        "wrist_gaussian_noise_randomization_enabled",
+        "wrist_gaussian_noise_std_range",
+        "light_randomization_enabled",
+        "light_nominal_intensity",
+        "light_nominal_color",
+        "light_intensity_range",
+        "light_nominal_color_temperature",
+        "light_color_temperature_range",
+        "ground_color_randomization_enabled",
+        "plate_color_randomization_enabled",
+        "plate_color_center",
+        "plate_color_min",
+        "plate_color_max",
+        "backdrop_color_randomization_enabled",
+        "backdrop_color_center",
+        "backdrop_color_min",
+        "backdrop_color_max",
+    )
+    for field in dr_fields:
+        assert getattr(student, field) == getattr(legacy_student, field)
+    assert tuple(student.observation_space["wrist_rgb_history"].shape) == (
+        3,
+        224,
+        224,
+        3,
+    )
+
+    contract = teacher_environment_contract(teacher)
+    student_contract = student_environment_contract(student)
+    assert contract["profile"] == "rma_gelsight_x040_progress_three_frame_v5"
+    assert teacher.reach_reward_mode == "absolute_normalized_proximity_per_step"
+    assert teacher.reach_weight == pytest.approx(2.5)
+    assert contract["progress_reward"]["reach"] == (
+        "absolute_normalized_proximity_per_step"
+    )
+    assert contract["progress_reward"]["reach_weight"] == pytest.approx(2.5)
+    assert contract["progress_reward"]["lift"] == (
+        "absolute_normalized_progress_per_step"
+    )
+    assert contract["progress_reward"]["lift_weight"] == pytest.approx(2.5)
+    assert contract["progress_reward"]["reach_holding_state_repeats_reward"] is True
+    assert contract["progress_reward"]["lift_holding_state_repeats_reward"] is True
+    assert contract["progress_reward"]["contact_holding_state_repeats_reward"] is False
+    assert "visual_domain_randomization" in student_contract
+    assert student_contract["visual_domain_randomization"][
+        "full_strength_from_first_step"
+    ] is True
+    assert "visual_domain_randomization" not in student_environment_contract(
+        legacy_student
+    )
+    assert teacher.rma_success_terminates_episode is True
+    assert teacher.success_lift_delta == pytest.approx(0.035)
+    assert teacher.success_hold_steps == 5
+    assert teacher.success_reward_weight == pytest.approx(1000.0)
+    assert teacher.rma_contact_force_threshold_n == pytest.approx(2.0)
+    assert teacher.rma_excess_contact_force_threshold_n == pytest.approx(15.0)
+    assert teacher.rma_drop_penalty == pytest.approx(-10.0)
+    assert teacher.illegal_collision_penalty_threshold_start_n == pytest.approx(20.0)
+    assert teacher.illegal_collision_penalty_threshold_end_n == pytest.approx(5.0)
+    assert contract["success_terminates_episode"] is True
+    assert contract["progress_reward"]["action_rate_penalty_weight"] == pytest.approx(0.05)
+    assert contract["progress_reward"]["action_magnitude_penalty_weight"] == pytest.approx(0.05)
+
+
+def test_x040_progress_uses_absolute_reach_and_lift():
+    dummy = SimpleNamespace(cfg=SimpleNamespace(lift_reward_requires_upright=False))
+    proximity = torch.tensor([0.05, 0.40, 0.95])
+    lift_progress = torch.tensor([0.0, 0.50, 1.0])
+
+    reach_reward = _GelSightX040ProgressRewardMixin._shape_reach_reward(
+        dummy, proximity
+    )
+    lift_reward = _GelSightX040ProgressRewardMixin._shape_lift_reward(
+        dummy, lift_progress, torch.ones(3, dtype=torch.bool)
+    )
+
+    torch.testing.assert_close(reach_reward, proximity)
+    torch.testing.assert_close(lift_reward, lift_progress)
+    torch.testing.assert_close(dummy._current_reach_proximity, proximity)
+    torch.testing.assert_close(dummy._current_lift_progress, lift_progress)
+
+
+def test_x040_progress_success_is_terminal_without_changing_legacy_default():
+    dummy = SimpleNamespace(
+        episode_length_buf=torch.tensor([0]),
+        max_episode_length=150,
+        cfg=SimpleNamespace(
+            success_hold_steps=5,
+            ground_height=0.0,
+            rma_success_terminates_episode=True,
+            illegal_collision_terminates_episode=False,
+        ),
+        _cube=SimpleNamespace(
+            data=SimpleNamespace(
+                root_pos_w=torch.tensor([[0.4, 0.0, 0.061]]),
+                root_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+            )
+        ),
+        _robot=SimpleNamespace(
+            data=SimpleNamespace(
+                body_link_pos_w=torch.tensor([[[0.0, 0.0, 0.10]]])
+            )
+        ),
+        _success_hold_counter=torch.tensor([4]),
+        _rma_episode_success_ever=torch.zeros(1, dtype=torch.bool),
+    )
+    dummy._compute_cube_upright_cos = lambda quat: torch.ones(quat.shape[0])
+    dummy._compute_cube_lift_terms = lambda height, upright: (
+        torch.ones_like(height),
+        torch.ones_like(height),
+        torch.ones_like(height, dtype=torch.bool),
+    )
+    dummy._record_episode_outcomes_for_step = lambda **kwargs: None
+    dummy._publish_episode_success_statistics = lambda: None
+
+    terminated, truncated = _GelSightX040SafetyMixin._get_dones(dummy)
+
+    assert terminated.tolist() == [True]
+    assert truncated.tolist() == [False]
+
+
+def test_x040_progress_student_checkpoint_round_trip_and_task_isolation(tmp_path):
+    teacher_cfg = parse_env_cfg(
+        GELSIGHT_X040_PROGRESS_TEACHER_TASK, device="cuda:0", num_envs=8
+    )
+    student_cfg = parse_env_cfg(
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        device="cuda:0",
+        num_envs=8,
+    )
+    model = RMAGelSightX040ThreeFrameStudent(pretrained_backbone=False)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3.0e-4)
+    teacher_checkpoint = tmp_path / "teacher.pt"
+    encoder_checkpoint = tmp_path / "encoder.pt"
+    teacher_checkpoint.write_bytes(b"teacher")
+    encoder_checkpoint.write_bytes(b"encoder")
+    teacher_manifest = {
+        "task": GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+        "environment_contract": teacher_environment_contract(teacher_cfg),
+    }
+    payload = make_student_payload(
+        student_task=GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        model=model,
+        optimizer=optimizer,
+        global_step=1,
+        teacher_checkpoint=teacher_checkpoint,
+        teacher_manifest=teacher_manifest,
+        teacher_actor_state_dict={"probe": torch.zeros(1)},
+        encoder_init_checkpoint=encoder_checkpoint,
+        encoder_init_payload={
+            "task": RMA_XY_STUDENT_HEATMAP_DR_TASK,
+            "vision_encoder_state_dict_sha256": "encoder-hash",
+        },
+        student_env_contract=student_environment_contract(student_cfg),
+        loss={"action": "mse"},
+        optimizer_config={"class": "AdamW"},
+    )
+    checkpoint = tmp_path / "student.pt"
+    torch.save(payload, checkpoint)
+
+    loaded = load_student_checkpoint(checkpoint)
+
+    assert loaded["task"] == GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK
+    with pytest.raises(RuntimeError, match="not paired"):
+        make_student_payload(
+            student_task=GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+            model=model,
+            optimizer=optimizer,
+            global_step=1,
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_manifest=teacher_manifest,
+            teacher_actor_state_dict={"probe": torch.zeros(1)},
+            encoder_init_checkpoint=encoder_checkpoint,
+            encoder_init_payload={
+                "task": RMA_XY_STUDENT_HEATMAP_DR_TASK,
+                "vision_encoder_state_dict_sha256": "encoder-hash",
+            },
+            student_env_contract=student_environment_contract(student_cfg),
+            loss={"action": "mse"},
+            optimizer_config={"class": "AdamW"},
+        )
 
 
 def test_three_frame_model_outputs_and_has_no_heatmap_head():
@@ -348,9 +600,16 @@ def test_pre_21mm_v7_asset_checkpoint_is_rejected(tmp_path):
         load_student_checkpoint(checkpoint)
 
 
-def test_student_eight_env_visual_alignment_smoke():
-    student_cfg = parse_env_cfg(
+@pytest.mark.parametrize(
+    "student_task",
+    [
         GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+    ],
+)
+def test_student_eight_env_visual_alignment_smoke(student_task: str):
+    student_cfg = parse_env_cfg(
+        student_task,
         device="cuda:0",
         num_envs=8,
     )
@@ -361,7 +620,7 @@ def test_student_eight_env_visual_alignment_smoke():
         dtype=torch.float32,
     )
 
-    student = gym.make(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK, cfg=student_cfg)
+    student = gym.make(student_task, cfg=student_cfg)
     try:
         student_obs, _ = student.reset()
         student_base = student.unwrapped
