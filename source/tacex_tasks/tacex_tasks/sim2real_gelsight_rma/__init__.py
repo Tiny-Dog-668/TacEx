@@ -70,6 +70,14 @@ from .sim2real_cube_real_alignment_gelsight_pulled_drawer_progress_binary_tactil
     Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressTeacherEnv,
     Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressTeacherEnvCfg,
 )
+from .sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileBinaryStudentEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileBinaryStudentEnvCfg,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileTeacherEnv,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileTeacherEnvCfg,
+)
 
 
 RMA_GELSIGHT_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
@@ -253,6 +261,33 @@ gym.register(
         "env_cfg_entry_point": (
             Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressBinaryTactileThreeFrameStudentDREnvCfg
         ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileTeacherEnvCfg,
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:skrl_ppo_cube_real_alignment_gelsight_pulled_drawer_four_tactile_progress_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env:"
+        "Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileBinaryStudentEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressFourTactileBinaryStudentEnvCfg,
     },
 )
 

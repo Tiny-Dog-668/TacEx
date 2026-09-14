@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
+    GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD,
+)
 
 from .rma_gelsight_pulled_drawer_models import (
     PULLED_DRAWER_STUDENT_MODEL_VERSION,
@@ -23,6 +26,17 @@ from .rma_gelsight_pulled_drawer_binary_tactile_models import (
     PULLED_DRAWER_BINARY_TACTILE_STUDENT_MODEL_VERSION,
     RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent,
     pulled_drawer_binary_tactile_student_model_contract,
+)
+from .rma_gelsight_pulled_drawer_four_tactile_models import (
+    FOUR_TACTILE_STUDENT_MODEL_VERSION,
+    FOUR_TACTILE_TEACHER_MODEL_VERSION,
+    RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent,
+    RMAGelSightPulledDrawerFourTactileActorCore,
+    four_tactile_student_model_contract,
+)
+from .sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
 )
 from .sim2real_cube_real_alignment_gelsight_rma_env import (
     gelsight_compliant_grasp_contract,
@@ -58,11 +72,16 @@ PROGRESS_BINARY_STUDENT_KIND = (
     "tacex_rma_gelsight_pulled_drawer_progress_binary_tactile_three_frame_student"
 )
 PROGRESS_BINARY_STUDENT_CHECKPOINT_VERSION = 2
+FOUR_TACTILE_TEACHER_KIND = "tacex_rma_gelsight_pulled_drawer_progress_four_tactile_teacher"
+FOUR_TACTILE_TEACHER_MANIFEST_VERSION = 2
+FOUR_TACTILE_STUDENT_KIND = "tacex_rma_gelsight_pulled_drawer_progress_four_binary_tactile_three_frame_student"
+FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION = 2
 
 GELSIGHT_PULLED_DRAWER_TEACHER_TASKS = frozenset(
     {
         GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
     }
 )
 GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK = {
@@ -72,6 +91,9 @@ GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK = {
     GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK: (
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK
     ),
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK: (
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    ),
 }
 GELSIGHT_PULLED_DRAWER_STUDENT_TASKS = frozenset(
     GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK
@@ -80,8 +102,8 @@ GELSIGHT_PULLED_DRAWER_STUDENT_TASKS = frozenset(
 
 def _is_binary_student_task(task: str) -> bool:
     return (
-        task
-        == GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+        task in {GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+                 GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
     )
 
 
@@ -90,6 +112,8 @@ def _teacher_artifact_identity(task: str) -> tuple[str, int]:
         return TEACHER_KIND, TEACHER_MANIFEST_VERSION
     if task == GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK:
         return PROGRESS_TEACHER_KIND, PROGRESS_TEACHER_MANIFEST_VERSION
+    if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK:
+        return FOUR_TACTILE_TEACHER_KIND, FOUR_TACTILE_TEACHER_MANIFEST_VERSION
     raise RuntimeError(f"Unsupported Pulled-Drawer Teacher task: {task}")
 
 
@@ -97,6 +121,8 @@ def _student_artifact_identity(task: str) -> tuple[str, int, int]:
     if task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK:
         return STUDENT_KIND, STUDENT_CHECKPOINT_VERSION, PULLED_DRAWER_STUDENT_MODEL_VERSION
     if _is_binary_student_task(task):
+        if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+            return FOUR_TACTILE_STUDENT_KIND, FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION, FOUR_TACTILE_STUDENT_MODEL_VERSION
         return (
             PROGRESS_BINARY_STUDENT_KIND,
             PROGRESS_BINARY_STUDENT_CHECKPOINT_VERSION,
@@ -117,10 +143,16 @@ def student_input_contract(
         contract["tactile_network_input"] = [1, 96, 128]
         contract["tactile_binary_threshold_u8"] = 5.0
         contract["tactile_binary_values"] = [0.0, 1.0]
+    if student_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        contract["input_order"] = four_tactile_student_model_contract()["runtime_input_order"]
+        contract["runtime_output"] = four_tactile_student_model_contract()["runtime_output"]
+        contract["contact_order"] = four_tactile_student_model_contract()["contact_order"]
     return contract
 
 
 def _student_model_contract(task: str) -> dict[str, object]:
+    if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        return four_tactile_student_model_contract()
     if _is_binary_student_task(task):
         return pulled_drawer_binary_tactile_student_model_contract()
     if task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK:
@@ -133,12 +165,17 @@ def _validate_environment_contract_for_task(
 ) -> None:
     if not isinstance(contract, Mapping):
         raise RuntimeError("Pulled-Drawer environment contract is missing")
+    four_tactile = task in {GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+                            GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
     progress = task in {
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }
     expected_profile = (
-        "rma_gelsight_pulled_drawer_progress_v2"
+        ("rma_gelsight_pulled_drawer_progress_four_tactile_v2" if four_tactile
+         else "rma_gelsight_pulled_drawer_progress_v2")
         if progress
         else "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11"
     )
@@ -154,7 +191,7 @@ def _validate_environment_contract_for_task(
             "proprio_obs": 15,
             "action_history": 4,
             "rma_cube_pos": 3,
-            "rma_contact_state": 2,
+            "rma_contact_state": 4 if four_tactile else 2,
         }
     ):
         raise RuntimeError("Pulled-Drawer geometry/action/observation contract mismatch")
@@ -186,11 +223,48 @@ def _validate_environment_contract_for_task(
             or reward.get("success_reward_weight") != 1000.0
             or reward.get("action_magnitude_penalty_weight") != 0.05
             or not isinstance(excess_force, Mapping)
-            or excess_force.get("mode") != "quadratic_normalized_max_side_excess"
+            or excess_force.get("mode") != (
+                "quadratic_normalized_max_four_tactile_excess" if four_tactile
+                else "quadratic_normalized_max_side_excess"
+            )
             or excess_force.get("threshold_n") != 15.0
             or excess_force.get("quadratic_weight") != 5.0
         ):
             raise RuntimeError("Pulled-Drawer Progress reward/done contract mismatch")
+        if four_tactile and (
+            reward.get("contact_order")
+            != ["left_inner", "right_inner", "left_down", "right_down"]
+            or reward.get("contact_per_sensor_weights") != [1.5, 1.5, 1.0, 1.0]
+            or len(contract.get("gelpad_contact_filters", [])) != 4
+        ):
+            raise RuntimeError("Pulled-Drawer four-tactile contact contract mismatch")
+        clearance = contract.get("four_tactile_clearance")
+        if four_tactile and (
+            not isinstance(clearance, Mapping)
+            or clearance.get("source")
+            != "minimum_world_z_of_down_gelpad_face_corners"
+            or clearance.get("lowest_point_max_hand_z_m") != 0.18331
+            or clearance.get("world_reduction") != "minimum_z"
+            or len(clearance.get("points_hand_m", [])) != 8
+        ):
+            raise RuntimeError("Pulled-Drawer four-tactile clearance contract mismatch")
+        down_collision = contract.get("four_tactile_down_collision")
+        if four_tactile and down_collision != {
+            "contact_components": ["left_down", "right_down"],
+            "threshold_n": {
+                "schedule": "linear_clamped_global_policy_step",
+                "start_n": 50.0,
+                "end_n": 10.0,
+                "start_step": 0,
+                "end_step": 100_000,
+                "step_offset_source": "illegal_collision_curriculum_step_offset",
+            },
+            "comparison": "strictly_greater_than",
+            "penalty_per_policy_step": -10.0,
+            "stacks_with_quadratic_excess_force_penalty": True,
+            "terminates_episode": False,
+        }:
+            raise RuntimeError("Pulled-Drawer downward collision contract mismatch")
     elif "progress_reward" in contract:
         raise RuntimeError("Legacy Pulled-Drawer contract contains Progress rewards")
     if student:
@@ -235,13 +309,18 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     task = str(cfg.rma_task_id)
     if task not in GELSIGHT_PULLED_DRAWER_TEACHER_TASKS | GELSIGHT_PULLED_DRAWER_STUDENT_TASKS:
         raise RuntimeError(f"Unsupported Pulled-Drawer task: {task}")
+    four_tactile = task in {GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+                            GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
     contract = {
         "profile": (
-            "rma_gelsight_pulled_drawer_progress_v2"
+            ("rma_gelsight_pulled_drawer_progress_four_tactile_v2" if four_tactile
+             else "rma_gelsight_pulled_drawer_progress_v2")
             if task
             in {
                 GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
                 GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+                GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+                GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
             }
             else "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11"
         ),
@@ -268,7 +347,7 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             "proprio_obs": 15,
             "action_history": 4,
             "rma_cube_pos": 3,
-            "rma_contact_state": 2,
+            "rma_contact_state": 4 if four_tactile else 2,
         },
         "position_frame": str(cfg.rma_position_frame),
         "cube_reset_half_range_xy_m": [
@@ -323,6 +402,8 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     if task in {
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }:
         contract["illegal_collision_terminates_episode"] = bool(
             cfg.illegal_collision_terminates_episode
@@ -359,6 +440,45 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
                 "normalized_by_threshold": True,
             },
         }
+        if four_tactile:
+            contract["compliant_grasp"]["contact_threshold_comparison"] = "greater_than_or_equal"
+            contract["progress_reward"]["contact_order"] = list(cfg.rma_contact_order)
+            contract["progress_reward"]["contact_per_sensor_weights"] = list(cfg.rma_contact_reward_weights)
+            contract["four_tactile_clearance"] = {
+                "source": str(cfg.four_tactile_clearance_source),
+                "points_hand_m": [list(point) for point in cfg.four_tactile_clearance_points_hand_m],
+                "lowest_point_max_hand_z_m": float(cfg.gelsight_fingertip_bottom_offset_hand_m[2]),
+                "world_reduction": "minimum_z",
+            }
+            contract["four_tactile_down_collision"] = {
+                "contact_components": ["left_down", "right_down"],
+                "threshold_n": {
+                    "schedule": str(
+                        cfg.four_tactile_down_collision_curriculum_schedule
+                    ),
+                    "start_n": float(
+                        cfg.four_tactile_down_collision_threshold_start_n
+                    ),
+                    "end_n": float(
+                        cfg.four_tactile_down_collision_threshold_end_n
+                    ),
+                    "start_step": int(
+                        cfg.four_tactile_down_collision_curriculum_start_step
+                    ),
+                    "end_step": int(
+                        cfg.four_tactile_down_collision_curriculum_end_step
+                    ),
+                    "step_offset_source": str(
+                        cfg.four_tactile_down_collision_curriculum_step_offset_source
+                    ),
+                },
+                "comparison": "strictly_greater_than",
+                "penalty_per_policy_step": float(cfg.four_tactile_down_collision_penalty),
+                "stacks_with_quadratic_excess_force_penalty": True,
+                "terminates_episode": bool(
+                    cfg.four_tactile_down_collision_terminates_episode
+                ),
+            }
     return contract
 
 
@@ -437,12 +557,15 @@ def write_teacher_manifest(
         if not path.is_file():
             raise FileNotFoundError(f"Missing Teacher run config: {path}")
         hashes[name] = sha256_file(path)
+    four_tactile = task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    actor = (RMAGelSightPulledDrawerFourTactileActorCore() if four_tactile
+             else RMAGelSightPulledDrawerActorCore())
     manifest = {
         "kind": kind,
         "version": version,
         "task": task,
-        "model_version": PULLED_DRAWER_TEACHER_MODEL_VERSION,
-        "actor_contract": RMAGelSightPulledDrawerActorCore().contract(),
+        "model_version": FOUR_TACTILE_TEACHER_MODEL_VERSION if four_tactile else PULLED_DRAWER_TEACHER_MODEL_VERSION,
+        "actor_contract": actor.contract(),
         "normalization": RMAGelSightPulledDrawerObservationNormalizer().contract(),
         "environment_contract": teacher_environment_contract(base_env.cfg),
         "geometry_instance_sha256": geometry_instance_sha256(base_env),
@@ -451,6 +574,16 @@ def write_teacher_manifest(
         "run_config_sha256": hashes,
         "trainer_timesteps": int(agent_cfg["trainer"]["timesteps"]),
     }
+    if four_tactile:
+        source_dir = Path(__file__).resolve().parent
+        source_files = {
+            "environment": source_dir / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py",
+            "models": source_dir / "rma_gelsight_pulled_drawer_four_tactile_models.py",
+            "asset": Path(GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD),
+        }
+        manifest["source_sha256"] = {
+            name: sha256_file(path) for name, path in source_files.items()
+        }
     output = params / MANIFEST_FILENAME
     _atomic_json_dump(manifest, output)
     return output
@@ -468,12 +601,27 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     kind, version = _teacher_artifact_identity(task)
     if manifest.get("kind") != kind or manifest.get("version") != version:
         raise RuntimeError("Unsupported Pulled-Drawer Teacher manifest")
-    if manifest.get("model_version") != PULLED_DRAWER_TEACHER_MODEL_VERSION:
+    four_tactile = task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    expected_model_version = FOUR_TACTILE_TEACHER_MODEL_VERSION if four_tactile else PULLED_DRAWER_TEACHER_MODEL_VERSION
+    expected_actor = (RMAGelSightPulledDrawerFourTactileActorCore() if four_tactile
+                      else RMAGelSightPulledDrawerActorCore())
+    if manifest.get("model_version") != expected_model_version:
         raise RuntimeError("Pulled-Drawer Teacher model mismatch")
-    if manifest.get("actor_contract") != RMAGelSightPulledDrawerActorCore().contract():
+    if manifest.get("actor_contract") != expected_actor.contract():
         raise RuntimeError("Pulled-Drawer Teacher Actor contract mismatch")
     if manifest.get("normalization") != RMAGelSightPulledDrawerObservationNormalizer().contract():
         raise RuntimeError("Pulled-Drawer Teacher normalization mismatch")
+    if four_tactile:
+        source_dir = Path(__file__).resolve().parent
+        expected_sources = {
+            "environment": source_dir / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py",
+            "models": source_dir / "rma_gelsight_pulled_drawer_four_tactile_models.py",
+            "asset": Path(GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD),
+        }
+        if manifest.get("source_sha256") != {
+            name: sha256_file(path) for name, path in expected_sources.items()
+        }:
+            raise RuntimeError("Pulled-Drawer four-tactile source hash mismatch")
     _validate_environment_contract_for_task(
         task, manifest.get("environment_contract"), student=False
     )
@@ -568,13 +716,18 @@ def make_student_payload(
     )
     state = model.state_dict()
     component_hashes = {}
-    for prefix, name in (
+    component_specs = [
         ("vision_encoder.", "vision_encoder"),
         ("temporal_fusion.", "temporal_fusion"),
-        ("tactile_encoder.", "tactile_encoder"),
         ("position_head.", "position_head"),
         ("action_head.", "action_head"),
-    ):
+    ]
+    if student_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        component_specs += [("inner_tactile_encoder.", "inner_tactile_encoder"),
+                            ("down_tactile_encoder.", "down_tactile_encoder")]
+    else:
+        component_specs += [("tactile_encoder.", "tactile_encoder")]
+    for prefix, name in component_specs:
         component = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
         component_hashes[f"{name}_state_dict_sha256"] = state_dict_sha256(component)
     return {
@@ -656,13 +809,18 @@ def load_student_checkpoint(
     state = payload.get("model")
     if not isinstance(state, Mapping):
         raise RuntimeError("Pulled-Drawer Student has no model state_dict")
-    for prefix, name in (
+    component_specs = [
         ("vision_encoder.", "vision_encoder"),
         ("temporal_fusion.", "temporal_fusion"),
-        ("tactile_encoder.", "tactile_encoder"),
         ("position_head.", "position_head"),
         ("action_head.", "action_head"),
-    ):
+    ]
+    if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        component_specs += [("inner_tactile_encoder.", "inner_tactile_encoder"),
+                            ("down_tactile_encoder.", "down_tactile_encoder")]
+    else:
+        component_specs += [("tactile_encoder.", "tactile_encoder")]
+    for prefix, name in component_specs:
         component = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
         if not component or payload.get(f"{name}_state_dict_sha256") != state_dict_sha256(component):
             raise RuntimeError(f"Pulled-Drawer Student component hash mismatch: {name}")
@@ -693,6 +851,10 @@ def make_student_model_for_checkpoint(
     if payload.get("kind") != kind or payload.get("version") != version:
         raise RuntimeError("Unsupported Pulled-Drawer Student checkpoint")
     if _is_binary_student_task(task):
+        if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+            return RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent(
+                pretrained_backbone=pretrained_backbone
+            )
         return RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent(
             pretrained_backbone=pretrained_backbone
         )
@@ -706,6 +868,12 @@ def load_student_model_state(
 
 
 __all__ = (
+    "FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION",
+    "FOUR_TACTILE_STUDENT_KIND",
+    "FOUR_TACTILE_TEACHER_KIND",
+    "FOUR_TACTILE_TEACHER_MANIFEST_VERSION",
+    "GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK",
+    "GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK",
     "GELSIGHT_PULLED_DRAWER_STUDENT_TASKS",

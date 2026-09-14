@@ -40,6 +40,13 @@ GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD = str(
     Path(TACEX_ASSETS_DATA_DIR)
     / "Robots/Franka/GelSight_Mini/Gripper/franka_gsmini_standard_arm_visuals_v7.usd"
 )
+GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_PROFILE = (
+    "gelsight_physics_isaaclab_panda_four_tactile_finger_offset_21mm_usd_v8"
+)
+GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD = str(
+    Path(TACEX_ASSETS_DATA_DIR)
+    / "Robots/Franka/GelSight_Mini/Gripper/franka_gsmini_four_tactile_standard_arm_visuals_v8.usd"
+)
 GELSIGHT_FINGER_EXTENSION_M = 0.021
 # Backward-compatible names for the Pulled-Drawer profile. All RMA GelSight
 # tasks use the same shifted v7 asset and physical finger geometry.

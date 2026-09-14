@@ -8,8 +8,9 @@ ISAAC_ENV_NAME="${ISAAC_ENV_NAME:-isaaclab_2.1.1}"
 TEACHER_NUM_ENVS="${TEACHER_NUM_ENVS:-1024}"
 STUDENT_NUM_ENVS="${STUDENT_NUM_ENVS:-128}"
 START_AT="${START_AT:-}"
-TEACHER_TASK="TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Pulled-Drawer-Progress-Teacher-v0"
-STUDENT_TASK="TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Pulled-Drawer-Progress-Three-Frame-Binary-Tactile-Direct-Action-Student-DR-v0"
+TEACHER_TASK="${TEACHER_TASK:-TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Pulled-Drawer-Progress-Teacher-v0}"
+STUDENT_TASK="${STUDENT_TASK:-TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Pulled-Drawer-Progress-Three-Frame-Binary-Tactile-Direct-Action-Student-DR-v0}"
+TEACHER_LOG_DIR="${TEACHER_LOG_DIR:-sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_progress_teacher}"
 ENCODER_INIT_CHECKPOINT="${ENCODER_INIT_CHECKPOINT:-}"
 
 usage() {
@@ -72,7 +73,7 @@ run_isaac_python() {
 }
 
 find_latest_teacher_checkpoint() {
-    find "$REPO_ROOT/logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_progress_teacher" \
+    find "$REPO_ROOT/logs/skrl/$TEACHER_LOG_DIR" \
         -type f -path '*/checkpoints/agent_*.pt' -newer "$TEACHER_MARKER" \
         -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr | head -n 1 | cut -d' ' -f2-

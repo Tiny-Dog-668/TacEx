@@ -377,6 +377,12 @@
 - 决策：reward 直接检查 done 阶段已提交的 counter；第4步无 bonus，第5步在同一 transition 同时获得一次性 bonus 和 terminated。
 - 影响：全部 GelSight Progress task 的 reward/done 时序修正，权重、观测和动作不变；Progress artifact 单独升版并需重训/重新蒸馏，非 Progress artifact 保持兼容。
 
+### DEC-054 — 四触觉抽屉按方向共享编码器且不改变成功条件
+
+- 状态：已采用
+- 决策：内侧左右共享一个二值触觉 CNN，下向左右共享另一个 CNN；四路接触用于 shaping、监督和最大力安全，不加入抬升成功条件。任一下向 GelPad 与 Cube 的力超过线性课程阈值时叠加每步 `-10`，阈值在全局 policy step `0→100k` 由 `50→10 N`，先不 done，以避免早期探索被大量急停截断。
+- 影响：Teacher 接触输入扩为4维、Student 扩为11输入，旧双触觉 checkpoint 不兼容；阈值课程使四触觉环境/artifact 升为 v2，v1 checkpoint 结构可复用但不能按当前 fail-closed 契约直接续训。TCP 和 reach 仍以两内侧 GelSight 中点定义，最低点惩罚使用两下向 GelPad 底面8点的最低 world-Z。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

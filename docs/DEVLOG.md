@@ -4,6 +4,12 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-14 CST — 新增四触觉 Pulled-Drawer Progress 路线
+
+- 新增 V8 四触觉 Franka、四接触 32 维 Teacher 和 11 输入 Binary Student；接触顺序固定为内左、内右、下左、下右，方向内共享触觉编码器。
+- 抽屉/Cube/4维动作/成功语义保持不变；接触进展权重为 `1.5/1.5/1.0/1.0`，四路最大力使用 15 N 二次惩罚；下向 GelPad 的 `-10` 惩罚阈值按全局 policy step `0→100k` 从 `50→10 N` 线性收紧且不 done，并保留其他非法碰撞的 `200→20 N` 强终止。clearance 对 V8 下向 GelPad 底面8点取最低 world-Z（最大 hand-Z `0.18331 m`）。
+- 新路线使用独立 task、artifact 与日志；阈值课程将四触觉环境/Teacher manifest/Student checkpoint 升为 v2，模型结构版本不变，旧 v1 权重需新开 run 迁移或重训。V8 生成、语法和 TorchScript 静态验证已执行，Isaac reset/step 待验证。
+
 ### 2026-09-13 CST — 对齐 GelSight Progress 成功奖励与终止帧
 
 - 修复共享 Progress reward mixin：Isaac `DirectRLEnv` 先执行 done 再计算 reward，因此 success reward 改为直接使用已提交的 hold counter，仅在达到保持步数并 terminated 的同一 transition 发放。

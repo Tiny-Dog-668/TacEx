@@ -98,6 +98,13 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import 
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_binary_tactile_models import (
     RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_four_tactile_models import (
+    RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent,
+    RMAGelSightPulledDrawerFourTactileActorCore,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     RMAGelSightX040ThreeFrameStudent,
 )
@@ -113,6 +120,7 @@ BINARY_TACTILE_STUDENT_TASKS = frozenset(
     {
         GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }
 )
 
@@ -195,8 +203,10 @@ def main() -> None:
 
     drawer_profile = args.task in GELSIGHT_PULLED_DRAWER_STUDENT_TASKS
     binary_tactile_profile = args.task in BINARY_TACTILE_STUDENT_TASKS
+    four_tactile_profile = args.task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK
     artifacts = drawer_artifacts if drawer_profile else x040_artifacts
-    student_cls = (
+    student_cls = (RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent
+        if four_tactile_profile else
         RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent
         if drawer_profile and binary_tactile_profile
         else (
@@ -209,7 +219,8 @@ def main() -> None:
             )
         )
     )
-    teacher_cls = RMAGelSightPulledDrawerActorCore if drawer_profile else RMAGelSightActorCore
+    teacher_cls = (RMAGelSightPulledDrawerFourTactileActorCore if four_tactile_profile
+                   else RMAGelSightPulledDrawerActorCore if drawer_profile else RMAGelSightActorCore)
     if args.num_envs <= 0:
         raise ValueError("num_envs must be positive")
     if min(args.timesteps, args.log_interval, args.checkpoint_interval) <= 0:
@@ -285,9 +296,13 @@ def main() -> None:
 
     model = student_cls(pretrained_backbone=False).to(device)
     model.load_vision_encoder_state(encoder_state)
+    tactile_parameters = (
+        list(model.inner_tactile_encoder.parameters()) + list(model.down_tactile_encoder.parameters())
+        if four_tactile_profile else list(model.tactile_encoder.parameters())
+    )
     head_parameters = (
         list(model.temporal_fusion.parameters())
-        + list(model.tactile_encoder.parameters())
+        + tactile_parameters
         + list(model.position_head.parameters())
         + list(model.action_head.parameters())
     )
@@ -300,7 +315,12 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
-    if (
+    if four_tactile_profile:
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_"
+            "four_tactile_progress_three_frame_binary_student"
+        )
+    elif (
         args.task
         == GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
     ):
@@ -382,7 +402,7 @@ def main() -> None:
         device=device,
         dtype=torch.float32,
     )
-    positive_weight = torch.full((2,), args.contact_positive_weight, device=device)
+    positive_weight = torch.full((4 if four_tactile_profile else 2,), args.contact_positive_weight, device=device)
     started = time.perf_counter()
     try:
         for step in range(start_step + 1, args.timesteps + 1):
@@ -391,14 +411,14 @@ def main() -> None:
             history = obs["action_history"].float()
             cube_position = obs["rma_cube_pos"].float()
             contact_target = obs["rma_contact_state"].float()
+            tactile_inputs = [obs["gsmini_left_rgb"], obs["gsmini_right_rgb"]]
+            if four_tactile_profile:
+                tactile_inputs += [obs["gsmini_left_down_rgb"], obs["gsmini_right_down_rgb"]]
+            tactile_inputs += [obs["gsmini_left_reference_rgb"], obs["gsmini_right_reference_rgb"]]
+            if four_tactile_profile:
+                tactile_inputs += [obs["gsmini_left_down_reference_rgb"], obs["gsmini_right_down_reference_rgb"]]
             student_actions, normalized_position, contact_logits = model.forward_with_training_outputs(
-                obs["wrist_rgb_history"],
-                proprio,
-                history,
-                obs["gsmini_left_rgb"],
-                obs["gsmini_right_rgb"],
-                obs["gsmini_left_reference_rgb"],
-                obs["gsmini_right_reference_rgb"],
+                obs["wrist_rgb_history"], proprio, history, *tactile_inputs
             )
             with torch.no_grad():
                 teacher_actions = teacher(proprio, history, cube_position, contact_target)

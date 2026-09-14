@@ -53,6 +53,9 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pul
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env import (
     GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
 
 
 def main() -> None:
@@ -71,6 +74,7 @@ def main() -> None:
         )
     else:
         target_task = str(payload["task"])
+    four_tactile = target_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK
     env_cfg = parse_env_cfg(
         target_task,
         device=args.device,
@@ -88,14 +92,15 @@ def main() -> None:
         with torch.inference_mode():
             for step in range(1, args.steps + 1):
                 obs = observations["policy"]
+                tactile_inputs = [obs["gsmini_left_rgb"], obs["gsmini_right_rgb"]]
+                if four_tactile:
+                    tactile_inputs += [obs["gsmini_left_down_rgb"], obs["gsmini_right_down_rgb"]]
+                tactile_inputs += [obs["gsmini_left_reference_rgb"], obs["gsmini_right_reference_rgb"]]
+                if four_tactile:
+                    tactile_inputs += [obs["gsmini_left_down_reference_rgb"], obs["gsmini_right_down_reference_rgb"]]
                 actions, contact_probability, cube_position_root_m = model(
-                    obs["wrist_rgb_history"],
-                    obs["proprio_obs"].float(),
-                    obs["action_history"].float(),
-                    obs["gsmini_left_rgb"],
-                    obs["gsmini_right_rgb"],
-                    obs["gsmini_left_reference_rgb"],
-                    obs["gsmini_right_reference_rgb"],
+                    obs["wrist_rgb_history"], obs["proprio_obs"].float(),
+                    obs["action_history"].float(), *tactile_inputs
                 )
                 observations, rewards, _, _, _ = env.step(actions)
                 reward_sum += rewards.mean().item()

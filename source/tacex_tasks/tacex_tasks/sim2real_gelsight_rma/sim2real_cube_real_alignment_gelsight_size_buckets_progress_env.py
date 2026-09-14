@@ -39,9 +39,9 @@ def quadratic_excess_contact_force_penalty(
     threshold_n: float,
     weight: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Penalize the maximum left/right force excess continuously, ``[N,2] -> [N]``."""
-    if forces_n.ndim != 2 or forces_n.shape[-1] != 2:
-        raise ValueError(f"expected left/right forces [N,2], got {tuple(forces_n.shape)}")
+    """Penalize the maximum sensor-force excess continuously, ``[N,S] -> [N]``."""
+    if forces_n.ndim != 2 or forces_n.shape[-1] not in (2, 4):
+        raise ValueError(f"expected two or four sensor forces [N,S], got {tuple(forces_n.shape)}")
     if threshold_n <= 0.0:
         raise ValueError("excess-contact threshold must be positive")
     if weight < 0.0:
