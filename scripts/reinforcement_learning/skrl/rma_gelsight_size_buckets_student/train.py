@@ -70,7 +70,6 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
     GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
     GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS,
     GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK,
-    STUDENT_CHECKPOINT_VERSION,
     STUDENT_MODEL_VERSION,
     load_student_checkpoint,
     load_student_model_state,
@@ -79,6 +78,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts impor
     sha256_file,
     state_dict_sha256,
     student_input_contract,
+    student_checkpoint_version,
     validate_live_env_contract,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_models import (
@@ -143,7 +143,7 @@ def _student_payload(
 ) -> dict:
     return {
         "kind": "tacex_rma_gelsight_size_buckets_student",
-        "version": STUDENT_CHECKPOINT_VERSION,
+        "version": student_checkpoint_version(args.task),
         "model_version": STUDENT_MODEL_VERSION,
         "task": args.task,
         "global_step": int(step),

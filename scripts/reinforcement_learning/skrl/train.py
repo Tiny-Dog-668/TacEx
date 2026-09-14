@@ -190,7 +190,7 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
     GELSIGHT_X040_TEACHER_TASKS,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
-    GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+    GELSIGHT_PULLED_DRAWER_TEACHER_TASKS,
 )
 
 
@@ -367,13 +367,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.task in {
         *GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS,
         *GELSIGHT_X040_TEACHER_TASKS,
-        GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+        *GELSIGHT_PULLED_DRAWER_TEACHER_TASKS,
     }:
         if args_cli.task in GELSIGHT_X040_TEACHER_TASKS:
             from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
                 infer_teacher_checkpoint_policy_step,
             )
-        elif args_cli.task == GELSIGHT_PULLED_DRAWER_TEACHER_TASK:
+        elif args_cli.task in GELSIGHT_PULLED_DRAWER_TEACHER_TASKS:
             from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
                 infer_teacher_checkpoint_policy_step,
             )
@@ -425,7 +425,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     print("[INFO] Gym environment created.")
 
-    if args_cli.task == GELSIGHT_PULLED_DRAWER_TEACHER_TASK and (
+    if args_cli.task in GELSIGHT_PULLED_DRAWER_TEACHER_TASKS and (
         not args_cli.distributed or app_launcher.local_rank == 0
     ):
         from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (

@@ -34,7 +34,9 @@ from .rma_gelsight_size_buckets_models import gelsight_student_model_contract
 
 MANIFEST_FILENAME = "rma_gelsight_size_buckets_manifest.json"
 TEACHER_MANIFEST_VERSION = 6
+PROGRESS_TEACHER_MANIFEST_VERSION = 7
 STUDENT_CHECKPOINT_VERSION = 7
+PROGRESS_STUDENT_CHECKPOINT_VERSION = 8
 STUDENT_MODEL_VERSION = 2
 
 GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS = frozenset(
@@ -55,6 +57,22 @@ GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK = {
         GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK
     ),
 }
+
+
+def teacher_manifest_version(task: str) -> int:
+    if task == GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK:
+        return PROGRESS_TEACHER_MANIFEST_VERSION
+    if task == GELSIGHT_SIZE_BUCKETS_TEACHER_TASK:
+        return TEACHER_MANIFEST_VERSION
+    raise RuntimeError(f"Unsupported GelSight Size-Buckets Teacher task: {task}")
+
+
+def student_checkpoint_version(task: str) -> int:
+    if task == GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK:
+        return PROGRESS_STUDENT_CHECKPOINT_VERSION
+    if task == GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK:
+        return STUDENT_CHECKPOINT_VERSION
+    raise RuntimeError(f"Unsupported GelSight Size-Buckets Student task: {task}")
 
 
 def student_input_contract() -> dict[str, Any]:
@@ -146,8 +164,17 @@ def _atomic_json_dump(value: dict[str, Any], path: Path) -> None:
 
 
 def environment_contract(cfg: Any) -> dict[str, Any]:
+    task = str(cfg.rma_task_id)
+    progress = task in {
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK,
+        GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK,
+    }
     contract = {
-        "profile": "rma_gelsight_fixed_size_buckets_v5",
+        "profile": (
+            "rma_gelsight_fixed_size_buckets_progress_v6"
+            if progress
+            else "rma_gelsight_fixed_size_buckets_v5"
+        ),
         "robot_profile": str(cfg.rma_robot_profile),
         "robot_asset_filename": Path(str(cfg.robot.spawn.usd_path)).name,
         "robot_base_world_position_m": [float(value) for value in cfg.robot.init_state.pos],
@@ -211,6 +238,9 @@ def environment_contract(cfg: Any) -> dict[str, Any]:
             "normalized_by_threshold": True,
         }
         contract["compliant_grasp"] = compliant_grasp
+        contract["success_reward_done_alignment"] = (
+            "same_transition_after_committed_hold_counter"
+        )
         contract["progress_reward"] = {
             "reach": "signed_normalized_proximity_delta_after_first_transition",
             "reach_weight": float(cfg.reach_weight),
@@ -257,7 +287,7 @@ def write_teacher_manifest(
         hashes[name] = sha256_file(path)
     manifest = {
         "kind": "tacex_rma_gelsight_size_buckets_teacher",
-        "version": TEACHER_MANIFEST_VERSION,
+        "version": teacher_manifest_version(task),
         "task": task,
         "model_version": RMA_MODEL_VERSION,
         "actor_inputs": {
@@ -295,11 +325,21 @@ def load_teacher_manifest(
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("kind") != "tacex_rma_gelsight_size_buckets_teacher":
         raise RuntimeError("Checkpoint is not a GelSight Size-Buckets Teacher")
-    if manifest.get("version") != TEACHER_MANIFEST_VERSION:
-        raise RuntimeError("Unsupported GelSight Size-Buckets Teacher manifest version")
-    task = manifest.get("task")
+    task = str(manifest.get("task", ""))
     if task not in GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS:
         raise RuntimeError("GelSight Size-Buckets Teacher task mismatch")
+    if manifest.get("version") != teacher_manifest_version(task):
+        raise RuntimeError("Unsupported GelSight Size-Buckets Teacher manifest version")
+    if task == GELSIGHT_SIZE_BUCKETS_PROGRESS_TEACHER_TASK:
+        contract = manifest.get("environment_contract")
+        if (
+            not isinstance(contract, Mapping)
+            or contract.get("success_reward_done_alignment")
+            != "same_transition_after_committed_hold_counter"
+        ):
+            raise RuntimeError(
+                "GelSight Size-Buckets success reward/done contract mismatch"
+            )
     if expected_task is not None and task != expected_task:
         raise RuntimeError("Selected task differs from Teacher checkpoint")
     if manifest.get("model_version") != RMA_MODEL_VERSION:
@@ -353,13 +393,13 @@ def load_student_checkpoint(
         "tacex_rma_gelsight_size_buckets_student"
     ):
         raise RuntimeError("Not a GelSight Size-Buckets Student checkpoint")
-    if payload.get("version") != STUDENT_CHECKPOINT_VERSION:
+    task = str(payload.get("task", ""))
+    if task not in GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS:
+        raise RuntimeError("Student task mismatch")
+    if payload.get("version") != student_checkpoint_version(task):
         raise RuntimeError("Student checkpoint version mismatch")
     if payload.get("model_version") != STUDENT_MODEL_VERSION:
         raise RuntimeError("Student model version mismatch")
-    task = payload.get("task")
-    if task not in GELSIGHT_SIZE_BUCKETS_STUDENT_TASKS:
-        raise RuntimeError("Student task mismatch")
     if expected_task is not None and task != expected_task:
         raise RuntimeError("Selected task differs from Student checkpoint")
     teacher_manifest = payload.get("teacher_manifest")
@@ -369,6 +409,18 @@ def load_student_checkpoint(
         or teacher_manifest.get("task") != expected_teacher_task
     ):
         raise RuntimeError("Student and Teacher task provenance mismatch")
+    if teacher_manifest.get("version") != teacher_manifest_version(
+        expected_teacher_task
+    ):
+        raise RuntimeError("Student Teacher manifest version mismatch")
+    if task == GELSIGHT_SIZE_BUCKETS_PROGRESS_STUDENT_DR_TASK:
+        contract = teacher_manifest.get("environment_contract")
+        if (
+            not isinstance(contract, Mapping)
+            or contract.get("success_reward_done_alignment")
+            != "same_transition_after_committed_hold_counter"
+        ):
+            raise RuntimeError("Student success reward/done contract mismatch")
     if payload.get("normalization") != RMAObservationNormalizer().contract():
         raise RuntimeError("Student normalization contract mismatch")
     if payload.get("student_input_contract") != student_input_contract():
@@ -413,6 +465,8 @@ __all__ = (
     "GELSIGHT_SIZE_BUCKETS_TEACHER_TASK",
     "GELSIGHT_SIZE_BUCKETS_TEACHER_TASKS",
     "MANIFEST_FILENAME",
+    "PROGRESS_STUDENT_CHECKPOINT_VERSION",
+    "PROGRESS_TEACHER_MANIFEST_VERSION",
     "STUDENT_CHECKPOINT_VERSION",
     "STUDENT_MODEL_VERSION",
     "environment_contract",
@@ -424,6 +478,8 @@ __all__ = (
     "sha256_file",
     "state_dict_sha256",
     "student_input_contract",
+    "student_checkpoint_version",
+    "teacher_manifest_version",
     "validate_live_env_contract",
     "write_teacher_manifest",
 )

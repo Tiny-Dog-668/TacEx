@@ -4,6 +4,18 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-13 CST — 对齐 GelSight Progress 成功奖励与终止帧
+
+- 修复共享 Progress reward mixin：Isaac `DirectRLEnv` 先执行 done 再计算 reward，因此 success reward 改为直接使用已提交的 hold counter，仅在达到保持步数并 terminated 的同一 transition 发放。
+- 影响 Size-Buckets/X040/Pulled-Drawer 三类 Progress task；观测、4维动作、奖励权重和模型维度不变。非 Progress task 和其 checkpoint 保持原契约。
+- Progress 环境 profile/Teacher manifest/Student checkpoint 单独升版，拒绝旧错位奖励 artifact；Teacher 需从头重训并重新蒸馏 Student。边界测试与快速静态验证见本次交付。
+
+### 2026-09-13 CST — 新增 Pulled-Drawer Progress Binary-Tactile Teacher–Student
+
+- 新增独立 Progress Teacher/Binary-Tactile Student task：沿用 Pulled-Drawer 的柜体、抽屉、4–6 cm 八档 Cube 与外观 DR，组合 X040 Progress 奖励和成功终止，同时保留抽屉 `200→20 N` 强非法碰撞终止。
+- Student 保持三帧视觉、七路原始输入/三路输出和抽屉 XYZ normalizer；触觉在模型内以 `max(abs(current-reference), RGB) > 5` 转成单通道 0/1 mask。
+- 兼容性：新路线使用独立 profile/kind/version 和日志目录，旧抽屉/X040 task 及 checkpoint 不变；新 Teacher 需重训，Student 需从其重新蒸馏。快速静态验证见本次交付，Isaac 定向测试和 smoke 待用户运行。
+
 ### 2026-09-12 CST — 新增 X040 Progress 单通道二值触觉 Student
 
 - 新增独立 Binary-Tactile Student task；物理场景、三帧视觉、full-strength DR、奖励、终止和四维动作完全继承现有 X040 Progress Student，并复用同一 Progress Teacher。

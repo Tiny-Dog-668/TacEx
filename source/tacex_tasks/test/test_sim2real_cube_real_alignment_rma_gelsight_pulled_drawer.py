@@ -15,11 +15,22 @@ from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
     GELSIGHT_STANDARD_FRANKA_ARM_VISUAL_USD,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
+    GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK,
+    PROGRESS_BINARY_STUDENT_CHECKPOINT_VERSION,
+    PROGRESS_BINARY_STUDENT_KIND,
+    PROGRESS_TEACHER_KIND,
     STUDENT_KIND,
     TEACHER_KIND,
+    make_student_payload,
     make_student_model_for_checkpoint,
+    student_input_contract,
     student_environment_contract,
     teacher_environment_contract,
+    validate_live_teacher_contract,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_binary_tactile_models import (
+    RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent,
+    pulled_drawer_binary_tactile_student_model_contract,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import (
     PULLED_DRAWER_LINK7_TO_GELPAD_MIDPOINT_M,
@@ -57,6 +68,15 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pul
     balanced_cube_bucket_ids,
     pulled_drawer_geometry_contract,
     sample_pulled_drawer_layouts,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_progress_binary_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressBinaryTactileThreeFrameStudentDREnvCfg,
+    Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressTeacherEnvCfg,
+)
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_binary_tactile_models import (
+    BinaryReferenceDeltaTactileEncoder,
 )
 
 
@@ -319,6 +339,185 @@ def test_pulled_drawer_environment_contract_records_geometry_and_collisions() ->
     assert teacher_contract["compliant_grasp"]["excess_contact_force_penalty_per_policy_step"] == -5.0
     assert teacher_contract["compliant_grasp"]["drop_penalty"] == -10.0
     assert student_contract["wrist_rgb_history"]["shape"] == [3, 224, 224, 3]
+
+
+def test_pulled_drawer_progress_binary_tasks_preserve_geometry_and_change_mdp() -> None:
+    legacy_teacher = Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerTeacherEnvCfg()
+    progress_teacher = (
+        Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressTeacherEnvCfg()
+    )
+    progress_student = (
+        Sim2RealCubeRealAlignmentRMAGelSightPulledDrawerProgressBinaryTactileThreeFrameStudentDREnvCfg()
+    )
+
+    assert gym.spec(GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK) is not None
+    assert (
+        gym.spec(
+            GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+        )
+        is not None
+    )
+    assert progress_teacher.action_space == progress_student.action_space == 4
+    assert progress_student.observation_space["wrist_rgb_history"].shape == (
+        3,
+        224,
+        224,
+        3,
+    )
+    assert progress_student.observation_space["gsmini_left_rgb"].shape == (96, 128, 3)
+    assert progress_teacher.cube_size_buckets_m == legacy_teacher.cube_size_buckets_m
+    assert progress_teacher.cube.init_state.pos == legacy_teacher.cube.init_state.pos
+    assert progress_teacher.pulled_drawer_collision_scope == (
+        legacy_teacher.pulled_drawer_collision_scope
+    )
+    assert progress_teacher.reach_reward_mode == "absolute_normalized_proximity_per_step"
+    assert progress_teacher.lift_reward_mode == "absolute_normalized_progress_per_step"
+    assert progress_teacher.contact_reward_mode == "signed_contact_acquisition_delta"
+    assert progress_teacher.success_reward_mode == "once_on_confirmed_terminal_success"
+    assert progress_teacher.reach_weight == pytest.approx(2.5)
+    assert progress_teacher.lift_weight == pytest.approx(2.5)
+    assert progress_teacher.success_reward_weight == pytest.approx(1000.0)
+    assert progress_teacher.rma_success_terminates_episode is True
+    assert progress_teacher.illegal_collision_terminates_episode is True
+    assert progress_teacher.illegal_collision_termination_threshold_start_n == pytest.approx(
+        200.0
+    )
+    assert progress_teacher.illegal_collision_termination_threshold_end_n == pytest.approx(
+        20.0
+    )
+    assert legacy_teacher.rma_success_terminates_episode is False
+    assert legacy_teacher.illegal_collision_terminates_episode is True
+
+    teacher_contract = teacher_environment_contract(progress_teacher)
+    student_contract = student_environment_contract(progress_student)
+    assert teacher_contract["profile"] == "rma_gelsight_pulled_drawer_progress_v2"
+    assert teacher_contract["success_reward_done_alignment"] == (
+        "same_transition_after_committed_hold_counter"
+    )
+    assert teacher_contract["progress_reward"]["reach"] == (
+        "absolute_normalized_proximity_per_step"
+    )
+    assert teacher_contract["progress_reward"]["contact_holding_state_repeats_reward"] is False
+    assert teacher_contract["success_terminates_episode"] is True
+    assert teacher_contract["illegal_collision_terminates_episode"] is True
+    assert student_contract["task"] == (
+        GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    )
+    assert student_contract["visual_domain_randomization"]["drawer_appearance_enabled"] is True
+    assert "progress_reward" not in teacher_environment_contract(legacy_teacher)
+    assert GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK[
+        GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    ] == GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK
+    assert PROGRESS_TEACHER_KIND == "tacex_rma_gelsight_pulled_drawer_progress_teacher"
+    validate_live_teacher_contract(
+        progress_student,
+        {
+            "task": GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
+            "environment_contract": teacher_contract,
+        },
+    )
+    with pytest.raises(RuntimeError, match="Teacher task mismatch"):
+        validate_live_teacher_contract(
+            progress_student,
+            {
+                "task": GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
+                "environment_contract": teacher_environment_contract(legacy_teacher),
+            },
+        )
+
+
+def test_pulled_drawer_binary_tactile_model_contract_and_factory() -> None:
+    current = torch.zeros((1, 2, 3, 3), dtype=torch.uint8)
+    reference = torch.zeros_like(current)
+    current[0, 0, 0, 0] = 4
+    current[0, 0, 1, 1] = 5
+    current[0, 0, 2, 2] = 6
+    binary = BinaryReferenceDeltaTactileEncoder.binary_delta(current, reference)
+    assert binary.shape == (1, 1, 2, 3)
+    assert binary[0, 0, 0].tolist() == [0.0, 0.0, 1.0]
+
+    input_contract = student_input_contract(
+        GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    )
+    assert input_contract["tactile_network_input"] == [1, 96, 128]
+    assert input_contract["tactile_binary_threshold_u8"] == pytest.approx(5.0)
+    model_contract = pulled_drawer_binary_tactile_student_model_contract()
+    assert model_contract["actor_feature_dim"] == 1043
+    assert model_contract["position_normalization"] == (
+        "pulled_drawer_contiguous_rigid_tray_robot_root_xyz_v3"
+    )
+    payload = {
+        "kind": PROGRESS_BINARY_STUDENT_KIND,
+        "version": PROGRESS_BINARY_STUDENT_CHECKPOINT_VERSION,
+        "task": GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    }
+    model = make_student_model_for_checkpoint(payload, pretrained_backbone=False)
+    assert isinstance(model, RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent)
+    assert isinstance(model.tactile_encoder, BinaryReferenceDeltaTactileEncoder)
+    assert model.contract() == model_contract
+    with pytest.raises(RuntimeError, match="Unsupported Pulled-Drawer Student checkpoint"):
+        make_student_model_for_checkpoint(
+            {**payload, "kind": STUDENT_KIND}, pretrained_backbone=False
+        )
+    with pytest.raises(RuntimeError, match="Unsupported Pulled-Drawer Student checkpoint"):
+        make_student_model_for_checkpoint(
+            {**payload, "kind": X040_STUDENT_KIND}, pretrained_backbone=False
+        )
+
+
+@pytest.mark.parametrize(
+    "teacher_task",
+    [GELSIGHT_PULLED_DRAWER_TEACHER_TASK, GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK],
+)
+def test_pulled_drawer_progress_binary_rejects_unpaired_teacher(
+    teacher_task: str,
+) -> None:
+    model = RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent(
+        pretrained_backbone=False
+    )
+    optimizer = torch.optim.AdamW(model.parameters())
+    with pytest.raises(RuntimeError, match="tasks are not paired"):
+        make_student_payload(
+            student_task=(
+                GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+            ),
+            model=model,
+            optimizer=optimizer,
+            global_step=1,
+            teacher_checkpoint="unused.pt",
+            teacher_manifest={"task": teacher_task},
+            teacher_actor_state_dict={},
+            encoder_init_checkpoint="unused_encoder.pt",
+            encoder_init_payload={},
+            student_env_contract={},
+            geometry_instance_hash="unused",
+            loss={},
+            optimizer_config={},
+        )
+
+
+def test_pulled_drawer_binary_tactile_torchscript_preserves_public_interface() -> None:
+    model = RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent(
+        pretrained_backbone=False
+    ).eval()
+    scripted = torch.jit.script(model)
+    history = torch.zeros((1, 3, 224, 224, 3), dtype=torch.uint8)
+    tactile = torch.zeros((1, 96, 128, 3), dtype=torch.uint8)
+    inputs = (
+        history,
+        torch.zeros((1, 15)),
+        torch.zeros((1, 4)),
+        tactile,
+        tactile,
+        tactile,
+        tactile,
+    )
+    with torch.inference_mode():
+        eager_outputs = model(*inputs)
+        scripted_outputs = scripted(*inputs)
+    assert len(scripted_outputs) == 3
+    for eager, actual in zip(eager_outputs, scripted_outputs):
+        torch.testing.assert_close(actual, eager)
 
 
 def test_pulled_drawer_asset_extends_fingers_without_moving_panda_hand() -> None:

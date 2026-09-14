@@ -363,6 +363,20 @@
 - 决策：保留旧 task 作为基线，新增 Progress Teacher/Student 配对；三项 dense shaping 改为有符号进展，稳定成功只奖励一次并 terminated，另加归一化动作幅值与连续二次过力惩罚。
 - 影响：观测 key/shape、4维动作、几何和模型结构不变；reward/done、episode 分布及 artifact task provenance 改变，必须重新训练 Teacher 并重新蒸馏 Student。
 
+### DEC-052 — Pulled-Drawer Progress 保留抽屉强碰撞终止
+
+- 状态：已实现，待训练验证
+- 决策：新 Pulled-Drawer Progress Teacher–Student 组合 X040 Progress 的绝对 reach/绝对 lift、signed contact progress、一次性终止成功奖励与二次过力惩罚，但显式保留抽屉环境 `200→20 N` 课程阈值的强非法碰撞 terminated。
+- 原因：抽屉中机器人—柜体/抽屉和 Cube—外柜碰撞是明确的安全失败，不应继承 X040 开放场景的非终止设置。
+- 影响：几何、观测、4维动作和 Student 部署接口不变；新 reward/done 契约以独立 artifact 版本 fail-closed，旧抽屉 checkpoint 不迁移，新 Teacher/Student 必须重训/重新蒸馏。
+
+### DEC-053 — Progress success reward 复用 done 已提交的保持计数
+
+- 状态：已采用
+- 背景：Isaac `DirectRLEnv.step()` 先调用 `_get_dones()` 更新 success hold counter，再调用 `_get_rewards()`；旧 Progress 实现在 reward 中再预加 1，导致第4个保持步提前获得 bonus，第5步才 terminated。
+- 决策：reward 直接检查 done 阶段已提交的 counter；第4步无 bonus，第5步在同一 transition 同时获得一次性 bonus 和 terminated。
+- 影响：全部 GelSight Progress task 的 reward/done 时序修正，权重、观测和动作不变；Progress artifact 单独升版并需重训/重新蒸馏，非 Progress artifact 保持兼容。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

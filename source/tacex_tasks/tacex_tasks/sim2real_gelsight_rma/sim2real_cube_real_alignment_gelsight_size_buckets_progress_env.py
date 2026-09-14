@@ -98,15 +98,12 @@ class _GelSightProgressRewardMixin:
         )
 
     def _shape_success_reward(self, success: torch.Tensor) -> torch.Tensor:
-        # Rewards are evaluated before dones. Predict the hold counter that
-        # _get_dones will commit for this same transition and emit one bonus on
-        # the terminal success step only.
-        next_hold = torch.where(
-            success,
-            self._success_hold_counter + 1,
-            torch.zeros_like(self._success_hold_counter),
+        # DirectRLEnv calls _get_dones() before _get_rewards(). The hold counter
+        # is already committed for this transition, so the one-shot bonus and
+        # success termination must use the same confirmed counter value.
+        success_event = success & (
+            self._success_hold_counter >= int(self.cfg.success_hold_steps)
         )
-        success_event = success & (next_hold >= int(self.cfg.success_hold_steps))
         self._last_terminal_success_event = success_event.detach().clone()
         return success_event.to(torch.float32)
 

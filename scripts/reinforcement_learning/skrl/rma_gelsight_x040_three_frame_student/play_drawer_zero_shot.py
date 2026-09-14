@@ -47,6 +47,12 @@ from tacex_tasks.sim2real_gelsight_rma import (
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_env import (
     GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_progress_binary_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env import (
+    GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+)
 
 
 def main() -> None:
@@ -56,12 +62,21 @@ def main() -> None:
         )
     artifacts = x040_artifacts if args.x040_zero_shot else drawer_artifacts
     payload = artifacts.load_student_checkpoint(args.student_checkpoint, device="cpu")
+    if args.x040_zero_shot:
+        target_task = (
+            GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+            if payload.get("task")
+            == GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+            else GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK
+        )
+    else:
+        target_task = str(payload["task"])
     env_cfg = parse_env_cfg(
-        GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+        target_task,
         device=args.device,
         num_envs=args.num_envs,
     )
-    env = gym.make(GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK, cfg=env_cfg)
+    env = gym.make(target_task, cfg=env_cfg)
     try:
         device = torch.device(env.unwrapped.device)
         model = artifacts.make_student_model_for_checkpoint(
@@ -87,7 +102,7 @@ def main() -> None:
                 if step % args.metrics_interval == 0 or step == args.steps:
                     metrics = env.unwrapped._episode_success_statistics()
                     print(
-                        f"[Drawer zero-shot] {step}/{args.steps} "
+                        f"[Drawer play] {step}/{args.steps} "
                         f"mean_reward={reward_sum / step:.3f} "
                         f"contact_prob_lr={contact_probability.mean(dim=0).tolist()} "
                         f"cube_position_root_m={cube_position_root_m.mean(dim=0).tolist()} "

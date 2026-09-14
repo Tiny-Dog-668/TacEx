@@ -56,12 +56,14 @@ from .sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env imp
 
 MANIFEST_FILENAME = "rma_gelsight_x040_dr_size_buckets_manifest.json"
 TEACHER_MANIFEST_VERSION = 7
+PROGRESS_TEACHER_MANIFEST_VERSION = 8
 LEGACY_STUDENT_CHECKPOINT_VERSION = 3
 # v4 was assigned to the withdrawn LED-DR experiment and must not be reused.
 PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION = 5
 # v6 used the pre-offset v5 robot asset; v8 used the 26 mm v6 asset. Both are
 # intentionally rejected by the current shared 21 mm geometry contract.
 STUDENT_CHECKPOINT_VERSION = 10
+PROGRESS_STUDENT_CHECKPOINT_VERSION = 11
 STUDENT_KIND = "tacex_rma_gelsight_x040_dr_three_frame_student"
 TEACHER_KIND = "tacex_rma_gelsight_x040_dr_size_buckets_teacher"
 GELSIGHT_X040_TEACHER_TASKS = frozenset(
@@ -92,13 +94,32 @@ def _expected_environment_profile(task: str) -> str:
         GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
     }:
-        return "rma_gelsight_x040_progress_three_frame_v5"
+        return "rma_gelsight_x040_progress_three_frame_v6"
     if task in {
         GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK,
         GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
     }:
         return "rma_gelsight_x040_dr_static_size_buckets_v7"
     raise RuntimeError(f"Unsupported GelSight X040 task: {task}")
+
+
+def _teacher_manifest_version(task: str) -> int:
+    if task == GELSIGHT_X040_PROGRESS_TEACHER_TASK:
+        return PROGRESS_TEACHER_MANIFEST_VERSION
+    if task == GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK:
+        return TEACHER_MANIFEST_VERSION
+    raise RuntimeError(f"Unsupported GelSight X040 Teacher task: {task}")
+
+
+def _student_checkpoint_version(task: str) -> int:
+    if task in {
+        GELSIGHT_X040_PROGRESS_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    }:
+        return PROGRESS_STUDENT_CHECKPOINT_VERSION
+    if task == GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK:
+        return STUDENT_CHECKPOINT_VERSION
+    raise RuntimeError(f"Unsupported GelSight X040 Student task: {task}")
 
 
 def _validate_environment_contract_for_task(
@@ -116,6 +137,8 @@ def _validate_environment_contract_for_task(
     if is_progress and (
         "progress_reward" not in contract
         or contract.get("success_terminates_episode") is not True
+        or contract.get("success_reward_done_alignment")
+        != "same_transition_after_committed_hold_counter"
     ):
         raise RuntimeError("GelSight X040 Progress reward contract is incomplete")
     if student and is_progress and "visual_domain_randomization" not in contract:
@@ -247,6 +270,9 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             "normalized_by_threshold": True,
         }
         contract["compliant_grasp"] = compliant_grasp
+        contract["success_reward_done_alignment"] = (
+            "same_transition_after_committed_hold_counter"
+        )
         reach_reward_mode = str(cfg.reach_reward_mode)
         if reach_reward_mode == "signed_normalized_proximity_delta":
             reach_contract = "signed_normalized_proximity_delta_after_first_transition"
@@ -486,7 +512,7 @@ def write_teacher_manifest(base_env: Any, params_dir: str | Path, agent_cfg: Map
         hashes[name] = sha256_file(path)
     manifest = {
         "kind": TEACHER_KIND,
-        "version": TEACHER_MANIFEST_VERSION,
+        "version": _teacher_manifest_version(task),
         "task": task,
         "model_version": RMA_MODEL_VERSION,
         "actor_inputs": {
@@ -515,12 +541,16 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"GelSight X040 DR Teacher manifest not found: {path}")
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    if manifest.get("kind") != TEACHER_KIND or manifest.get("version") != TEACHER_MANIFEST_VERSION:
-        raise RuntimeError("Unsupported GelSight X040 DR Teacher manifest")
-    if manifest.get("task") not in GELSIGHT_X040_TEACHER_TASKS:
+    task = str(manifest.get("task", ""))
+    if task not in GELSIGHT_X040_TEACHER_TASKS:
         raise RuntimeError("GelSight X040 DR Teacher task mismatch")
+    if (
+        manifest.get("kind") != TEACHER_KIND
+        or manifest.get("version") != _teacher_manifest_version(task)
+    ):
+        raise RuntimeError("Unsupported GelSight X040 DR Teacher manifest")
     _validate_environment_contract_for_task(
-        str(manifest["task"]), manifest.get("environment_contract"), student=False
+        task, manifest.get("environment_contract"), student=False
     )
     if manifest.get("model_version") != RMA_MODEL_VERSION:
         raise RuntimeError("GelSight X040 DR Teacher model mismatch")
@@ -585,6 +615,10 @@ def make_student_payload(
         raise RuntimeError(f"Unsupported GelSight X040 Student task: {student_task}")
     if teacher_manifest.get("task") != GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[student_task]:
         raise RuntimeError("GelSight X040 Student and Teacher tasks are not paired")
+    if teacher_manifest.get("version") != _teacher_manifest_version(
+        str(teacher_manifest["task"])
+    ):
+        raise RuntimeError("GelSight X040 Student Teacher manifest version mismatch")
     expected_model_contract = _student_model_contract(student_task)
     if not hasattr(model, "contract") or model.contract() != expected_model_contract:
         raise RuntimeError("GelSight X040 Student model does not match its task")
@@ -609,7 +643,7 @@ def make_student_payload(
         component_hashes[f"{name}_state_dict_sha256"] = state_dict_sha256(component)
     return {
         "kind": STUDENT_KIND,
-        "version": STUDENT_CHECKPOINT_VERSION,
+        "version": _student_checkpoint_version(student_task),
         "model_version": _student_model_version(student_task),
         "task": student_task,
         "global_step": int(global_step),
@@ -650,13 +684,13 @@ def load_student_checkpoint(
     payload = torch.load(Path(checkpoint).expanduser().resolve(), map_location=device, weights_only=False)
     if not isinstance(payload, dict) or payload.get("kind") != STUDENT_KIND:
         raise RuntimeError("Not a GelSight X040 DR three-frame Student checkpoint")
-    version = payload.get("version")
-    legacy = False
-    if version != STUDENT_CHECKPOINT_VERSION:
-        raise RuntimeError("GelSight X040 DR Student version mismatch")
-    task = payload.get("task")
+    task = str(payload.get("task", ""))
     if task not in GELSIGHT_X040_STUDENT_TASKS:
         raise RuntimeError("GelSight X040 DR Student task mismatch")
+    version = payload.get("version")
+    legacy = False
+    if version != _student_checkpoint_version(task):
+        raise RuntimeError("GelSight X040 DR Student version mismatch")
     expected_model_version = (
         GELSIGHT_X040_THREE_FRAME_LEGACY_MODEL_VERSION
         if legacy
@@ -671,6 +705,10 @@ def load_student_checkpoint(
         != GELSIGHT_X040_STUDENT_TO_TEACHER_TASK[task]
     ):
         raise RuntimeError("GelSight X040 Student embedded Teacher task mismatch")
+    if teacher_manifest.get("version") != _teacher_manifest_version(
+        str(teacher_manifest["task"])
+    ):
+        raise RuntimeError("GelSight X040 Student Teacher manifest version mismatch")
     _validate_environment_contract_for_task(
         str(teacher_manifest["task"]),
         teacher_manifest.get("environment_contract"),
@@ -728,10 +766,10 @@ def make_student_model_for_checkpoint(
     payload: Mapping[str, Any], *, pretrained_backbone: bool = False
 ) -> torch.nn.Module:
     """Construct the matching normalization profile for a validated checkpoint."""
+    task = str(payload.get("task", ""))
     version = payload.get("version")
-    if version != STUDENT_CHECKPOINT_VERSION:
+    if version != _student_checkpoint_version(task):
         raise RuntimeError("GelSight X040 DR Student version mismatch")
-    task = str(payload.get("task"))
     if _is_binary_tactile_student_task(task):
         return RMAGelSightX040BinaryTactileThreeFrameStudent(
             pretrained_backbone=pretrained_backbone
@@ -757,6 +795,8 @@ __all__ = (
     "GELSIGHT_X040_TEACHER_TASKS",
     "LEGACY_STUDENT_CHECKPOINT_VERSION",
     "PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION",
+    "PROGRESS_STUDENT_CHECKPOINT_VERSION",
+    "PROGRESS_TEACHER_MANIFEST_VERSION",
     "STUDENT_CHECKPOINT_VERSION",
     "TEACHER_MANIFEST_VERSION",
     "MANIFEST_FILENAME",

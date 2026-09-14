@@ -26,6 +26,8 @@ from tacex_assets.robots.franka.franka_gsmini_gripper_rigid import (
 from tacex.simulation_approaches.gpu_taxim.taxim_sim import TaximSimulator
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_size_buckets_artifacts import (
     GELSIGHT_SIZE_BUCKETS_STUDENT_TO_TEACHER_TASK,
+    PROGRESS_STUDENT_CHECKPOINT_VERSION,
+    PROGRESS_TEACHER_MANIFEST_VERSION,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_MODEL_VERSION,
     TEACHER_MANIFEST_VERSION,
@@ -71,6 +73,8 @@ def close_app():
 def test_new_tasks_and_fixed_size_contract_are_registered():
     assert TEACHER_MANIFEST_VERSION == 6
     assert STUDENT_CHECKPOINT_VERSION == 7
+    assert PROGRESS_TEACHER_MANIFEST_VERSION == 7
+    assert PROGRESS_STUDENT_CHECKPOINT_VERSION == 8
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK) is not None
     teacher = parse_env_cfg(GELSIGHT_SIZE_BUCKETS_TEACHER_TASK, device="cuda:0", num_envs=8)
@@ -168,6 +172,12 @@ def test_progress_reward_tasks_and_contract_are_isolated_from_legacy_tasks():
     assert teacher.success_hold_steps == student.success_hold_steps == 5
     assert teacher.rma_action_magnitude_penalty_weight == pytest.approx(0.05)
     assert environment_contract(teacher) == environment_contract(student)
+    assert environment_contract(teacher)["profile"] == (
+        "rma_gelsight_fixed_size_buckets_progress_v6"
+    )
+    assert environment_contract(teacher)["success_reward_done_alignment"] == (
+        "same_transition_after_committed_hold_counter"
+    )
     progress = environment_contract(teacher)["progress_reward"]
     assert progress["reach"] == (
         "signed_normalized_proximity_delta_after_first_transition"
@@ -248,6 +258,7 @@ def test_old_bottleneck_student_checkpoint_fails_closed(tmp_path):
             "kind": "tacex_rma_gelsight_size_buckets_student",
             "version": STUDENT_CHECKPOINT_VERSION - 1,
             "model_version": STUDENT_MODEL_VERSION - 1,
+            "task": GELSIGHT_SIZE_BUCKETS_STUDENT_DR_TASK,
         },
         checkpoint,
     )

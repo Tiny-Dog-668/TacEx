@@ -1,4 +1,4 @@
-"""Distill the GelSight X040-DR three-frame Student from its paired Teacher."""
+"""Distill a GelSight three-frame Student from its paired Teacher."""
 
 from __future__ import annotations
 
@@ -80,7 +80,8 @@ import tacex_tasks  # noqa: F401
 from tacex_tasks.sim2real_gelsight_rma import rma_gelsight_pulled_drawer_artifacts as drawer_artifacts
 from tacex_tasks.sim2real_gelsight_rma import rma_gelsight_x040_three_frame_artifacts as x040_artifacts
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts import (
-    GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+    GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    GELSIGHT_PULLED_DRAWER_STUDENT_TASKS,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts import (
     GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
@@ -94,6 +95,9 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_models import 
     RMAGelSightPulledDrawerActorCore,
     RMAGelSightPulledDrawerThreeFrameStudent,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_binary_tactile_models import (
+    RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent,
+)
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     RMAGelSightX040ThreeFrameStudent,
 )
@@ -102,6 +106,14 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_models import (
 )
 from tacex_tasks.sim2real_grasp.rma_models import (
     extract_actor_core_state_dict,
+)
+
+
+BINARY_TACTILE_STUDENT_TASKS = frozenset(
+    {
+        GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+    }
 )
 
 
@@ -145,8 +157,7 @@ def _save_initial_policy_images(observations: dict, output_dir: Path) -> None:
 def _loss_contract() -> dict[str, object]:
     contact_source = (
         "left_right_bce_from_single_channel_binary_max_abs_rgb_delta_gt_5_u8"
-        if args.task
-        == GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+        if args.task in BINARY_TACTILE_STUDENT_TASKS
         else "left_right_bce_from_signed_current_minus_reference"
     )
     return {
@@ -178,22 +189,24 @@ def _optimizer_contract() -> dict[str, object]:
 def main() -> None:
     if args.task not in {
         *GELSIGHT_X040_STUDENT_TASKS,
-        GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK,
+        *GELSIGHT_PULLED_DRAWER_STUDENT_TASKS,
     }:
         raise ValueError("This trainer only supports the paired X040 or Pulled-Drawer Student task")
 
-    drawer_profile = args.task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK
-    binary_tactile_profile = (
-        args.task == GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
-    )
+    drawer_profile = args.task in GELSIGHT_PULLED_DRAWER_STUDENT_TASKS
+    binary_tactile_profile = args.task in BINARY_TACTILE_STUDENT_TASKS
     artifacts = drawer_artifacts if drawer_profile else x040_artifacts
     student_cls = (
-        RMAGelSightPulledDrawerThreeFrameStudent
-        if drawer_profile
+        RMAGelSightPulledDrawerBinaryTactileThreeFrameStudent
+        if drawer_profile and binary_tactile_profile
         else (
-            RMAGelSightX040BinaryTactileThreeFrameStudent
-            if binary_tactile_profile
-            else RMAGelSightX040ThreeFrameStudent
+            RMAGelSightPulledDrawerThreeFrameStudent
+            if drawer_profile
+            else (
+                RMAGelSightX040BinaryTactileThreeFrameStudent
+                if binary_tactile_profile
+                else RMAGelSightX040ThreeFrameStudent
+            )
         )
     )
     teacher_cls = RMAGelSightPulledDrawerActorCore if drawer_profile else RMAGelSightActorCore
@@ -232,10 +245,6 @@ def main() -> None:
         )
         if resume_payload.get("task") != args.task:
             raise RuntimeError("Resume checkpoint task differs from --task")
-        if resume_payload.get("version") != artifacts.STUDENT_CHECKPOINT_VERSION:
-            raise RuntimeError(
-                "Older GelSight Student checkpoints cannot resume the current visual contract"
-            )
         if resume_payload.get("encoder_init_checkpoint_sha256") != artifacts.sha256_file(
             encoder_checkpoint
         ):
@@ -291,7 +300,15 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
-    if drawer_profile:
+    if (
+        args.task
+        == GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK
+    ):
+        default_log_root = (
+            "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_"
+            "progress_three_frame_binary_tactile_student"
+        )
+    elif drawer_profile:
         default_log_root = (
             "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_student"
         )
@@ -433,7 +450,7 @@ def main() -> None:
                 stats = base_env._episode_success_statistics()
                 writer.add_scalar("Performance/recent_success_rate", stats["window_rate"].item(), step)
                 print(
-                    f"[GelSight X040 Three-Frame Student] {step}/{args.timesteps} "
+                    f"[GelSight Three-Frame Student] {step}/{args.timesteps} "
                     f"loss(action/smooth/pos/contact)={action_loss.item():.4f}/"
                     f"{smoothness_loss.item():.4f}/{position_loss.item():.4f}/{contact_loss.item():.4f} "
                     f"position_rmse={1000.0 * position_rmse.item():.1f}mm "
@@ -445,6 +462,7 @@ def main() -> None:
 
             if step % args.checkpoint_interval == 0 or step == args.timesteps:
                 payload_kwargs = {
+                    "student_task": args.task,
                     "model": model,
                     "optimizer": optimizer,
                     "global_step": step,
@@ -461,8 +479,6 @@ def main() -> None:
                     payload_kwargs["geometry_instance_hash"] = artifacts.geometry_instance_sha256(
                         base_env
                     )
-                else:
-                    payload_kwargs["student_task"] = args.task
                 payload = artifacts.make_student_payload(**payload_kwargs)
                 checkpoint = run_dir / "checkpoints" / f"student_{step:07d}.pt"
                 _atomic_torch_save(payload, checkpoint)

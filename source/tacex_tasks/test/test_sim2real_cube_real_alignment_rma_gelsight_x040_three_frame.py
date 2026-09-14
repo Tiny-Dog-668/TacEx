@@ -34,6 +34,8 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_artifacts i
     GELSIGHT_X040_STUDENT_TO_TEACHER_TASK,
     LEGACY_STUDENT_CHECKPOINT_VERSION,
     PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION,
+    PROGRESS_STUDENT_CHECKPOINT_VERSION,
+    PROGRESS_TEACHER_MANIFEST_VERSION,
     STUDENT_CHECKPOINT_VERSION,
     STUDENT_KIND,
     TEACHER_MANIFEST_VERSION,
@@ -73,6 +75,8 @@ def test_task_registration_and_shared_x040_contract():
     assert PRE_GREEN_BASE_LED_STUDENT_CHECKPOINT_VERSION == 5
     assert TEACHER_MANIFEST_VERSION == 7
     assert STUDENT_CHECKPOINT_VERSION == 10
+    assert PROGRESS_TEACHER_MANIFEST_VERSION == 8
+    assert PROGRESS_STUDENT_CHECKPOINT_VERSION == 11
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_TEACHER_TASK) is not None
     assert gym.spec(GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK) is not None
     teacher = parse_env_cfg(
@@ -328,7 +332,10 @@ def test_x040_progress_pair_combines_0823_distribution_with_0911_rewards():
 
     contract = teacher_environment_contract(teacher)
     student_contract = student_environment_contract(student)
-    assert contract["profile"] == "rma_gelsight_x040_progress_three_frame_v5"
+    assert contract["profile"] == "rma_gelsight_x040_progress_three_frame_v6"
+    assert contract["success_reward_done_alignment"] == (
+        "same_transition_after_committed_hold_counter"
+    )
     assert teacher.reach_reward_mode == "absolute_normalized_proximity_per_step"
     assert teacher.reach_weight == pytest.approx(2.5)
     assert contract["progress_reward"]["reach"] == (
@@ -403,7 +410,7 @@ def test_single_channel_binary_tactile_preprocessing_boundaries_and_sign():
 def test_binary_tactile_checkpoint_factory_selects_one_channel_model():
     model = make_student_model_for_checkpoint(
         {
-            "version": STUDENT_CHECKPOINT_VERSION,
+            "version": PROGRESS_STUDENT_CHECKPOINT_VERSION,
             "task": GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         }
     )
@@ -465,9 +472,23 @@ def test_x040_progress_success_is_terminal_without_changing_legacy_default():
     dummy._publish_episode_success_statistics = lambda: None
 
     terminated, truncated = _GelSightX040SafetyMixin._get_dones(dummy)
+    success_reward = _GelSightX040ProgressRewardMixin._shape_success_reward(
+        dummy, torch.ones(1, dtype=torch.bool)
+    )
 
     assert terminated.tolist() == [True]
     assert truncated.tolist() == [False]
+    torch.testing.assert_close(success_reward, terminated.to(torch.float32))
+    torch.testing.assert_close(dummy._last_terminal_success_event, terminated)
+
+    preterminal = SimpleNamespace(
+        cfg=SimpleNamespace(success_hold_steps=5),
+        _success_hold_counter=torch.tensor([4]),
+    )
+    early_reward = _GelSightX040ProgressRewardMixin._shape_success_reward(
+        preterminal, torch.ones(1, dtype=torch.bool)
+    )
+    torch.testing.assert_close(early_reward, torch.zeros(1))
 
 
 def test_x040_progress_student_checkpoint_round_trip_and_task_isolation(tmp_path):
@@ -487,6 +508,7 @@ def test_x040_progress_student_checkpoint_round_trip_and_task_isolation(tmp_path
     encoder_checkpoint.write_bytes(b"encoder")
     teacher_manifest = {
         "task": GELSIGHT_X040_PROGRESS_TEACHER_TASK,
+        "version": PROGRESS_TEACHER_MANIFEST_VERSION,
         "environment_contract": teacher_environment_contract(teacher_cfg),
     }
     payload = make_student_payload(
@@ -683,6 +705,7 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
         {
             "kind": STUDENT_KIND,
             "version": LEGACY_STUDENT_CHECKPOINT_VERSION - 1,
+            "task": GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
         },
         checkpoint,
     )
@@ -692,7 +715,14 @@ def test_pre_static_size_bucket_checkpoint_is_rejected(tmp_path):
 
 def test_pre_21mm_v7_asset_checkpoint_is_rejected(tmp_path):
     checkpoint = tmp_path / "pre_21mm_asset_student.pt"
-    torch.save({"kind": STUDENT_KIND, "version": 8}, checkpoint)
+    torch.save(
+        {
+            "kind": STUDENT_KIND,
+            "version": 8,
+            "task": GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,
+        },
+        checkpoint,
+    )
     with pytest.raises(RuntimeError, match="version mismatch"):
         load_student_checkpoint(checkpoint)
 
