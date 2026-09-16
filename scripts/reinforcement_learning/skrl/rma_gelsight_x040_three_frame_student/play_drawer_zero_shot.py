@@ -56,6 +56,9 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x04
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
 
 
 def main() -> None:
@@ -74,7 +77,10 @@ def main() -> None:
         )
     else:
         target_task = str(payload["task"])
-    four_tactile = target_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK
+    four_tactile = target_task in {
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    }
     env_cfg = parse_env_cfg(
         target_task,
         device=args.device,

@@ -105,6 +105,9 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_four_tactile_m
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     RMAGelSightX040ThreeFrameStudent,
 )
@@ -121,6 +124,7 @@ BINARY_TACTILE_STUDENT_TASKS = frozenset(
         GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }
 )
 
@@ -203,7 +207,10 @@ def main() -> None:
 
     drawer_profile = args.task in GELSIGHT_PULLED_DRAWER_STUDENT_TASKS
     binary_tactile_profile = args.task in BINARY_TACTILE_STUDENT_TASKS
-    four_tactile_profile = args.task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK
+    four_tactile_profile = args.task in {
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    }
     artifacts = drawer_artifacts if drawer_profile else x040_artifacts
     student_cls = (RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent
         if four_tactile_profile else
@@ -315,7 +322,12 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
-    if four_tactile_profile:
+    if args.task == GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        default_log_root = (
+            "logs/skrl/sim2real_cylinder_real_alignment_rma_gelsight_pulled_drawer_"
+            "four_tactile_progress_three_frame_binary_student"
+        )
+    elif four_tactile_profile:
         default_log_root = (
             "logs/skrl/sim2real_cube_real_alignment_rma_gelsight_pulled_drawer_"
             "four_tactile_progress_three_frame_binary_student"

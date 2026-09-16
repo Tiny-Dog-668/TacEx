@@ -25,9 +25,6 @@ from .sim2real_cube_real_alignment_gelsight_x040_progress_env import (
     _GelSightX040ProgressCfgMixin,
     _GelSightX040ProgressRewardMixin,
 )
-from .sim2real_cube_real_alignment_gelsight_x040_three_frame_env import (
-    linear_collision_threshold,
-)
 from .sim2real_cube_real_alignment_gelsight_rma_env import (
     _GELSIGHT_TACTILE_RGB_SHAPE,
     _make_gelsight_sensor_cfg,
@@ -47,21 +44,16 @@ FOUR_TACTILE_CONTACT_WEIGHTS = (1.5, 1.5, 1.0, 1.0)
 # Values come from the V8 composed USD bounds relative to ``panda_hand``.
 # Hand local +Z points toward the support surface in the task's fixed grasp pose.
 FOUR_TACTILE_DOWN_FACE_POINTS_HAND_M = (
-    (-0.011597, 0.010610, 0.183310),
-    (-0.011597, 0.035863, 0.183310),
-    (0.009238, 0.010610, 0.183310),
-    (0.009238, 0.035863, 0.183310),
-    (-0.014165, -0.036317, 0.183098),
-    (-0.014165, -0.011064, 0.183098),
-    (0.006669, -0.036317, 0.183098),
-    (0.006669, -0.011064, 0.183098),
+    (-0.012843, 0.013077, 0.183310),
+    (-0.012843, 0.033911, 0.183310),
+    (0.012411, 0.013077, 0.183310),
+    (0.012411, 0.033911, 0.183310),
+    (-0.015775, -0.035299, 0.183098),
+    (-0.015775, -0.014465, 0.183098),
+    (0.009478, -0.035299, 0.183098),
+    (0.009478, -0.014465, 0.183098),
 )
 FOUR_TACTILE_LOWEST_POINT_MAX_HAND_Z_M = 0.183310
-FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_START_N = 50.0
-FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_END_N = 10.0
-FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_START_STEP = 0
-FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_END_STEP = 100_000
-FOUR_TACTILE_DOWN_COLLISION_PENALTY = -10.0
 _CONTACT_PRIMS = (
     "/World/envs/env_.*/Robot/gelpad_left",
     "/World/envs/env_.*/Robot/gelpad_right",
@@ -153,40 +145,6 @@ def lowest_world_point_from_hand_frame(
     ]
 
 
-def down_tactile_collision_penalty(
-    four_tactile_forces_n: torch.Tensor,
-    *,
-    threshold_n: float,
-    penalty_value: float = FOUR_TACTILE_DOWN_COLLISION_PENALTY,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Penalize excessive Cube force on either downward pad without terminating, ``[N,4]``."""
-    if four_tactile_forces_n.ndim != 2 or four_tactile_forces_n.shape[-1] != 4:
-        raise ValueError("four_tactile_forces_n must have shape [N,4]")
-    if threshold_n <= 0.0 or penalty_value > 0.0:
-        raise ValueError("threshold must be positive and penalty must be non-positive")
-    down_force_max = four_tactile_forces_n[:, 2:].amax(dim=-1)
-    collision = down_force_max > float(threshold_n)
-    return collision.to(four_tactile_forces_n.dtype) * float(penalty_value), collision
-
-
-def four_tactile_down_collision_threshold(
-    policy_step: int,
-    *,
-    start_n: float = FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_START_N,
-    end_n: float = FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_END_N,
-    start_step: int = FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_START_STEP,
-    end_step: int = FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_END_STEP,
-) -> float:
-    """Return the clamped linear downward-contact threshold for one policy step."""
-    return linear_collision_threshold(
-        policy_step,
-        start_n=start_n,
-        end_n=end_n,
-        start_step=start_step,
-        end_step=end_step,
-    )
-
-
 class _FourTactileMixin:
     """Expand contact/reward and optional RGB sensing from two pads to four."""
 
@@ -219,19 +177,6 @@ class _FourTactileMixin:
     def _compute_rma_contact_state_from_forces(self, forces: torch.Tensor) -> torch.Tensor:
         return (forces >= float(self.cfg.rma_contact_force_threshold_n)).to(torch.float32)
 
-    def _current_four_tactile_down_collision_threshold_n(self) -> float:
-        """Return the linearly scheduled downward-contact threshold for this policy step."""
-        policy_step = int(getattr(self, "common_step_counter", 0)) + int(
-            self.cfg.illegal_collision_curriculum_step_offset
-        )
-        return four_tactile_down_collision_threshold(
-            policy_step,
-            start_n=float(self.cfg.four_tactile_down_collision_threshold_start_n),
-            end_n=float(self.cfg.four_tactile_down_collision_threshold_end_n),
-            start_step=int(self.cfg.four_tactile_down_collision_curriculum_start_step),
-            end_step=int(self.cfg.four_tactile_down_collision_curriculum_end_step),
-        )
-
     def _compute_additional_reward(self):
         reward, log = super()._compute_additional_reward()
         inherited = self._last_rma_contact_reward
@@ -249,46 +194,10 @@ class _FourTactileMixin:
             log[f"info/rma_{name}_contact_force_n"] = (
                 self._last_rma_contact_forces[:, index].mean().detach()
             )
-        down_collision_threshold_n = (
-            self._current_four_tactile_down_collision_threshold_n()
+        log["info/down_tactile_contact_force_max_n"] = (
+            self._last_rma_contact_forces[:, 2:].amax(dim=-1).max().detach()
         )
-        down_collision_penalty, down_collision = down_tactile_collision_penalty(
-            self._last_rma_contact_forces,
-            threshold_n=down_collision_threshold_n,
-            penalty_value=float(self.cfg.four_tactile_down_collision_penalty),
-        )
-        self._last_four_tactile_down_collision_penalty = (
-            down_collision_penalty.detach().clone()
-        )
-        log.update(
-            {
-                "reward/down_tactile_illegal_collision": (
-                    down_collision_penalty.mean().detach()
-                ),
-                "info/down_tactile_illegal_collision_fraction": (
-                    down_collision.float().mean().detach()
-                ),
-                "info/down_tactile_collision_threshold_n": torch.tensor(
-                    down_collision_threshold_n,
-                    device=self.device,
-                    dtype=self._last_rma_contact_forces.dtype,
-                ),
-                "info/down_tactile_contact_force_max_n": (
-                    self._last_rma_contact_forces[:, 2:].amax(dim=-1).max().detach()
-                ),
-            }
-        )
-        return reward + down_collision_penalty, log
-
-    def _rma_collision_reward_print_fields(
-        self, log: dict[str, torch.Tensor]
-    ) -> str:
-        fields = super()._rma_collision_reward_print_fields(log)
-        return (
-            fields
-            + "down_tactile_threshold="
-            + f"{log['info/down_tactile_collision_threshold_n'].item():.2f} N, "
-        )
+        return reward, log
 
     def _setup_scene(self) -> None:
         super()._setup_scene()
@@ -354,26 +263,6 @@ class _FourTactileCfgMixin:
     rma_excess_contact_force_penalty_mode = "quadratic_normalized_max_four_tactile_excess"
     four_tactile_clearance_source = "minimum_world_z_of_down_gelpad_face_corners"
     four_tactile_clearance_points_hand_m = FOUR_TACTILE_DOWN_FACE_POINTS_HAND_M
-    four_tactile_down_collision_curriculum_schedule = (
-        "linear_clamped_global_policy_step"
-    )
-    four_tactile_down_collision_threshold_start_n = (
-        FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_START_N
-    )
-    four_tactile_down_collision_threshold_end_n = (
-        FOUR_TACTILE_DOWN_COLLISION_THRESHOLD_END_N
-    )
-    four_tactile_down_collision_curriculum_start_step = (
-        FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_START_STEP
-    )
-    four_tactile_down_collision_curriculum_end_step = (
-        FOUR_TACTILE_DOWN_COLLISION_CURRICULUM_END_STEP
-    )
-    four_tactile_down_collision_curriculum_step_offset_source = (
-        "illegal_collision_curriculum_step_offset"
-    )
-    four_tactile_down_collision_penalty = FOUR_TACTILE_DOWN_COLLISION_PENALTY
-    four_tactile_down_collision_terminates_episode = False
     gelsight_fingertip_bottom_offset_hand_m = (
         0.0,
         0.0,
@@ -384,7 +273,9 @@ class _FourTactileCfgMixin:
     pulled_drawer_surface_contact_sensors = _four_surface_sensor_cfgs()
     gsmini_left_down = _make_gelsight_sensor_cfg(_DOWN_SENSOR_PRIMS[0])
     gsmini_right_down = _make_gelsight_sensor_cfg(_DOWN_SENSOR_PRIMS[1])
-    illegal_collision_terminates_episode = True
+    # Keep the unified -10 collision reward, but do not truncate early
+    # exploration when a high-force drawer collision occurs.
+    illegal_collision_terminates_episode = False
     pulled_drawer_collision_scope = (
         "cube_non_four_gelpads_robot_or_cabinet_and_nonbase_robot_floor_cabinet_tray"
     )

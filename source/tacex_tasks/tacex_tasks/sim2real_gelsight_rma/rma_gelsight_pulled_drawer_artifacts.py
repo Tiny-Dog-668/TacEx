@@ -38,6 +38,14 @@ from .sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env impor
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
 )
+from .sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    CYLINDER_DENSITY_KG_M3,
+    CYLINDER_NOMINAL_HEIGHT_M,
+    CYLINDER_NOMINAL_RADIUS_M,
+    CYLINDER_SCALE_BUCKETS,
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+)
 from .sim2real_cube_real_alignment_gelsight_rma_env import (
     gelsight_compliant_grasp_contract,
 )
@@ -73,15 +81,39 @@ PROGRESS_BINARY_STUDENT_KIND = (
 )
 PROGRESS_BINARY_STUDENT_CHECKPOINT_VERSION = 2
 FOUR_TACTILE_TEACHER_KIND = "tacex_rma_gelsight_pulled_drawer_progress_four_tactile_teacher"
-FOUR_TACTILE_TEACHER_MANIFEST_VERSION = 2
+FOUR_TACTILE_TEACHER_MANIFEST_VERSION = 6
 FOUR_TACTILE_STUDENT_KIND = "tacex_rma_gelsight_pulled_drawer_progress_four_binary_tactile_three_frame_student"
-FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION = 2
+FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION = 6
+CYLINDER_FOUR_TACTILE_TEACHER_KIND = (
+    "tacex_rma_gelsight_pulled_drawer_progress_four_tactile_cylinder_teacher"
+)
+CYLINDER_FOUR_TACTILE_TEACHER_MANIFEST_VERSION = 2
+CYLINDER_FOUR_TACTILE_STUDENT_KIND = (
+    "tacex_rma_gelsight_pulled_drawer_progress_four_binary_tactile_cylinder_three_frame_student"
+)
+CYLINDER_FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION = 2
+
+_FOUR_TACTILE_TASKS = frozenset(
+    {
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    }
+)
+_CYLINDER_TASKS = frozenset(
+    {
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    }
+)
 
 GELSIGHT_PULLED_DRAWER_TEACHER_TASKS = frozenset(
     {
         GELSIGHT_PULLED_DRAWER_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
     }
 )
 GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK = {
@@ -94,6 +126,9 @@ GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK = {
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK: (
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
     ),
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK: (
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    ),
 }
 GELSIGHT_PULLED_DRAWER_STUDENT_TASKS = frozenset(
     GELSIGHT_PULLED_DRAWER_STUDENT_TO_TEACHER_TASK
@@ -102,8 +137,11 @@ GELSIGHT_PULLED_DRAWER_STUDENT_TASKS = frozenset(
 
 def _is_binary_student_task(task: str) -> bool:
     return (
-        task in {GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
-                 GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
+        task in {
+            GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
+            GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+            GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        }
     )
 
 
@@ -114,6 +152,11 @@ def _teacher_artifact_identity(task: str) -> tuple[str, int]:
         return PROGRESS_TEACHER_KIND, PROGRESS_TEACHER_MANIFEST_VERSION
     if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK:
         return FOUR_TACTILE_TEACHER_KIND, FOUR_TACTILE_TEACHER_MANIFEST_VERSION
+    if task == GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK:
+        return (
+            CYLINDER_FOUR_TACTILE_TEACHER_KIND,
+            CYLINDER_FOUR_TACTILE_TEACHER_MANIFEST_VERSION,
+        )
     raise RuntimeError(f"Unsupported Pulled-Drawer Teacher task: {task}")
 
 
@@ -121,6 +164,12 @@ def _student_artifact_identity(task: str) -> tuple[str, int, int]:
     if task == GELSIGHT_PULLED_DRAWER_THREE_FRAME_STUDENT_TASK:
         return STUDENT_KIND, STUDENT_CHECKPOINT_VERSION, PULLED_DRAWER_STUDENT_MODEL_VERSION
     if _is_binary_student_task(task):
+        if task == GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+            return (
+                CYLINDER_FOUR_TACTILE_STUDENT_KIND,
+                CYLINDER_FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION,
+                FOUR_TACTILE_STUDENT_MODEL_VERSION,
+            )
         if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
             return FOUR_TACTILE_STUDENT_KIND, FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION, FOUR_TACTILE_STUDENT_MODEL_VERSION
         return (
@@ -143,7 +192,7 @@ def student_input_contract(
         contract["tactile_network_input"] = [1, 96, 128]
         contract["tactile_binary_threshold_u8"] = 5.0
         contract["tactile_binary_values"] = [0.0, 1.0]
-    if student_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+    if student_task in _FOUR_TACTILE_TASKS:
         contract["input_order"] = four_tactile_student_model_contract()["runtime_input_order"]
         contract["runtime_output"] = four_tactile_student_model_contract()["runtime_output"]
         contract["contact_order"] = four_tactile_student_model_contract()["contact_order"]
@@ -151,7 +200,7 @@ def student_input_contract(
 
 
 def _student_model_contract(task: str) -> dict[str, object]:
-    if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+    if task in _FOUR_TACTILE_TASKS:
         return four_tactile_student_model_contract()
     if _is_binary_student_task(task):
         return pulled_drawer_binary_tactile_student_model_contract()
@@ -165,16 +214,19 @@ def _validate_environment_contract_for_task(
 ) -> None:
     if not isinstance(contract, Mapping):
         raise RuntimeError("Pulled-Drawer environment contract is missing")
-    four_tactile = task in {GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
-                            GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
+    four_tactile = task in _FOUR_TACTILE_TASKS
+    cylinder = task in _CYLINDER_TASKS
     progress = task in {
         GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }
     expected_profile = (
-        ("rma_gelsight_pulled_drawer_progress_four_tactile_v2" if four_tactile
+        ("rma_gelsight_pulled_drawer_progress_four_tactile_cylinder_v2" if cylinder
+         else "rma_gelsight_pulled_drawer_progress_four_tactile_v6" if four_tactile
          else "rma_gelsight_pulled_drawer_progress_v2")
         if progress
         else "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11"
@@ -184,8 +236,11 @@ def _validate_environment_contract_for_task(
         or contract.get("geometry") != pulled_drawer_geometry_contract()
         or contract.get("action_dim") != 4
         or contract.get("position_frame") != "robot_root"
-        or contract.get("cube_size_assignment")
-        != "seeded_balanced_permutation_per_group_of_8"
+        or (
+            not cylinder
+            and contract.get("cube_size_assignment")
+            != "seeded_balanced_permutation_per_group_of_8"
+        )
         or contract.get("teacher_actor_inputs")
         != {
             "proprio_obs": 15,
@@ -195,6 +250,21 @@ def _validate_environment_contract_for_task(
         }
     ):
         raise RuntimeError("Pulled-Drawer geometry/action/observation contract mismatch")
+    if cylinder:
+        expected_target = {
+            "shape": "cylinder",
+            "internal_compatibility_slot": "cube",
+            "nominal_height_m": CYLINDER_NOMINAL_HEIGHT_M,
+            "nominal_radius_m": CYLINDER_NOMINAL_RADIUS_M,
+            "density_kg_m3": CYLINDER_DENSITY_KG_M3,
+            "scale_buckets": list(CYLINDER_SCALE_BUCKETS),
+            "scale_mode": "isotropic",
+            "scale_assignment": "seeded_balanced_permutation_per_group_of_8",
+            "scale_lifetime": "fixed_per_environment",
+            "success_requires_upright": False,
+        }
+        if contract.get("target_object") != expected_target:
+            raise RuntimeError("Pulled-Drawer Cylinder target contract mismatch")
     if progress:
         reward = contract.get("progress_reward")
         excess_force = (
@@ -205,22 +275,40 @@ def _validate_environment_contract_for_task(
         collision_termination = contract.get(
             "illegal_collision_termination_threshold_n"
         )
+        expected_collision_termination = not four_tactile
         if (
             contract.get("success_terminates_episode") is not True
             or contract.get("success_reward_done_alignment")
             != "same_transition_after_committed_hold_counter"
-            or contract.get("illegal_collision_terminates_episode") is not True
-            or not isinstance(collision_termination, Mapping)
-            or collision_termination.get("start_n") != 200.0
-            or collision_termination.get("end_n") != 20.0
+            or contract.get("illegal_collision_terminates_episode")
+            is not expected_collision_termination
+            or (four_tactile and collision_termination is not None)
+            or (
+                not four_tactile
+                and (
+                    not isinstance(collision_termination, Mapping)
+                    or collision_termination.get("start_n") != 200.0
+                    or collision_termination.get("end_n") != 20.0
+                )
+            )
             or not isinstance(reward, Mapping)
             or reward.get("reach") != "absolute_normalized_proximity_per_step"
             or reward.get("reach_weight") != 2.5
             or reward.get("lift") != "absolute_normalized_progress_per_step"
             or reward.get("lift_weight") != 2.5
-            or reward.get("contact") != "signed_contact_acquisition_delta"
+            or reward.get("contact") != (
+                "absolute_weighted_contact_state_per_step"
+                if cylinder
+                else "signed_contact_acquisition_delta"
+            )
+            or reward.get("contact_holding_state_repeats_reward") is not cylinder
+            or (
+                cylinder
+                and reward.get("contact_absolute_scale") != 0.2
+            )
             or reward.get("success") != "once_on_confirmed_terminal_success"
             or reward.get("success_reward_weight") != 1000.0
+            or (cylinder and reward.get("success_requires_upright") is not False)
             or reward.get("action_magnitude_penalty_weight") != 0.05
             or not isinstance(excess_force, Mapping)
             or excess_force.get("mode") != (
@@ -248,23 +336,8 @@ def _validate_environment_contract_for_task(
             or len(clearance.get("points_hand_m", [])) != 8
         ):
             raise RuntimeError("Pulled-Drawer four-tactile clearance contract mismatch")
-        down_collision = contract.get("four_tactile_down_collision")
-        if four_tactile and down_collision != {
-            "contact_components": ["left_down", "right_down"],
-            "threshold_n": {
-                "schedule": "linear_clamped_global_policy_step",
-                "start_n": 50.0,
-                "end_n": 10.0,
-                "start_step": 0,
-                "end_step": 100_000,
-                "step_offset_source": "illegal_collision_curriculum_step_offset",
-            },
-            "comparison": "strictly_greater_than",
-            "penalty_per_policy_step": -10.0,
-            "stacks_with_quadratic_excess_force_penalty": True,
-            "terminates_episode": False,
-        }:
-            raise RuntimeError("Pulled-Drawer downward collision contract mismatch")
+        if four_tactile and "four_tactile_down_collision" in contract:
+            raise RuntimeError("Pulled-Drawer contains removed downward collision contract")
     elif "progress_reward" in contract:
         raise RuntimeError("Legacy Pulled-Drawer contract contains Progress rewards")
     if student:
@@ -309,11 +382,12 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
     task = str(cfg.rma_task_id)
     if task not in GELSIGHT_PULLED_DRAWER_TEACHER_TASKS | GELSIGHT_PULLED_DRAWER_STUDENT_TASKS:
         raise RuntimeError(f"Unsupported Pulled-Drawer task: {task}")
-    four_tactile = task in {GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
-                            GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK}
+    four_tactile = task in _FOUR_TACTILE_TASKS
+    cylinder = task in _CYLINDER_TASKS
     contract = {
         "profile": (
-            ("rma_gelsight_pulled_drawer_progress_four_tactile_v2" if four_tactile
+            ("rma_gelsight_pulled_drawer_progress_four_tactile_cylinder_v2" if cylinder
+             else "rma_gelsight_pulled_drawer_progress_four_tactile_v6" if four_tactile
              else "rma_gelsight_pulled_drawer_progress_v2")
             if task
             in {
@@ -321,6 +395,8 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
                 GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
                 GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
                 GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+                GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+                GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
             }
             else "rma_gelsight_pulled_drawer_contiguous_rigid_tray_v11"
         ),
@@ -404,10 +480,14 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
     }:
         contract["illegal_collision_terminates_episode"] = bool(
             cfg.illegal_collision_terminates_episode
         )
+        if not bool(cfg.illegal_collision_terminates_episode):
+            contract.pop("illegal_collision_termination_threshold_n", None)
         contract["success_reward_done_alignment"] = (
             "same_transition_after_committed_hold_counter"
         )
@@ -418,7 +498,7 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             "lift_weight": float(cfg.lift_weight),
             "reach_holding_state_repeats_reward": True,
             "lift_holding_state_repeats_reward": True,
-            "contact_holding_state_repeats_reward": False,
+            "contact_holding_state_repeats_reward": cylinder,
             "contact": str(cfg.contact_reward_mode),
             "contact_weight": float(cfg.rma_contact_reward_weight),
             "success": str(cfg.success_reward_mode),
@@ -444,41 +524,37 @@ def teacher_environment_contract(cfg: Any) -> dict[str, Any]:
             contract["compliant_grasp"]["contact_threshold_comparison"] = "greater_than_or_equal"
             contract["progress_reward"]["contact_order"] = list(cfg.rma_contact_order)
             contract["progress_reward"]["contact_per_sensor_weights"] = list(cfg.rma_contact_reward_weights)
+            if cylinder:
+                contract["progress_reward"]["contact_absolute_scale"] = float(
+                    cfg.cylinder_absolute_contact_reward_scale
+                )
             contract["four_tactile_clearance"] = {
                 "source": str(cfg.four_tactile_clearance_source),
                 "points_hand_m": [list(point) for point in cfg.four_tactile_clearance_points_hand_m],
                 "lowest_point_max_hand_z_m": float(cfg.gelsight_fingertip_bottom_offset_hand_m[2]),
                 "world_reduction": "minimum_z",
             }
-            contract["four_tactile_down_collision"] = {
-                "contact_components": ["left_down", "right_down"],
-                "threshold_n": {
-                    "schedule": str(
-                        cfg.four_tactile_down_collision_curriculum_schedule
-                    ),
-                    "start_n": float(
-                        cfg.four_tactile_down_collision_threshold_start_n
-                    ),
-                    "end_n": float(
-                        cfg.four_tactile_down_collision_threshold_end_n
-                    ),
-                    "start_step": int(
-                        cfg.four_tactile_down_collision_curriculum_start_step
-                    ),
-                    "end_step": int(
-                        cfg.four_tactile_down_collision_curriculum_end_step
-                    ),
-                    "step_offset_source": str(
-                        cfg.four_tactile_down_collision_curriculum_step_offset_source
-                    ),
-                },
-                "comparison": "strictly_greater_than",
-                "penalty_per_policy_step": float(cfg.four_tactile_down_collision_penalty),
-                "stacks_with_quadratic_excess_force_penalty": True,
-                "terminates_episode": bool(
-                    cfg.four_tactile_down_collision_terminates_episode
-                ),
-            }
+    if cylinder:
+        contract.pop("cube_size_buckets_m", None)
+        contract.pop("cube_size_assignment", None)
+        contract.pop("cube_size_object_count_per_environment", None)
+        contract["target_object"] = {
+            "shape": str(cfg.cylinder_shape),
+            "internal_compatibility_slot": str(
+                cfg.cylinder_internal_compatibility_slot
+            ),
+            "nominal_height_m": float(cfg.cylinder_nominal_height_m),
+            "nominal_radius_m": float(cfg.cylinder_nominal_radius_m),
+            "density_kg_m3": float(cfg.cylinder_density_kg_m3),
+            "scale_buckets": [float(value) for value in cfg.cylinder_scale_buckets],
+            "scale_mode": "isotropic",
+            "scale_assignment": str(cfg.cylinder_scale_assignment),
+            "scale_lifetime": str(cfg.cylinder_scale_lifetime),
+            "success_requires_upright": bool(cfg.success_requires_upright),
+        }
+        contract["progress_reward"]["success_requires_upright"] = bool(
+            cfg.success_requires_upright
+        )
     return contract
 
 
@@ -530,10 +606,13 @@ def student_environment_contract(cfg: Any) -> dict[str, Any]:
 
 def geometry_instance_sha256(base_env: Any) -> str:
     layout = base_env._pulled_drawer_layout
+    cylinder = str(base_env.cfg.rma_task_id) in _CYLINDER_TASKS
     serializable = {
         "seed": _cfg_seed(base_env.cfg),
         "num_envs": int(base_env.num_envs),
-        "cube_bucket_ids": base_env._active_cube_bucket_ids.detach().cpu().tolist(),
+        ("target_scale_bucket_ids" if cylinder else "cube_bucket_ids"): (
+            base_env._active_cube_bucket_ids.detach().cpu().tolist()
+        ),
         **{
             key: value.detach().cpu().tolist()
             for key, value in sorted(layout.items())
@@ -557,7 +636,8 @@ def write_teacher_manifest(
         if not path.is_file():
             raise FileNotFoundError(f"Missing Teacher run config: {path}")
         hashes[name] = sha256_file(path)
-    four_tactile = task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    four_tactile = task in _FOUR_TACTILE_TASKS
+    cylinder = task in _CYLINDER_TASKS
     actor = (RMAGelSightPulledDrawerFourTactileActorCore() if four_tactile
              else RMAGelSightPulledDrawerActorCore())
     manifest = {
@@ -577,10 +657,19 @@ def write_teacher_manifest(
     if four_tactile:
         source_dir = Path(__file__).resolve().parent
         source_files = {
-            "environment": source_dir / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py",
+            "environment": source_dir / (
+                "sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+                if cylinder
+                else "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+            ),
             "models": source_dir / "rma_gelsight_pulled_drawer_four_tactile_models.py",
             "asset": Path(GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD),
         }
+        if cylinder:
+            source_files["base_environment"] = (
+                source_dir
+                / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+            )
         manifest["source_sha256"] = {
             name: sha256_file(path) for name, path in source_files.items()
         }
@@ -601,7 +690,8 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     kind, version = _teacher_artifact_identity(task)
     if manifest.get("kind") != kind or manifest.get("version") != version:
         raise RuntimeError("Unsupported Pulled-Drawer Teacher manifest")
-    four_tactile = task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK
+    four_tactile = task in _FOUR_TACTILE_TASKS
+    cylinder = task in _CYLINDER_TASKS
     expected_model_version = FOUR_TACTILE_TEACHER_MODEL_VERSION if four_tactile else PULLED_DRAWER_TEACHER_MODEL_VERSION
     expected_actor = (RMAGelSightPulledDrawerFourTactileActorCore() if four_tactile
                       else RMAGelSightPulledDrawerActorCore())
@@ -614,10 +704,19 @@ def load_teacher_manifest(checkpoint: str | Path) -> dict[str, Any]:
     if four_tactile:
         source_dir = Path(__file__).resolve().parent
         expected_sources = {
-            "environment": source_dir / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py",
+            "environment": source_dir / (
+                "sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+                if cylinder
+                else "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+            ),
             "models": source_dir / "rma_gelsight_pulled_drawer_four_tactile_models.py",
             "asset": Path(GELSIGHT_FOUR_TACTILE_FRANKA_ARM_VISUAL_USD),
         }
+        if cylinder:
+            expected_sources["base_environment"] = (
+                source_dir
+                / "sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env.py"
+            )
         if manifest.get("source_sha256") != {
             name: sha256_file(path) for name, path in expected_sources.items()
         }:
@@ -722,7 +821,7 @@ def make_student_payload(
         ("position_head.", "position_head"),
         ("action_head.", "action_head"),
     ]
-    if student_task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+    if student_task in _FOUR_TACTILE_TASKS:
         component_specs += [("inner_tactile_encoder.", "inner_tactile_encoder"),
                             ("down_tactile_encoder.", "down_tactile_encoder")]
     else:
@@ -815,7 +914,7 @@ def load_student_checkpoint(
         ("position_head.", "position_head"),
         ("action_head.", "action_head"),
     ]
-    if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+    if task in _FOUR_TACTILE_TASKS:
         component_specs += [("inner_tactile_encoder.", "inner_tactile_encoder"),
                             ("down_tactile_encoder.", "down_tactile_encoder")]
     else:
@@ -851,7 +950,7 @@ def make_student_model_for_checkpoint(
     if payload.get("kind") != kind or payload.get("version") != version:
         raise RuntimeError("Unsupported Pulled-Drawer Student checkpoint")
     if _is_binary_student_task(task):
-        if task == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        if task in _FOUR_TACTILE_TASKS:
             return RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent(
                 pretrained_backbone=pretrained_backbone
             )
@@ -868,12 +967,18 @@ def load_student_model_state(
 
 
 __all__ = (
+    "CYLINDER_FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION",
+    "CYLINDER_FOUR_TACTILE_STUDENT_KIND",
+    "CYLINDER_FOUR_TACTILE_TEACHER_KIND",
+    "CYLINDER_FOUR_TACTILE_TEACHER_MANIFEST_VERSION",
     "FOUR_TACTILE_STUDENT_CHECKPOINT_VERSION",
     "FOUR_TACTILE_STUDENT_KIND",
     "FOUR_TACTILE_TEACHER_KIND",
     "FOUR_TACTILE_TEACHER_MANIFEST_VERSION",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_TEACHER_TASK",
+    "GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK",
+    "GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK",
     "GELSIGHT_PULLED_DRAWER_PROGRESS_TEACHER_TASK",
     "GELSIGHT_PULLED_DRAWER_STUDENT_TASKS",

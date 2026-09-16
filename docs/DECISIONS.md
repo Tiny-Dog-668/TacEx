@@ -383,6 +383,40 @@
 - 决策：内侧左右共享一个二值触觉 CNN，下向左右共享另一个 CNN；四路接触用于 shaping、监督和最大力安全，不加入抬升成功条件。任一下向 GelPad 与 Cube 的力超过线性课程阈值时叠加每步 `-10`，阈值在全局 policy step `0→100k` 由 `50→10 N`，先不 done，以避免早期探索被大量急停截断。
 - 影响：Teacher 接触输入扩为4维、Student 扩为11输入，旧双触觉 checkpoint 不兼容；阈值课程使四触觉环境/artifact 升为 v2，v1 checkpoint 结构可复用但不能按当前 fail-closed 契约直接续训。TCP 和 reach 仍以两内侧 GelSight 中点定义，最低点惩罚使用两下向 GelPad 底面8点的最低 world-Z。
 
+### DEC-055 — 取消四触觉下向专用碰撞课程
+
+- 状态：已采用
+- 背景：首轮 Teacher 日志显示策略从早期接近且频繁非法碰撞退化为无接触局部最优；下向超限事件本身极少，继续与四路二次力惩罚叠加固定 `-10` 不利于隔离主要碰撞问题。
+- 决策：移除 `50→10 N` 下向阈值课程、超限事件和独立固定惩罚；保留各路原始力及下向最大力诊断。四路 15 N 二次力惩罚和抽屉通用非法碰撞安全规则不变。
+- 影响：改变四触觉奖励和日志契约，观测/动作/模型维度不变；artifact 升为 v4，旧权重结构可读但应新开 run 重训并重新蒸馏 Student。
+
+### DEC-056 — 四触觉抽屉保留碰撞代价但不提前终止
+
+- 状态：已采用
+- 背景：v4 Teacher 在 20k 后进入抓取区域时非法碰撞快速升高，平均 episode 长度由149步降至约73步，内侧接触和抬升仍为零；开放 X040 对照保留碰撞惩罚但不按碰撞力 done。
+- 决策：四触觉抽屉继续对超过 `20→5 N` 阈值的通用非法碰撞每步惩罚 `-10`，取消 `200→20 N` 强碰撞提前终止；成功、碰地与超时语义不变。
+- 影响：只改变 done 契约，观测/动作/奖励权重/模型维度不变；artifact 升为 v5，旧权重结构可复用但应新开 run 重训并重新蒸馏 Student。
+
+### DEC-057 — 下向 GelSight 以完整刚体组件旋转
+
+- 状态：已采用
+- 决策：V8 的左右下向 case 与对应 GelPad 弹性体围绕各自 case 原点施加相同的父坐标系90度旋转；Camera/plate 随 case 子树旋转，连接未旋转内侧 GelPad 的 FixedJoint 重新定向，不通过单独旋转外壳或 mesh 实现。
+- 影响：下向触觉视角、碰撞轮廓和 clearance 八点改变，观测 key/shape、4维动作、奖励和 done 不变；四触觉 artifact 升为 v6，旧 Teacher/Student 不兼容并需重训/重新蒸馏。
+
+### DEC-058 — 高圆柱复用 Cube 接口但隔离 artifact
+
+- 状态：已采用
+- 背景：高物体可让内侧 GelPad 接触时下向组件保持更大的桌面间隙，同时现有训练器、网络和传感器均以 `/cube`、`rma_cube_pos` 等接口组织。
+- 决策：新增标称 `h=100 mm, r=25 mm` 的独立圆柱路线，内部保留 Cube 兼容命名，物理形状和 artifact 显式记录为 cylinder；8档 isotropic scale 每组8个 env seeded balanced 且生命周期固定，成功不要求直立。
+- 影响：观测、4维动作和网络维度不变；圆柱与 Cube 使用不同 kind/profile，张量虽同形但 checkpoint 双向拒绝加载，圆柱 Teacher/Student 必须重新训练和蒸馏。
+
+### DEC-059 — 高圆柱使用有界绝对四触觉接触奖励
+
+- 状态：已采用
+- 背景：首轮 Cylinder Teacher 在约35k步时左右内侧接触率约 `3%/0.03%`、双侧接触近零；接触变化量在整段 episode 内最多净贡献 `+5`，不足以引导稳定夹持。
+- 决策：仅圆柱路线将接触项改为每步 `0.2 × Σ([1.5,1.5,1.0,1.0] × contact)`，四路满接触上限 `+1.0`；Cube 路线继续使用 signed contact delta，15 N 二次过力保护不变。
+- 影响：观测/动作/网络维度不变，奖励 MDP 改变；Cylinder profile/Teacher manifest/Student checkpoint 升至 v2，旧 Cylinder Teacher 需从头重训并重新蒸馏 Student。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

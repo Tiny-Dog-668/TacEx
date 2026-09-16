@@ -38,6 +38,9 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts impo
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
 )
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
+    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
 
 
 def _probe(batch: int, four_tactile: bool = False) -> tuple[torch.Tensor, ...]:
@@ -62,7 +65,10 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint)
-    four_tactile = payload["task"] == GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK
+    four_tactile = payload["task"] in {
+        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    }
     model = make_student_model_for_checkpoint(
         payload, pretrained_backbone=False
     ).cpu().eval()

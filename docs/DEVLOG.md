@@ -4,6 +4,36 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-14 CST — 高圆柱改用有界绝对四触觉奖励
+
+- 仅 Cylinder Teacher/Student 将接触变化量替换为每步绝对状态奖励 `0.2 × [1.5,1.5,1.0,1.0]`，稳定四路接触最高 `+1.0`；Cube 路线和15 N二次过力惩罚不变。
+- 观测、4维动作及模型维度不变；Cylinder environment profile、Teacher manifest 与 Student checkpoint 升至 v2，现有 Cylinder Teacher 需从头训练，Student 需重新蒸馏。
+- 已增加绝对奖励边界与 artifact 契约测试；快速静态验证结果见本次交付，Isaac/GPU 训练 smoke 待用户运行。
+
+### 2026-09-14 CST — 新增四触觉抽屉高圆柱 Teacher–Student 路线
+
+- 新增独立高圆柱 Teacher/三帧二值四触觉 Student task：标称高 `100 mm`、半径 `25 mm`、密度 `1000 kg/m³`，8档 isotropic scale `0.90–1.10` 在每组8个 env 内按 seed 均衡固定分配。
+- 保持现有抽屉、V8 四触觉、Progress 奖励、4维动作和碰撞语义；成功为相对初始质心抬升 `35 mm` 并保持5步，不限制倾角。圆柱最低点按轴向与径向投影精确计算，新增 scale/高/半径/质量日志。
+- 观测 key/shape 与网络维度不变，但圆柱使用独立 environment profile v1、Teacher manifest/Student checkpoint kind，拒绝 Cube artifact；补齐替换形状的 `activate_contact_sensors=True`，避免四触觉 ContactSensor 初始化失败。需从头训练 Teacher 并重新蒸馏 Student；`compileall`/`diff --check` 已通过，Isaac 8-env smoke 待用户复验。
+
+### 2026-09-14 CST — 整体旋转四触觉下向 GelSight
+
+- V8 从干净 V7/下向 donor 重建；左右下向 case、其 Camera/plate 子树及 GelPad 弹性体绕各自 case 原点同向旋转90度，并重定向连接未旋转内侧 GelPad 的 FixedJoint。
+- 下向 GelPad 的 hand-frame clearance 八点同步更新；观测/4维动作、奖励和 done 不变，几何/碰撞/触觉图像改变，四触觉环境/Teacher manifest/Student checkpoint 契约升至 v6，旧 checkpoint 需重训/重新蒸馏。
+- 生成器、USD 根节点/编辑器污染、刚体变换、四个关节锚点及包围盒已静态验证；Isaac reset/step、接触力和四路相机 smoke 待用户验证。
+
+### 2026-09-14 CST — 关闭四触觉抽屉强碰撞提前终止
+
+- 四触觉 Pulled-Drawer 将通用非法碰撞 done 关闭；超过 `20→5 N` 阈值的每步 `-10` 及四路 15 N 二次力惩罚保持不变，超时、成功和机器人低于地面的终止保持不变。
+- 观测、4维动作、奖励权重和模型维度不变；四触觉环境 profile、Teacher manifest 和 Student checkpoint 契约升至 v5。v4 权重结构可复用，但建议新开 run 重训/重新蒸馏。
+- 已执行 Python 语法检查和静态 reward/done/artifact 契约检查；Isaac reset/step 与训练 smoke 待用户验证。
+
+### 2026-09-14 CST — 取消四触觉下向专用碰撞课程
+
+- 四触觉 Pulled-Drawer 移除下向 GelPad `50→10 N` 阈值课程、超限事件和独立每步 `-10`；保留各路原始力/下向最大力诊断、四路 15 N 最大超额二次力惩罚及其他非法碰撞惩罚/强终止。
+- 观测、4维动作和模型输入维度不变；四触觉环境 profile、Teacher manifest 和 Student checkpoint 契约升至 v4。旧权重结构可复用，但不按当前 fail-closed 契约直接续训，建议新开 run 重训/重新蒸馏。
+- 已执行 Python 语法检查和静态契约检查；Isaac reset/step 与训练 smoke 待用户验证。
+
 ### 2026-09-14 CST — 新增四触觉 Pulled-Drawer Progress 路线
 
 - 新增 V8 四触觉 Franka、四接触 32 维 Teacher 和 11 输入 Binary Student；接触顺序固定为内左、内右、下左、下右，方向内共享触觉编码器。
