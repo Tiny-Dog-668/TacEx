@@ -53,11 +53,10 @@ from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pul
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_x040_progress_binary_tactile_env import (
     GELSIGHT_X040_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
 )
-from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
-    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-)
-from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
-    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+from tacex_tasks.sim2real_gelsight_rma.large_drawer_fusion_runtime import (
+    initial_recurrent_state,
+    run_student_model,
+    update_recurrent_state,
 )
 
 
@@ -77,10 +76,6 @@ def main() -> None:
         )
     else:
         target_task = str(payload["task"])
-    four_tactile = target_task in {
-        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-    }
     env_cfg = parse_env_cfg(
         target_task,
         device=args.device,
@@ -94,29 +89,34 @@ def main() -> None:
         ).to(device).eval()
         artifacts.load_student_model_state(model, payload["model"])
         observations, _ = env.reset()
+        recurrent_state, reset_mask = initial_recurrent_state(
+            target_task, args.num_envs, device
+        )
         reward_sum = 0.0
         with torch.inference_mode():
             for step in range(1, args.steps + 1):
                 obs = observations["policy"]
-                tactile_inputs = [obs["gsmini_left_rgb"], obs["gsmini_right_rgb"]]
-                if four_tactile:
-                    tactile_inputs += [obs["gsmini_left_down_rgb"], obs["gsmini_right_down_rgb"]]
-                tactile_inputs += [obs["gsmini_left_reference_rgb"], obs["gsmini_right_reference_rgb"]]
-                if four_tactile:
-                    tactile_inputs += [obs["gsmini_left_down_reference_rgb"], obs["gsmini_right_down_reference_rgb"]]
-                actions, contact_probability, cube_position_root_m = model(
-                    obs["wrist_rgb_history"], obs["proprio_obs"].float(),
-                    obs["action_history"].float(), *tactile_inputs
+                result = run_student_model(
+                    model,
+                    target_task,
+                    obs,
+                    recurrent_state=recurrent_state,
+                    reset_mask=reset_mask,
                 )
-                observations, rewards, _, _, _ = env.step(actions)
+                actions = result["action"]
+                observations, rewards, terminated, truncated, _ = env.step(actions)
+                recurrent_state, reset_mask = update_recurrent_state(
+                    result, terminated, truncated
+                )
                 reward_sum += rewards.mean().item()
                 if step % args.metrics_interval == 0 or step == args.steps:
                     metrics = env.unwrapped._episode_success_statistics()
                     print(
                         f"[Drawer play] {step}/{args.steps} "
                         f"mean_reward={reward_sum / step:.3f} "
-                        f"contact_prob_lr={contact_probability.mean(dim=0).tolist()} "
-                        f"cube_position_root_m={cube_position_root_m.mean(dim=0).tolist()} "
+                        f"contact_prob={None if result['contact_probability'] is None else result['contact_probability'].mean(dim=0).tolist()} "
+                        f"cube_position_root_m={result['cube_position_root_m'].mean(dim=0).tolist()} "
+                        f"alpha={None if result['alpha'] is None else result['alpha'].mean().item()} "
                         f"success={metrics['cumulative_rate'].item():.3f}",
                         flush=True,
                     )

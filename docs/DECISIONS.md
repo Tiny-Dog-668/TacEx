@@ -417,6 +417,27 @@
 - 决策：仅圆柱路线将接触项改为每步 `0.2 × Σ([1.5,1.5,1.0,1.0] × contact)`，四路满接触上限 `+1.0`；Cube 路线继续使用 signed contact delta，15 N 二次过力保护不变。
 - 影响：观测/动作/网络维度不变，奖励 MDP 改变；Cylinder profile/Teacher manifest/Student checkpoint 升至 v2，旧 Cylinder Teacher 需从头重训并重新蒸馏 Student。
 
+### DEC-060 — 大抽屉保持托盘标称抓取中心不变
+
+- 状态：已采用
+- 背景：只放大柜体与托盘时，若柜体中心不动，零接缝约束会把托盘和圆柱标称位置向机器人移动 `62.5 mm`，同时改变几何尺寸和抓取工作区。
+- 决策：大抽屉柜体中心沿 X 后移到 `0.8525 m`，使 `400 mm` 柜深与 `250 mm` 托盘深在零接缝下仍得到原标称托盘中心 `x=0.5275 m`；尺寸含义统一为外尺寸的深×宽×高。
+- 影响：新环境只隔离比较抽屉尺度，圆柱 reset 标称中心不变、X/Y 范围扩大到各 `±50 mm`；大抽屉使用独立 v2 task profile/artifact，标准抽屉不变。
+
+### DEC-061 — 固定视觉下采样使用独立 Teacher–Student 配对
+
+- 状态：部分被 DEC-062 取代（独立 task 保留）
+- 背景：Large-Cylinder Student 需要评估低分辨率视觉，而在已有 task 上切换视觉退化会使同形 RGB 输入的 checkpoint 失去可追溯性。
+- 决策：新增配对 task，Student 固定对每个 policy RGB frame 做 `224→32→224` bilinear 下采样/上采样，并关闭随机 Gaussian blur；Teacher 不消费 RGB，保留原 privileged MDP。
+- 影响：观测 key/shape、4维动作、奖励和 done 不变；独立 Downsample Teacher/profile 继续保留，但六策略融合对比不再用其作为蒸馏 Teacher。
+
+### DEC-062 — 六种融合 Student 统一复用标准 Large Cylinder Teacher
+
+- 状态：已采用
+- 背景：融合消融若分别训练 Teacher，会把 Teacher 方差和 Student 融合收益混在一起；Teacher 不读取相机或触觉图像，下采样并不改变其 privileged MDP。
+- 决策：六个固定 `224→32→224` Student task 共享现有标准 Large Cylinder Teacher、物理和 reset 契约，只隔离运行模态、融合模型与 Student artifact；Cross 使用三个时序视觉 token，Aux gate 只消费可部署预测/触觉面积，GRU 状态显式跨步传递并按 reset mask 重建。
+- 影响：标准 Teacher checkpoint 无需重训；现有 Downsample Student 因配对与 artifact 版本改变而 fail-closed，六个 Student 必须分别重新蒸馏。动作4维、奖励、success/done、RGB/触觉张量 shape 均不变。
+
 ## 第二部分 已知问题
 
 ### ISSUE-001 — train/play/play_bucket 重复实现配置和 checkpoint 逻辑

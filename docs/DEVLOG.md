@@ -4,6 +4,30 @@
 
 ## 第一部分 变更日志
 
+### 2026-09-17 CST — 新增 Large Cylinder 六种视触融合 Student 消融
+
+- 在同一 Large-Pulled-Drawer Cylinder 四触觉 Downsample 物理配置上注册 Vision-Only、VT、Cross、Cross-Alpha、Cross-Alpha-Aux、Cross-Alpha-Aux-GRU 六个 Student task，统一复用现有标准 Large Cylinder Teacher；动作、奖励、success/done 和 RGB/触觉 shape 不变。
+- 新增三帧视觉 token cross-attention、可部署 alpha/遮挡率 gate、显式九步四路触觉 GRU 状态、XY 遮挡预测器及 geometry-seed 分组扫描/训练链路；artifact 按融合 variant 隔离，现有 Downsample Student 升版并须分别重新蒸馏，标准 Teacher 无需重训。
+- 新增共享 schedule 六 checkpoint 评测、遮挡分桶/Wilson 区间、接触率/参数量/延迟与柱状图输出；已通过改动文件语法检查和不依赖 Isaac 的定向测试，Isaac 相机、蒸馏及 TorchScript smoke 待用户验证。
+
+### 2026-09-17 CST — 新增大抽屉圆柱四触觉 Downsample RMA 配对任务
+
+- 新增独立 Large-Pulled-Drawer Cylinder 四触觉 Downsample Teacher/Student task；Student 每个 224×224 RGB policy frame 在颜色/内参 DR 后固定经 `224→32→224` bilinear 退化，关闭随机 Gaussian blur，三帧 history、触觉、动作、奖励和 done 不变。
+- 该独立 Downsample Teacher task/profile 继续保留；后续六策略公平对比改为统一复用标准 Large-Cylinder Teacher，因此标准 Teacher 无需重训，原 Downsample Teacher 不作为本组 Student 的蒸馏配对。
+- 已补充离线视觉退化、task 配对与 contract 隔离测试；快速语法/离线 pytest 结果见本次交付，Isaac 8-env 相机 smoke 待用户验证。
+
+### 2026-09-17 CST — 新增四触觉 Student rollout 收集与 episode 分析
+
+- 新增独立四触觉 Pulled-Drawer Student 评估入口，按 checkpoint 自动选择 Cube/Cylinder/Large-Cylinder task，并收集四路物理接触真值、Student 接触预测及成功 episode 指标。
+- 评估产物写入逐 episode CSV 与汇总 JSON；success 非终止时同时统计全 episode 和首次成功前的接触占空比。训练、环境观测/奖励/done、artifact 与 checkpoint 契约均未改变。
+- 已增加无需 Isaac Sim 的 episode 分母/终止帧回归测试；Python 语法检查和定向离线 pytest 结果见本次交付，Isaac 8-env 相机 smoke 待用户验证。
+
+### 2026-09-16 CST — 新增高圆柱大抽屉 Teacher–Student 环境
+
+- 新增独立 Large-Pulled-Drawer 圆柱四触觉 Teacher/Student task：柜体标称外尺寸 `400×350×180 mm`，托盘标称外尺寸 `250×320×150 mm`，继续按共享 `0.9–1.1×` 尺寸因子做每 env 固定随机化。
+- 保持托盘标称中心和圆柱尺寸不变；大抽屉圆柱每 episode 的 X/Y reset 扩大为各 `±50 mm`，观测 key/shape、4维动作、奖励与 done 不变。使用独立 v2 environment profile、Teacher manifest 和 Student checkpoint，旧 task/checkpoint 不受影响，新路线需重新训练与蒸馏。
+- 共享抽屉采样器已参数化且默认参数保持旧几何；已执行改动 Python 的 `compileall`，离线定向 pytest 与 Isaac 8-env smoke 待用户验证。
+
 ### 2026-09-14 CST — 高圆柱改用有界绝对四触觉奖励
 
 - 仅 Cylinder Teacher/Student 将接触变化量替换为每步绝对状态奖励 `0.2 × [1.5,1.5,1.0,1.0]`，稳定四路接触最高 `+1.0`；Cube 路线和15 N二次过力惩罚不变。

@@ -35,25 +35,27 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_artifacts impo
     make_student_model_for_checkpoint,
     sha256_file,
 )
-from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
-    GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-)
-from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
-    GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-)
 
 
-def _probe(batch: int, four_tactile: bool = False) -> tuple[torch.Tensor, ...]:
-    prefix = (
-        torch.randint(0, 256, (batch, 3, 224, 224, 3), dtype=torch.uint8),
-        torch.randn(batch, 15),
-        torch.randn(batch, 4) * 0.01,
-    )
-    tactile = tuple(
-        torch.randint(0, 256, (batch, 96, 128, 3), dtype=torch.uint8)
-        for _ in range(8 if four_tactile else 4)
-    )
-    return prefix + tactile
+def _probe(batch: int, input_order: list[str]) -> tuple[torch.Tensor, ...]:
+    values = []
+    for name in input_order:
+        if name == "wrist_rgb_history":
+            value = torch.randint(0, 256, (batch, 3, 224, 224, 3), dtype=torch.uint8)
+        elif name == "proprio_obs":
+            value = torch.randn(batch, 15)
+        elif name == "action_history":
+            value = torch.randn(batch, 4) * 0.01
+        elif name == "tactile_feature_history":
+            value = torch.randn(batch, 4, 9, 256)
+        elif name == "reset_mask":
+            value = torch.zeros(batch, dtype=torch.bool)
+        elif name.startswith("gsmini_"):
+            value = torch.randint(0, 256, (batch, 96, 128, 3), dtype=torch.uint8)
+        else:
+            raise RuntimeError(f"Unsupported export input: {name}")
+        values.append(value)
+    return tuple(values)
 
 
 def _atomic_json_dump(value: dict, path: Path) -> None:
@@ -65,10 +67,7 @@ def _atomic_json_dump(value: dict, path: Path) -> None:
 def main() -> None:
     checkpoint = Path(args.student_checkpoint).expanduser().resolve()
     payload = load_student_checkpoint(checkpoint)
-    four_tactile = payload["task"] in {
-        GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-        GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-    }
+    input_order = list(payload["student_input_contract"]["input_order"])
     model = make_student_model_for_checkpoint(
         payload, pretrained_backbone=False
     ).cpu().eval()
@@ -83,7 +82,7 @@ def main() -> None:
     validation = {}
     with torch.inference_mode():
         for batch in (1, 8):
-            probe = _probe(batch, four_tactile)
+            probe = _probe(batch, input_order)
             eager = model(*probe)
             actual = scripted(*probe)
             errors = [torch.max(torch.abs(a - b)).item() for a, b in zip(eager, actual)]
@@ -97,36 +96,23 @@ def main() -> None:
     scripted.save(str(output))
     reloaded = torch.jit.load(str(output), map_location="cpu").eval()
     with torch.inference_mode():
-        reloaded_output = reloaded(*_probe(1, four_tactile))
+        reloaded_output = reloaded(*_probe(1, input_order))
     if not all(torch.isfinite(value).all() for value in reloaded_output):
         raise RuntimeError("Reloaded TorchScript returned non-finite output")
     cuda_validation = False
     if torch.cuda.is_available():
         cuda_model = torch.jit.load(str(output), map_location="cuda:0").eval()
         with torch.inference_mode():
-            cuda_output = cuda_model(*tuple(value.cuda() for value in _probe(8, four_tactile)))
+            cuda_output = cuda_model(*tuple(value.cuda() for value in _probe(8, input_order)))
         if not all(torch.isfinite(value).all() for value in cuda_output):
             raise RuntimeError("CUDA TorchScript returned non-finite output")
         cuda_validation = True
     input_signature = dict(payload["student_input_contract"])
-    tactile_shape = input_signature.pop("tactile_rgb")
-    input_signature.update(
-        {
-            "gsmini_left_rgb": tactile_shape,
-            "gsmini_right_rgb": tactile_shape,
-            "gsmini_left_reference_rgb": tactile_shape,
-            "gsmini_right_reference_rgb": tactile_shape,
-        }
-    )
-    if four_tactile:
-        input_signature.update(
-            {
-                "gsmini_left_down_rgb": tactile_shape,
-                "gsmini_right_down_rgb": tactile_shape,
-                "gsmini_left_down_reference_rgb": tactile_shape,
-                "gsmini_right_down_reference_rgb": tactile_shape,
-            }
-        )
+    tactile_shape = input_signature.pop("tactile_rgb", None)
+    if tactile_shape is not None:
+        for name in input_order:
+            if name.startswith("gsmini_"):
+                input_signature[name] = tactile_shape
     _atomic_json_dump(
         {
             "kind": "tacex_rma_gelsight_pulled_drawer_three_frame_student_torchscript",

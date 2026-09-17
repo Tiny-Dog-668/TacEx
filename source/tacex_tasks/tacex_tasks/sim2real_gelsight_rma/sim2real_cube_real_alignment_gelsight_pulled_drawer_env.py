@@ -209,7 +209,15 @@ def _tray_nominal_panels() -> dict[
     }
 
 
-def sample_pulled_drawer_layouts(num_envs: int, seed: int) -> dict[str, torch.Tensor]:
+def sample_pulled_drawer_layouts(
+    num_envs: int,
+    seed: int,
+    *,
+    cabinet_nominal_size_m: tuple[float, float, float] = PULLED_DRAWER_CABINET_NOMINAL_SIZE_M,
+    cabinet_nominal_center_xy_m: tuple[float, float] = PULLED_DRAWER_CABINET_NOMINAL_CENTER_XY_M,
+    tray_nominal_size_m: tuple[float, float, float] = PULLED_DRAWER_TRAY_NOMINAL_SIZE_M,
+    tray_reference_center_xy_m: tuple[float, float] = PULLED_DRAWER_TRAY_REFERENCE_CENTER_XY_M,
+) -> dict[str, torch.Tensor]:
     """Sample deterministic per-env geometry; tensors are CPU float64 [N,*]."""
     if num_envs <= 0:
         raise ValueError("num_envs must be positive")
@@ -222,10 +230,10 @@ def sample_pulled_drawer_layouts(num_envs: int, seed: int) -> dict[str, torch.Te
         "gap_m": torch.empty((num_envs,), dtype=torch.float64),
         "side_clearance_m": torch.empty((num_envs,), dtype=torch.float64),
     }
-    cabinet_size0 = torch.tensor(PULLED_DRAWER_CABINET_NOMINAL_SIZE_M, dtype=torch.float64)
-    tray_size0 = torch.tensor(PULLED_DRAWER_TRAY_NOMINAL_SIZE_M, dtype=torch.float64)
-    cabinet_xy0 = torch.tensor(PULLED_DRAWER_CABINET_NOMINAL_CENTER_XY_M, dtype=torch.float64)
-    tray_xy0 = torch.tensor(PULLED_DRAWER_TRAY_NOMINAL_CENTER_XY_M, dtype=torch.float64)
+    cabinet_size0 = torch.tensor(cabinet_nominal_size_m, dtype=torch.float64)
+    tray_size0 = torch.tensor(tray_nominal_size_m, dtype=torch.float64)
+    cabinet_xy0 = torch.tensor(cabinet_nominal_center_xy_m, dtype=torch.float64)
+    tray_xy0 = torch.tensor(tray_reference_center_xy_m, dtype=torch.float64)
     position_delta = torch.tensor(PULLED_DRAWER_POSITION_DELTA_XY_M, dtype=torch.float64)
     scale_low, scale_high = PULLED_DRAWER_SIZE_SCALE_RANGE
 
@@ -288,7 +296,13 @@ def balanced_cube_bucket_ids(num_envs: int, seed: int) -> torch.Tensor:
     return result
 
 
-def pulled_drawer_geometry_contract() -> dict[str, object]:
+def pulled_drawer_geometry_contract(
+    *,
+    cabinet_nominal_size_m: tuple[float, float, float] = PULLED_DRAWER_CABINET_NOMINAL_SIZE_M,
+    cabinet_nominal_center_xy_m: tuple[float, float] = PULLED_DRAWER_CABINET_NOMINAL_CENTER_XY_M,
+    tray_nominal_size_m: tuple[float, float, float] = PULLED_DRAWER_TRAY_NOMINAL_SIZE_M,
+    tray_reference_center_xy_m: tuple[float, float] = PULLED_DRAWER_TRAY_REFERENCE_CENTER_XY_M,
+) -> dict[str, object]:
     return {
         "version": PULLED_DRAWER_GEOMETRY_VERSION,
         "coordinate_frame": "robot_root_aligned_world_m",
@@ -318,17 +332,22 @@ def pulled_drawer_geometry_contract() -> dict[str, object]:
         },
         "cabinet": {
             "shape": "open_minus_x_four_panel_shell_without_bottom",
-            "nominal_outer_size_m": list(PULLED_DRAWER_CABINET_NOMINAL_SIZE_M),
-            "nominal_center_xy_m": list(PULLED_DRAWER_CABINET_NOMINAL_CENTER_XY_M),
+            "nominal_outer_size_m": list(cabinet_nominal_size_m),
+            "nominal_center_xy_m": list(cabinet_nominal_center_xy_m),
             "bottom_z_m": 0.0,
             "panel_thickness_m": PULLED_DRAWER_PANEL_THICKNESS_M,
         },
         "tray": {
             "shape": "open_top_five_panel_pulled_drawer",
-            "nominal_outer_size_m": list(PULLED_DRAWER_TRAY_NOMINAL_SIZE_M),
-            "nominal_center_xy_m": list(PULLED_DRAWER_TRAY_NOMINAL_CENTER_XY_M),
+            "nominal_outer_size_m": list(tray_nominal_size_m),
+            "nominal_center_xy_m": [
+                cabinet_nominal_center_xy_m[0]
+                - 0.5 * cabinet_nominal_size_m[0]
+                - 0.5 * tray_nominal_size_m[0],
+                tray_reference_center_xy_m[1],
+            ],
             "measured_reference_center_xy_m": list(
-                PULLED_DRAWER_TRAY_REFERENCE_CENTER_XY_M
+                tray_reference_center_xy_m
             ),
             "bottom_z_m": 0.0,
             "panel_thickness_m": PULLED_DRAWER_PANEL_THICKNESS_M,
@@ -446,6 +465,10 @@ class _PulledDrawerCfgMixin:
     # Teacher and Student share one explicit Pulled-Drawer physics/safety
     # contract without changing any other GelSight environment.
     robot = _pulled_drawer_robot_cfg()
+    pulled_drawer_cabinet_nominal_size_m = PULLED_DRAWER_CABINET_NOMINAL_SIZE_M
+    pulled_drawer_cabinet_nominal_center_xy_m = PULLED_DRAWER_CABINET_NOMINAL_CENTER_XY_M
+    pulled_drawer_tray_nominal_size_m = PULLED_DRAWER_TRAY_NOMINAL_SIZE_M
+    pulled_drawer_tray_reference_center_xy_m = PULLED_DRAWER_TRAY_REFERENCE_CENTER_XY_M
     pulled_drawer_robot_asset_profile = GELSIGHT_PULLED_DRAWER_FRANKA_ASSET_PROFILE
     pulled_drawer_finger_extension_local_z_m = (
         GELSIGHT_PULLED_DRAWER_FINGER_EXTENSION_M
@@ -549,6 +572,24 @@ class _PulledDrawerSceneMixin:
 
     cfg: _PulledDrawerCfgMixin
 
+    def _sample_pulled_drawer_layouts(
+        self, num_envs: int, seed: int
+    ) -> dict[str, torch.Tensor]:
+        return sample_pulled_drawer_layouts(
+            num_envs,
+            seed,
+            cabinet_nominal_size_m=tuple(
+                self.cfg.pulled_drawer_cabinet_nominal_size_m
+            ),
+            cabinet_nominal_center_xy_m=tuple(
+                self.cfg.pulled_drawer_cabinet_nominal_center_xy_m
+            ),
+            tray_nominal_size_m=tuple(self.cfg.pulled_drawer_tray_nominal_size_m),
+            tray_reference_center_xy_m=tuple(
+                self.cfg.pulled_drawer_tray_reference_center_xy_m
+            ),
+        )
+
     def _setup_scene(self) -> None:
         for name in (*_CABINET_PANEL_NAMES, *_TRAY_PANEL_NAMES):
             rigid_object = RigidObject(getattr(self.cfg, name))
@@ -556,7 +597,7 @@ class _PulledDrawerSceneMixin:
             self.scene.rigid_objects[name] = rigid_object
         super()._setup_scene()
         seed = int(getattr(self.cfg, "seed", 42) or 42)
-        sampled = sample_pulled_drawer_layouts(self.num_envs, seed)
+        sampled = self._sample_pulled_drawer_layouts(self.num_envs, seed)
         self._pulled_drawer_layout = {
             key: value.to(device=self.device, dtype=torch.float32)
             for key, value in sampled.items()

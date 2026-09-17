@@ -41,6 +41,12 @@ parser.add_argument("--resume", default=None)
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--timesteps", type=int, default=100_000)
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument(
+    "--environment_seed",
+    type=int,
+    default=None,
+    help="Physical geometry seed. Defaults to the paired Teacher manifest seed.",
+)
 parser.add_argument("--learning_rate", type=float, default=3.0e-4)
 parser.add_argument("--backbone_learning_rate", type=float, default=3.0e-5)
 parser.add_argument(
@@ -52,6 +58,12 @@ parser.add_argument("--weight_decay", type=float, default=1.0e-5)
 parser.add_argument("--position_loss_weight", type=float, default=1.0)
 parser.add_argument("--contact_loss_weight", type=float, default=1.0)
 parser.add_argument("--contact_positive_weight", type=float, default=1.0)
+parser.add_argument("--occlusion_loss_weight", type=float, default=1.0)
+parser.add_argument(
+    "--occlusion_predictor_checkpoint",
+    default=None,
+    help="Required only by the two Alpha-Aux comparison Students.",
+)
 parser.add_argument("--action_loss_weight", type=float, default=1.0)
 parser.add_argument("--action_smoothness_loss_weight", type=float, default=0.05)
 parser.add_argument("--smooth_l1_beta", type=float, default=0.1)
@@ -102,11 +114,28 @@ from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_pulled_drawer_four_tactile_m
     RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent,
     RMAGelSightPulledDrawerFourTactileActorCore,
 )
+from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_large_drawer_fusion_models import (
+    TACTILE_CROSS_ALPHA_AUX_GRU_DOWNSAMPLE,
+    TACTILE_CROSS_ALPHA_DOWNSAMPLE,
+    VISION_ONLY_DOWNSAMPLE,
+    is_aux_variant,
+    is_recurrent_variant,
+    is_tactile_variant,
+)
+from tacex_tasks.sim2real_gelsight_rma.large_drawer_occlusion import (
+    load_xy_occlusion_predictor,
+)
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cube_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
     GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
 )
 from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env import (
     GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_env import (
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+)
+from tacex_tasks.sim2real_gelsight_rma.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_downsample_env import (
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK,
 )
 from tacex_tasks.sim2real_gelsight_rma.rma_gelsight_x040_three_frame_models import (
     RMAGelSightX040ThreeFrameStudent,
@@ -125,6 +154,8 @@ BINARY_TACTILE_STUDENT_TASKS = frozenset(
         GELSIGHT_PULLED_DRAWER_PROGRESS_BINARY_TACTILE_THREE_FRAME_STUDENT_DR_TASK,
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
         GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK,
     }
 )
 
@@ -167,12 +198,14 @@ def _save_initial_policy_images(observations: dict, output_dir: Path) -> None:
 
 
 def _loss_contract() -> dict[str, object]:
-    contact_source = (
-        "left_right_bce_from_single_channel_binary_max_abs_rgb_delta_gt_5_u8"
-        if args.task in BINARY_TACTILE_STUDENT_TASKS
+    fusion_variant = drawer_artifacts.LARGE_DRAWER_FUSION_VARIANT_BY_TASK.get(args.task)
+    tactile_variant = fusion_variant is None or is_tactile_variant(fusion_variant)
+    contact_source = "absent" if not tactile_variant else (
+        "four_sensor_bce_from_single_channel_binary_max_abs_rgb_delta_gt_5_u8"
+        if fusion_variant is not None or args.task in BINARY_TACTILE_STUDENT_TASKS
         else "left_right_bce_from_signed_current_minus_reference"
     )
-    return {
+    contract = {
         "position": "smooth_l1_normalized_cube_position_root_xyz",
         "position_weight": float(args.position_loss_weight),
         "smooth_l1_beta": float(args.smooth_l1_beta),
@@ -185,6 +218,10 @@ def _loss_contract() -> dict[str, object]:
         "action_smoothness_weight": float(args.action_smoothness_loss_weight),
         "heatmap": "absent",
     }
+    if fusion_variant is not None and is_aux_variant(fusion_variant):
+        contract["occlusion"] = "mse_visual_prediction_to_frozen_xy_predictor"
+        contract["occlusion_weight"] = float(args.occlusion_loss_weight)
+    return contract
 
 
 def _optimizer_contract() -> dict[str, object]:
@@ -206,11 +243,19 @@ def main() -> None:
         raise ValueError("This trainer only supports the paired X040 or Pulled-Drawer Student task")
 
     drawer_profile = args.task in GELSIGHT_PULLED_DRAWER_STUDENT_TASKS
+    fusion_spec = drawer_artifacts.LARGE_DRAWER_FUSION_REGISTRY.get(args.task)
+    fusion_variant = fusion_spec["variant"] if fusion_spec is not None else None
+    fusion_profile = fusion_spec is not None
+    fusion_tactile_profile = fusion_profile and is_tactile_variant(fusion_variant)
+    fusion_aux_profile = fusion_profile and is_aux_variant(fusion_variant)
+    fusion_recurrent_profile = fusion_profile and is_recurrent_variant(fusion_variant)
     binary_tactile_profile = args.task in BINARY_TACTILE_STUDENT_TASKS
     four_tactile_profile = args.task in {
         GELSIGHT_PULLED_DRAWER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
         GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
-    }
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK,
+    } or fusion_profile
     artifacts = drawer_artifacts if drawer_profile else x040_artifacts
     student_cls = (RMAGelSightPulledDrawerFourBinaryTactileThreeFrameStudent
         if four_tactile_profile else
@@ -237,6 +282,7 @@ def main() -> None:
     if min(
         args.position_loss_weight,
         args.contact_loss_weight,
+        args.occlusion_loss_weight,
         args.action_loss_weight,
         args.action_smoothness_loss_weight,
         args.weight_decay,
@@ -271,9 +317,29 @@ def main() -> None:
             raise RuntimeError("Resume loss contract differs from current arguments")
         if resume_payload.get("optimizer_config") != _optimizer_contract():
             raise RuntimeError("Resume optimizer contract differs from current arguments")
+        if args.occlusion_predictor_checkpoint and resume_payload.get(
+            "occlusion_predictor_checkpoint_sha256"
+        ) != artifacts.sha256_file(args.occlusion_predictor_checkpoint):
+            raise RuntimeError("Resume checkpoint used a different occlusion predictor")
+
+    if fusion_aux_profile and not args.occlusion_predictor_checkpoint:
+        raise ValueError("Aux fusion Students require --occlusion_predictor_checkpoint")
+    if not fusion_aux_profile and args.occlusion_predictor_checkpoint:
+        raise ValueError("--occlusion_predictor_checkpoint is only valid for Aux Students")
+    occlusion_predictor = None
+    occlusion_predictor_metadata = None
+    if fusion_aux_profile:
+        occlusion_predictor, occlusion_predictor_metadata = load_xy_occlusion_predictor(
+            args.occlusion_predictor_checkpoint, device=args.device
+        )
 
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
-    env_cfg.seed = args.seed
+    if args.environment_seed is not None:
+        env_cfg.seed = args.environment_seed
+    elif drawer_profile:
+        env_cfg.seed = int(teacher_manifest["environment_contract"]["geometry_seed"])
+    else:
+        env_cfg.seed = args.seed
     if resume_payload is not None:
         env_cfg.illegal_collision_curriculum_step_offset = int(resume_payload["global_step"])
     artifacts.validate_live_teacher_contract(env_cfg, teacher_manifest)
@@ -301,18 +367,29 @@ def main() -> None:
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
 
-    model = student_cls(pretrained_backbone=False).to(device)
+    model = (
+        artifacts.make_student_model_for_task(args.task, pretrained_backbone=False)
+        if fusion_profile
+        else student_cls(pretrained_backbone=False)
+    ).to(device)
     model.load_vision_encoder_state(encoder_state)
-    tactile_parameters = (
-        list(model.inner_tactile_encoder.parameters()) + list(model.down_tactile_encoder.parameters())
-        if four_tactile_profile else list(model.tactile_encoder.parameters())
-    )
-    head_parameters = (
-        list(model.temporal_fusion.parameters())
-        + tactile_parameters
-        + list(model.position_head.parameters())
-        + list(model.action_head.parameters())
-    )
+    if fusion_profile:
+        head_parameters = [
+            parameter
+            for name, parameter in model.named_parameters()
+            if not name.startswith("vision_encoder.")
+        ]
+    else:
+        tactile_parameters = (
+            list(model.inner_tactile_encoder.parameters()) + list(model.down_tactile_encoder.parameters())
+            if four_tactile_profile else list(model.tactile_encoder.parameters())
+        )
+        head_parameters = (
+            list(model.temporal_fusion.parameters())
+            + tactile_parameters
+            + list(model.position_head.parameters())
+            + list(model.action_head.parameters())
+        )
     trainable = list(head_parameters)
     groups = [{"params": head_parameters, "lr": args.learning_rate}]
     if args.train_backbone_after_layer2:
@@ -322,7 +399,19 @@ def main() -> None:
         groups.append({"params": backbone_parameters, "lr": args.backbone_learning_rate})
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
 
-    if args.task == GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+    if fusion_profile:
+        default_log_root = str(fusion_spec["log_directory"])
+    elif args.task == GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK:
+        default_log_root = (
+            "logs/skrl/sim2real_cylinder_real_alignment_rma_gelsight_large_pulled_drawer_"
+            "four_tactile_downsample_progress_three_frame_binary_student"
+        )
+    elif args.task == GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
+        default_log_root = (
+            "logs/skrl/sim2real_cylinder_real_alignment_rma_gelsight_large_pulled_drawer_"
+            "four_tactile_progress_three_frame_binary_student"
+        )
+    elif args.task == GELSIGHT_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK:
         default_log_root = (
             "logs/skrl/sim2real_cylinder_real_alignment_rma_gelsight_pulled_drawer_"
             "four_tactile_progress_three_frame_binary_student"
@@ -375,21 +464,17 @@ def main() -> None:
                 "vision_encoder_state_dict_sha256"
             ),
             "position_normalization": model.normalizer.contract(),
-            "runtime_inputs": [
-                "wrist_rgb_history",
-                "proprio_obs",
-                "action_history",
-                "gsmini_left_rgb",
-                "gsmini_right_rgb",
-                "gsmini_left_reference_rgb",
-                "gsmini_right_reference_rgb",
+            "runtime_inputs": model.contract()["runtime_input_order"],
+            "runtime_outputs": model.contract()["runtime_output"],
+            "training_only_labels": artifacts.student_input_contract(args.task)[
+                "training_only_labels"
             ],
-            "runtime_outputs": [
-                "action",
-                "left_right_contact_probability",
-                "cube_position_root_m",
-            ],
-            "training_only_labels": ["rma_cube_pos", "rma_contact_state"],
+            "fusion_variant": fusion_variant,
+            "physical_environment_seed": int(env_cfg.seed),
+            "occlusion_predictor_checkpoint_sha256": (
+                artifacts.sha256_file(args.occlusion_predictor_checkpoint)
+                if fusion_aux_profile else None
+            ),
         },
         run_dir / "params" / "training.json",
     )
@@ -414,7 +499,15 @@ def main() -> None:
         device=device,
         dtype=torch.float32,
     )
-    positive_weight = torch.full((4 if four_tactile_profile else 2,), args.contact_positive_weight, device=device)
+    positive_weight = torch.full(
+        (4 if four_tactile_profile else 2,),
+        args.contact_positive_weight,
+        device=device,
+    )
+    tactile_feature_history = torch.zeros(
+        (args.num_envs, 4, 9, 256), dtype=torch.float32, device=device
+    )
+    reset_mask = torch.ones((args.num_envs,), dtype=torch.bool, device=device)
     started = time.perf_counter()
     try:
         for step in range(start_step + 1, args.timesteps + 1):
@@ -423,38 +516,105 @@ def main() -> None:
             history = obs["action_history"].float()
             cube_position = obs["rma_cube_pos"].float()
             contact_target = obs["rma_contact_state"].float()
-            tactile_inputs = [obs["gsmini_left_rgb"], obs["gsmini_right_rgb"]]
-            if four_tactile_profile:
-                tactile_inputs += [obs["gsmini_left_down_rgb"], obs["gsmini_right_down_rgb"]]
-            tactile_inputs += [obs["gsmini_left_reference_rgb"], obs["gsmini_right_reference_rgb"]]
-            if four_tactile_profile:
-                tactile_inputs += [obs["gsmini_left_down_reference_rgb"], obs["gsmini_right_down_reference_rgb"]]
-            student_actions, normalized_position, contact_logits = model.forward_with_training_outputs(
-                obs["wrist_rgb_history"], proprio, history, *tactile_inputs
-            )
+            tactile_inputs = []
+            if not fusion_profile or fusion_tactile_profile:
+                tactile_inputs = [obs["gsmini_left_rgb"], obs["gsmini_right_rgb"]]
+                if four_tactile_profile:
+                    tactile_inputs += [obs["gsmini_left_down_rgb"], obs["gsmini_right_down_rgb"]]
+                tactile_inputs += [obs["gsmini_left_reference_rgb"], obs["gsmini_right_reference_rgb"]]
+                if four_tactile_profile:
+                    tactile_inputs += [obs["gsmini_left_down_reference_rgb"], obs["gsmini_right_down_reference_rgb"]]
+
+            alpha = None
+            occlusion_prediction = None
+            attention = None
+            contact_ratios = None
+            next_tactile_feature_history = None
+            if fusion_variant == VISION_ONLY_DOWNSAMPLE:
+                student_actions, normalized_position = model.forward_with_training_outputs(
+                    obs["wrist_rgb_history"], proprio, history
+                )
+                contact_logits = None
+            elif fusion_recurrent_profile:
+                (
+                    student_actions,
+                    normalized_position,
+                    contact_logits,
+                    alpha,
+                    occlusion_prediction,
+                    next_tactile_feature_history,
+                    attention,
+                    contact_ratios,
+                ) = model.forward_with_recurrent_outputs(
+                    obs["wrist_rgb_history"], proprio, history, *tactile_inputs,
+                    tactile_feature_history, reset_mask,
+                )
+            elif fusion_aux_profile:
+                (
+                    student_actions,
+                    normalized_position,
+                    contact_logits,
+                    alpha,
+                    occlusion_prediction,
+                    attention,
+                    contact_ratios,
+                ) = model.forward_with_auxiliary_outputs(
+                    obs["wrist_rgb_history"], proprio, history, *tactile_inputs
+                )
+            elif fusion_variant == TACTILE_CROSS_ALPHA_DOWNSAMPLE:
+                (
+                    student_actions,
+                    normalized_position,
+                    contact_logits,
+                    alpha,
+                    attention,
+                ) = model.forward_with_diagnostics(
+                    obs["wrist_rgb_history"], proprio, history, *tactile_inputs
+                )
+            else:
+                student_actions, normalized_position, contact_logits = model.forward_with_training_outputs(
+                    obs["wrist_rgb_history"], proprio, history, *tactile_inputs
+                )
             with torch.no_grad():
                 teacher_actions = teacher(proprio, history, cube_position, contact_target)
                 previous_actions = torch.clamp(history / action_scale, -1.0, 1.0)
                 position_target = model.normalizer.normalize_position(cube_position)
+                occlusion_target = (
+                    occlusion_predictor(cube_position[:, :2])
+                    if occlusion_predictor is not None else None
+                )
             action_loss = F.mse_loss(student_actions, teacher_actions)
             smoothness_loss = F.mse_loss(student_actions, previous_actions)
             position_loss = F.smooth_l1_loss(
                 normalized_position, position_target, beta=args.smooth_l1_beta
             )
-            contact_loss = F.binary_cross_entropy_with_logits(
-                contact_logits, contact_target, pos_weight=positive_weight
+            contact_loss = (
+                F.binary_cross_entropy_with_logits(
+                    contact_logits, contact_target, pos_weight=positive_weight
+                )
+                if contact_logits is not None
+                else student_actions.sum() * 0.0
+            )
+            occlusion_loss = (
+                F.mse_loss(occlusion_prediction, occlusion_target)
+                if occlusion_prediction is not None and occlusion_target is not None
+                else student_actions.sum() * 0.0
             )
             loss = (
                 args.action_loss_weight * action_loss
                 + args.action_smoothness_loss_weight * smoothness_loss
                 + args.position_loss_weight * position_loss
                 + args.contact_loss_weight * contact_loss
+                + args.occlusion_loss_weight * occlusion_loss
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_norm_clip)
             optimizer.step()
-            observations, rewards, _, _, _ = env.step(student_actions.detach())
+            observations, rewards, terminated, truncated, _ = env.step(student_actions.detach())
+            if next_tactile_feature_history is not None:
+                tactile_feature_history = next_tactile_feature_history.detach()
+                reset_mask = torch.logical_or(terminated, truncated)
 
             with torch.no_grad():
                 position_rmse = torch.sqrt(
@@ -465,15 +625,33 @@ def main() -> None:
                         ).square()
                     )
                 )
-                contact_probability = torch.sigmoid(contact_logits)
-                contact_accuracy = ((contact_probability >= 0.5) == (contact_target >= 0.5)).float().mean()
+                contact_probability = (
+                    torch.sigmoid(contact_logits) if contact_logits is not None else None
+                )
+                contact_accuracy = (
+                    ((contact_probability >= 0.5) == (contact_target >= 0.5)).float().mean()
+                    if contact_probability is not None else None
+                )
             writer.add_scalar("Loss/total", loss.item(), step)
             writer.add_scalar("Loss/position", position_loss.item(), step)
             writer.add_scalar("Loss/contact_bce", contact_loss.item(), step)
+            writer.add_scalar("Loss/occlusion", occlusion_loss.item(), step)
             writer.add_scalar("Loss/action", action_loss.item(), step)
             writer.add_scalar("Loss/action_smoothness", smoothness_loss.item(), step)
             writer.add_scalar("Position/rmse_m", position_rmse.item(), step)
-            writer.add_scalar("Contact/mean_accuracy", contact_accuracy.item(), step)
+            if contact_accuracy is not None:
+                writer.add_scalar("Contact/mean_accuracy", contact_accuracy.item(), step)
+            if alpha is not None:
+                writer.add_scalar("Fusion/alpha_mean", alpha.mean().item(), step)
+            if occlusion_prediction is not None and occlusion_target is not None:
+                writer.add_scalar("Fusion/occlusion_prediction_mean", occlusion_prediction.mean().item(), step)
+                writer.add_scalar("Fusion/occlusion_target_mean", occlusion_target.mean().item(), step)
+            if contact_ratios is not None:
+                writer.add_scalar("Fusion/tactile_contact_area_mean", contact_ratios.mean().item(), step)
+            if attention is not None:
+                probabilities = attention.clamp_min(1.0e-8)
+                entropy = -(probabilities * probabilities.log()).sum(dim=-1).mean()
+                writer.add_scalar("Fusion/attention_entropy", entropy.item(), step)
             writer.add_scalar("Action/teacher_rmse", torch.sqrt(action_loss.detach()).item(), step)
             writer.add_scalar("Optimization/grad_norm", float(grad_norm), step)
             writer.add_scalar("Reward/mean_step", rewards.mean().item(), step)
@@ -483,10 +661,11 @@ def main() -> None:
                 writer.add_scalar("Performance/recent_success_rate", stats["window_rate"].item(), step)
                 print(
                     f"[GelSight Three-Frame Student] {step}/{args.timesteps} "
-                    f"loss(action/smooth/pos/contact)={action_loss.item():.4f}/"
-                    f"{smoothness_loss.item():.4f}/{position_loss.item():.4f}/{contact_loss.item():.4f} "
+                    f"loss(action/smooth/pos/contact/occ)={action_loss.item():.4f}/"
+                    f"{smoothness_loss.item():.4f}/{position_loss.item():.4f}/"
+                    f"{contact_loss.item():.4f}/{occlusion_loss.item():.4f} "
                     f"position_rmse={1000.0 * position_rmse.item():.1f}mm "
-                    f"contact_accuracy={contact_accuracy.item():.3f} "
+                    f"contact_accuracy={(contact_accuracy.item() if contact_accuracy is not None else float('nan')):.3f} "
                     f"success={stats['cumulative_rate'].item():.3f} "
                     f"updates_s={(step - start_step) / max(time.perf_counter() - started, 1.0e-6):.2f}",
                     flush=True,
@@ -511,6 +690,9 @@ def main() -> None:
                     payload_kwargs["geometry_instance_hash"] = artifacts.geometry_instance_sha256(
                         base_env
                     )
+                if fusion_aux_profile:
+                    payload_kwargs["occlusion_predictor_checkpoint"] = args.occlusion_predictor_checkpoint
+                    payload_kwargs["occlusion_predictor_metadata"] = occlusion_predictor_metadata
                 payload = artifacts.make_student_payload(**payload_kwargs)
                 checkpoint = run_dir / "checkpoints" / f"student_{step:07d}.pt"
                 _atomic_torch_save(payload, checkpoint)

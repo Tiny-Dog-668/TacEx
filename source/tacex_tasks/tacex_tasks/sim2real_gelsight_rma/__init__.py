@@ -84,6 +84,30 @@ from .sim2real_cylinder_real_alignment_gelsight_pulled_drawer_four_tactile_env i
     Sim2RealCylinderRealAlignmentRMAGelSightPulledDrawerProgressFourTactileBinaryStudentEnvCfg,
     Sim2RealCylinderRealAlignmentRMAGelSightPulledDrawerProgressFourTactileTeacherEnvCfg,
 )
+from .sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_env import (
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileBinaryStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileTeacherEnvCfg,
+)
+from .sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_downsample_env import (
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_TEACHER_TASK,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileDownsampleTeacherEnvCfg,
+)
+from .sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_fusion_env import (
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_AUX_DOWNSAMPLE_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_AUX_GRU_DOWNSAMPLE_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_DOWNSAMPLE_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_DOWNSAMPLE_STUDENT_TASK,
+    GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_VISION_ONLY_DOWNSAMPLE_STUDENT_TASK,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerFusionVTDownsampleStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxDownsampleStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxGRUDownsampleStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaDownsampleStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossDownsampleStudentEnvCfg,
+    Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileVisionOnlyDownsampleStudentEnvCfg,
+)
 
 
 RMA_GELSIGHT_TEACHER_TASK = "TacEx-Sim2Real-Cube-Real-Alignment-RMA-GelSight-Teacher-v0"
@@ -328,6 +352,107 @@ gym.register(
         ),
     },
 )
+
+gym.register(
+    id=GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_env:"
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileTeacherEnvCfg
+        ),
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:"
+            "skrl_ppo_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_progress_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_BINARY_STUDENT_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_env:"
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileBinaryStudentEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileBinaryStudentEnvCfg
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_TEACHER_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_downsample_env:"
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileDownsampleTeacherEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileDownsampleTeacherEnvCfg
+        ),
+        "skrl_cfg_entry_point": (
+            f"{agents.__name__}:"
+            "skrl_ppo_cylinder_real_alignment_gelsight_large_pulled_drawer_four_tactile_downsample_progress_teacher.yaml"
+        ),
+    },
+)
+
+gym.register(
+    id=GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_DOWNSAMPLE_BINARY_STUDENT_TASK,
+    entry_point=(
+        f"{__name__}.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_fusion_env:"
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerFusionVTDownsampleStudentEnv"
+    ),
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerFusionVTDownsampleStudentEnvCfg
+        ),
+    },
+)
+
+for _task_id, _entry_class, _cfg_class in (
+    (
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_VISION_ONLY_DOWNSAMPLE_STUDENT_TASK,
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileVisionOnlyDownsampleStudentEnv",
+        Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileVisionOnlyDownsampleStudentEnvCfg,
+    ),
+    (
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_DOWNSAMPLE_STUDENT_TASK,
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossDownsampleStudentEnv",
+        Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossDownsampleStudentEnvCfg,
+    ),
+    (
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_DOWNSAMPLE_STUDENT_TASK,
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaDownsampleStudentEnv",
+        Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaDownsampleStudentEnvCfg,
+    ),
+    (
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_AUX_DOWNSAMPLE_STUDENT_TASK,
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxDownsampleStudentEnv",
+        Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxDownsampleStudentEnvCfg,
+    ),
+    (
+        GELSIGHT_LARGE_PULLED_DRAWER_CYLINDER_PROGRESS_FOUR_TACTILE_CROSS_ALPHA_AUX_GRU_DOWNSAMPLE_STUDENT_TASK,
+        "Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxGRUDownsampleStudentEnv",
+        Sim2RealCylinderRealAlignmentRMAGelSightLargePulledDrawerProgressFourTactileCrossAlphaAuxGRUDownsampleStudentEnvCfg,
+    ),
+):
+    gym.register(
+        id=_task_id,
+        entry_point=(
+            f"{__name__}.sim2real_cylinder_real_alignment_gelsight_large_pulled_drawer_fusion_env:"
+            f"{_entry_class}"
+        ),
+        disable_env_checker=True,
+        kwargs={"env_cfg_entry_point": _cfg_class},
+    )
 
 gym.register(
     id=GELSIGHT_X040_DR_SIZE_BUCKETS_THREE_FRAME_STUDENT_TASK,

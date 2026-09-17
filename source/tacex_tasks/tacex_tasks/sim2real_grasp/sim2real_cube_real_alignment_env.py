@@ -362,6 +362,11 @@ class Sim2RealCubeRealAlignmentDREnvCfg(Sim2RealCubeRealAlignmentEnvCfg):
     wrist_blur_randomization_enabled = True
     wrist_blur_probability = 0.08
     wrist_blur_kernel_sizes = (3,)
+    # Fixed low-resolution camera profile for task-specific sim-to-real
+    # experiments. Disabled by default so existing DR task observations stay
+    # bit-identical.
+    wrist_downsample_degradation_enabled = False
+    wrist_downsample_size = 32
     wrist_gaussian_noise_randomization_enabled = True
     wrist_gaussian_noise_std_range = (0.0, 0.006)
 
@@ -567,6 +572,30 @@ class Sim2RealCubeRealAlignmentEnv(Sim2RealCubeGraspEnv):
             grid,
             mode="bilinear",
             padding_mode="border",
+            align_corners=False,
+        )
+
+    @staticmethod
+    def _apply_wrist_downsample_degradation(
+        x: torch.Tensor, downsample_size: int
+    ) -> torch.Tensor:
+        """Apply ``[N,3,H,W] -> [N,3,S,S] -> [N,3,H,W]`` bilinear degradation."""
+        if x.ndim != 4 or x.shape[1] != 3:
+            raise ValueError(
+                "wrist RGB downsample expects [N,3,H,W], got "
+                f"{tuple(x.shape)}"
+            )
+        size = int(downsample_size)
+        if size <= 0:
+            raise ValueError("wrist_downsample_size must be positive")
+        height, width = x.shape[-2:]
+        low_resolution = F.interpolate(
+            x, size=(size, size), mode="bilinear", align_corners=False
+        )
+        return F.interpolate(
+            low_resolution,
+            size=(height, width),
+            mode="bilinear",
             align_corners=False,
         )
 
@@ -1316,6 +1345,11 @@ class Sim2RealCubeRealAlignmentDREnv(Sim2RealCubeRealAlignmentEnv):
             torch.clamp(x, min=1e-6, max=1.0),
             self._dr_gamma[:batch_size],
         )
+
+        if bool(getattr(self.cfg, "wrist_downsample_degradation_enabled", False)):
+            x = self._apply_wrist_downsample_degradation(
+                x, int(getattr(self.cfg, "wrist_downsample_size", 32))
+            )
 
         if bool(self.cfg.wrist_blur_randomization_enabled):
             blurred = F.conv2d(
